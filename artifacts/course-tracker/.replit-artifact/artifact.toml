@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Course Tracker"
+description = "A role-based course management app for Digital Marketing with AI, helping administrators manage teachers and students, teachers record attendance and assessments, and students view their progress reports."
+version = "1.0.0"
+id = "artifacts/course-tracker"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22277
+
+[services.development]
+run = "pnpm --filter @workspace/course-tracker run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/course-tracker", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/course-tracker/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22277"
+BASE_PATH = "/"

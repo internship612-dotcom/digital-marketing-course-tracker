@@ -1,0 +1,78 @@
+Replit Build Prompt — Digital Marketing with AI Course Tracker (v2)
+
+Copy everything below into Replit (Replit Agent) as your build prompt. Ask Replit to build this as fast as possible using its standard full-stack template (React frontend + Node/Express backend + a real database — PostgreSQL or Replit's built-in database).
+
+Build a web application called "Course Tracker" for a Digital Marketing with AI course. The course has 3 modules — AI in Marketing, Digital Marketing, and Social Media — each with its own weekly attendance and its own assessment/project marks every 15 days. Build this quickly using a simple, standard full-stack setup: React frontend, Node/Express (or Replit's default) backend, and a real persistent database — do not use browser local storage for data.
+
+Roles & Authentication
+
+There are three roles, all with proper ID/password login (hashed passwords, real login sessions):
+
+Admin
+Logs in with a username and password (create one default admin account during setup, e.g. username admin, password admin123, and let it be changed later).
+Can create and manage the 3 Teacher accounts (one per module), each with their own username and password.
+Can view all students, all attendance, and all assessment records across all 3 modules.
+Teacher
+One teacher account per module (AI in Marketing / Digital Marketing / Social Media), created by the Admin.
+Logs in with username and password.
+Can only see and manage their own module's data.
+Uploads weekly attendance and uploads assessment/project marks for their module (see below — no file submission involved, teacher just enters the marks and short feedback directly).
+Student
+Self-registration (no admin approval needed): student fills a registration form with:
+Full Name
+Father's Name
+Course (full course name, e.g. "Digital Marketing with AI")
+Date of Joining
+Contact Number
+Email Address
+Password (student creates their own password, with a confirm-password field)
+After registering, the student logs in using their email and password.
+Student accounts are read-only for reports — after login, a student can only:
+View their monthly attendance report across all 3 modules.
+View their assessment/project report (marks + feedback) for each module's 15-day cycles.
+There is no file/project upload by the student anywhere in this app — assessments are entered entirely by the teacher.
+Data Model
+Admin: username, password (hashed)
+Teacher: username, password (hashed), assigned module (ai / dm / sm)
+Student: id (auto-generated, e.g. STU001), full name, father's name, course, date of joining, contact number, email (unique, used for login), password (hashed), registration date
+Attendance: studentId, module, week number, status (Present / Absent), recorded by teacher
+Assessment: studentId, module, cycle number (15-day cycle, 2 per month), marks (0–100), feedback text, date entered by teacher
+
+Default to 12 weeks (~3 months) of attendance and 6 cycles (~3 months) of assessments — make both easy to extend later (don't hardcode limits deep in the logic).
+
+Admin Features
+Login with username/password.
+Create/edit/remove Teacher accounts and assign them to a module.
+View all students (searchable list, since there can be 100+ students).
+View-only access to all attendance and assessment data across all 3 modules, for oversight.
+Teacher Features (scoped to their own module only)
+Weekly Attendance: Pick a week number, see the full student list with a search box, mark each student Present/Absent with a quick toggle, and include a "Mark all present" shortcut. Save updates that week's attendance for all students at once.
+Assessment Marks: Pick a cycle number (1 to 6), see the student list with a search box, and directly enter marks (0–100) and short feedback for each student for that cycle — no submission or file is involved, the teacher enters everything. Include a "Save all" action so the teacher doesn't have to save one row at a time.
+Student Features (read-only, after login)
+My Attendance: Summary cards showing attendance % for each of the 3 modules (present weeks ÷ recorded weeks), plus a week-by-week table with the 3 modules as columns showing Present/Absent/— for each week, groupable/viewable by month.
+My Assessments: For each of the 3 modules, list all 15-day cycles with marks (out of 100) and feedback once the teacher has entered them; show "Not graded yet" for cycles the teacher hasn't marked yet.
+Design Direction
+Clean, functional dashboard — sidebar navigation (collapsing to a top tab bar on mobile) with role-appropriate tabs, and a proper login page with role selection (Admin / Teacher / Student) before showing the right login or registration form.
+Color palette: cool off-white background (
+#F7F8FA), white content panels with thin 1px borders (
+#DDE1E6), dark ink text (
+#14181F), muted secondary text (
+#5B6472), green accent (
+#1F7A54) for primary actions and positive states, amber (
+#C98A2B) for pending states, muted red (
+#B3432B) for absent/errors.
+Pair a serif display font (e.g. Georgia or a Google Font like Fraunces) for headings with a clean sans-serif (e.g. Inter) for body/data text.
+Fully responsive down to mobile, with visible focus states and minimal animation.
+Build Priorities (build in this order, keep it fast and simple)
+Database schema + Admin/Teacher/Student auth (registration + login, hashed passwords, sessions).
+Admin: create teacher accounts, view student list.
+Teacher: weekly attendance entry.
+Teacher: assessment marks entry.
+Student: registration form + login.
+Student: attendance report view.
+Student: assessment report view.
+Polish the visual design last, once everything works functionally.
+Notes
+Keep the codebase simple and readable — it will be maintained by a non-developer with AI assistance later, so prefer clear structure over cleverness.
+No payment, email verification, or third-party integrations are needed — email is just used as the student's login identifier.
+Passwords must be hashed in the database, not stored in plain text.

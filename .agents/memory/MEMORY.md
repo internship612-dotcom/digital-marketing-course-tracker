@@ -1,0 +1,1 @@
+- [Course Tracker auth](course-tracker-auth.md) — preserve the explicit three-role username/email/password login contract and database-backed sessions.

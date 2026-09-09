@@ -1,22 +1,23 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Course Tracker API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: admin
+  - name: teacher
+  - name: student
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +25,669 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get the current signed-in user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Sign in as an admin, teacher, or student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Signed in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "400":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/register:
+    post:
+      operationId: registerStudent
+      tags: [auth]
+      summary: Register a new student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudentRegistrationInput"
+      responses:
+        "201":
+          description: Registered student
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "400":
+          description: Invalid or duplicate registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Sign out the current user
+      responses:
+        "204":
+          description: Signed out
+  /admin/account/password:
+    patch:
+      operationId: updateAdminPassword
+      tags: [admin]
+      summary: Change the signed-in admin password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminPasswordInput"
+      responses:
+        "204":
+          description: Password changed
+        "400":
+          description: Invalid current password or new password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/summary:
+    get:
+      operationId: getAdminSummary
+      tags: [admin]
+      summary: Get admin dashboard totals
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSummary"
+  /admin/teachers:
+    get:
+      operationId: listTeachers
+      tags: [admin]
+      summary: List module teachers
+      responses:
+        "200":
+          description: Teachers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Teacher"
+    post:
+      operationId: createTeacher
+      tags: [admin]
+      summary: Create a module teacher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeacherInput"
+      responses:
+        "201":
+          description: Created teacher
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Teacher"
+        "400":
+          description: Invalid teacher data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/teachers/{id}:
+    patch:
+      operationId: updateTeacher
+      tags: [admin]
+      summary: Update a module teacher
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeacherUpdate"
+      responses:
+        "200":
+          description: Updated teacher
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Teacher"
+        "404":
+          description: Teacher not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteTeacher
+      tags: [admin]
+      summary: Remove a module teacher
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Deleted teacher
+        "404":
+          description: Teacher not found
+  /admin/students:
+    get:
+      operationId: listStudents
+      tags: [admin]
+      summary: Search all students
+      parameters:
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: Students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Student"
+  /admin/attendance:
+    get:
+      operationId: listAllAttendance
+      tags: [admin]
+      summary: List all attendance records
+      responses:
+        "200":
+          description: Attendance records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttendanceRecord"
+  /admin/assessments:
+    get:
+      operationId: listAllAssessments
+      tags: [admin]
+      summary: List all assessment records
+      responses:
+        "200":
+          description: Assessments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssessmentRecord"
+  /teacher/students:
+    get:
+      operationId: listTeacherStudents
+      tags: [teacher]
+      summary: List students for a teacher
+      parameters:
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: Students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Student"
+  /teacher/attendance:
+    get:
+      operationId: getTeacherAttendance
+      tags: [teacher]
+      summary: Get attendance for one week
+      parameters:
+        - $ref: "#/components/parameters/Week"
+      responses:
+        "200":
+          description: Week attendance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttendanceRecord"
+  /teacher/attendance/bulk:
+    post:
+      operationId: saveTeacherAttendance
+      tags: [teacher]
+      summary: Save one week's attendance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttendanceBulkInput"
+      responses:
+        "200":
+          description: Saved attendance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttendanceRecord"
+  /teacher/assessments:
+    get:
+      operationId: getTeacherAssessments
+      tags: [teacher]
+      summary: Get assessments for one cycle
+      parameters:
+        - $ref: "#/components/parameters/Cycle"
+      responses:
+        "200":
+          description: Cycle assessments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssessmentRecord"
+  /teacher/assessments/bulk:
+    post:
+      operationId: saveTeacherAssessments
+      tags: [teacher]
+      summary: Save one assessment cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssessmentBulkInput"
+      responses:
+        "200":
+          description: Saved assessments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssessmentRecord"
+  /student/attendance:
+    get:
+      operationId: getStudentAttendanceReport
+      tags: [student]
+      summary: Get the signed-in student's attendance report
+      responses:
+        "200":
+          description: Attendance report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceReport"
+  /student/assessments:
+    get:
+      operationId: getStudentAssessmentReport
+      tags: [student]
+      summary: Get the signed-in student's assessment report
+      responses:
+        "200":
+          description: Assessment report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentReport"
 components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    Search:
+      name: search
+      in: query
+      required: false
+      schema:
+        type: string
+    Week:
+      name: week
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 52
+    Cycle:
+      name: cycle
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 24
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
-
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Module:
+      type: string
+      enum: [ai, dm, sm]
+    Role:
+      type: string
+      enum: [admin, teacher, student]
+    CurrentUser:
+      type: object
+      required: [role, displayName]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        displayName:
+          type: string
+        email:
+          type: ["string", "null"]
+        module:
+          oneOf:
+            - $ref: "#/components/schemas/Module"
+            - type: "null"
+        studentId:
+          type: ["string", "null"]
+    LoginInput:
+      type: object
+      required: [role, identifier, password]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        identifier:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+    AdminPasswordInput:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+        newPassword:
+          type: string
+          minLength: 6
+    StudentRegistrationInput:
+      type: object
+      required: [fullName, fathersName, course, dateOfJoining, contactNumber, email, password, confirmPassword]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+        fathersName:
+          type: string
+          minLength: 2
+        course:
+          type: string
+          minLength: 2
+        dateOfJoining:
+          type: string
+          format: date
+        contactNumber:
+          type: string
+          minLength: 6
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+        confirmPassword:
+          type: string
+          minLength: 6
+    Teacher:
+      type: object
+      required: [id, username, module, displayName]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        module:
+          $ref: "#/components/schemas/Module"
+        displayName:
+          type: string
+    TeacherInput:
+      type: object
+      required: [username, password, module, displayName]
+      properties:
+        username:
+          type: string
+          minLength: 3
+        password:
+          type: string
+          minLength: 6
+        module:
+          $ref: "#/components/schemas/Module"
+        displayName:
+          type: string
+          minLength: 2
+    TeacherUpdate:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+        password:
+          type: string
+          minLength: 6
+        module:
+          $ref: "#/components/schemas/Module"
+        displayName:
+          type: string
+          minLength: 2
+    Student:
+      type: object
+      required: [id, fullName, fathersName, course, dateOfJoining, contactNumber, email, registrationDate]
+      properties:
+        id:
+          type: string
+        fullName:
+          type: string
+        fathersName:
+          type: string
+        course:
+          type: string
+        dateOfJoining:
+          type: string
+          format: date
+        contactNumber:
+          type: string
+        email:
+          type: string
+          format: email
+        registrationDate:
+          type: string
+          format: date-time
+    AttendanceRecord:
+      type: object
+      required: [studentId, module, week, status]
+      properties:
+        studentId:
+          type: string
+        studentName:
+          type: string
+        module:
+          $ref: "#/components/schemas/Module"
+        week:
+          type: integer
+        status:
+          type: string
+          enum: [present, absent]
+        recordedBy:
+          type: ["string", "null"]
+    AttendanceBulkInput:
+      type: object
+      required: [week, records]
+      properties:
+        week:
+          type: integer
+          minimum: 1
+          maximum: 52
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceEntry"
+    AttendanceEntry:
+      type: object
+      required: [studentId, status]
+      properties:
+        studentId:
+          type: string
+        status:
+          type: string
+          enum: [present, absent]
+    AssessmentRecord:
+      type: object
+      required: [studentId, module, cycle]
+      properties:
+        studentId:
+          type: string
+        studentName:
+          type: string
+        module:
+          $ref: "#/components/schemas/Module"
+        cycle:
+          type: integer
+        marks:
+          type: ["integer", "null"]
+        feedback:
+          type: ["string", "null"]
+        enteredAt:
+          type: ["string", "null"]
+    AssessmentBulkInput:
+      type: object
+      required: [cycle, records]
+      properties:
+        cycle:
+          type: integer
+          minimum: 1
+          maximum: 24
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssessmentEntry"
+    AssessmentEntry:
+      type: object
+      required: [studentId]
+      properties:
+        studentId:
+          type: string
+        marks:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 100
+        feedback:
+          type: ["string", "null"]
+    AttendanceSummary:
+      type: object
+      required: [module, present, recorded, percentage]
+      properties:
+        module:
+          $ref: "#/components/schemas/Module"
+        present:
+          type: integer
+        recorded:
+          type: integer
+        percentage:
+          type: integer
+    AttendanceReport:
+      type: object
+      required: [summary, weeks]
+      properties:
+        summary:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceSummary"
+        weeks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceWeek"
+    AttendanceWeek:
+      type: object
+      required: [week, ai, dm, sm]
+      properties:
+        week:
+          type: integer
+        ai:
+          type: ["string", "null"]
+          enum: [present, absent, null]
+        dm:
+          type: ["string", "null"]
+          enum: [present, absent, null]
+        sm:
+          type: ["string", "null"]
+          enum: [present, absent, null]
+    AssessmentReport:
+      type: object
+      required: [ai, dm, sm]
+      properties:
+        ai:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssessmentRecord"
+        dm:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssessmentRecord"
+        sm:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssessmentRecord"
+    AdminSummary:
+      type: object
+      required: [studentCount, teacherCount, attendanceCount, assessmentCount, moduleCounts]
+      properties:
+        studentCount:
+          type: integer
+        teacherCount:
+          type: integer
+        attendanceCount:
+          type: integer
+        assessmentCount:
+          type: integer
+        moduleCounts:
+          type: object
+          additionalProperties:
+            type: integer

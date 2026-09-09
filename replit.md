@@ -1,6 +1,6 @@
-# [Project name]
+# Course Tracker
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Course Tracker helps a Digital Marketing with AI institute manage module teachers, weekly attendance, 15-day assessments, and student progress reports.
 
 ## Run & Operate
 
@@ -22,23 +22,36 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/course-tracker/src/` — responsive React dashboard and role-based auth screens
+- `artifacts/api-server/src/routes/auth.ts` — login, registration, sessions, and logout
+- `artifacts/api-server/src/routes/data.ts` — admin, teacher, and student data workflows
+- `lib/db/src/schema/index.ts` — PostgreSQL/Drizzle schema for users, sessions, attendance, and assessments
+- `lib/api-spec/openapi.yaml` — source of truth for the generated API client and validation schemas
+- `artifacts/course-tracker/src/index.css` — Course Tracker visual tokens and responsive styles
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Usernames/passwords are required by the product brief, so sessions use random HTTP-only cookies backed by hashed session records in PostgreSQL; passwords use Node's scrypt.
+- Students self-register and are assigned stable IDs such as `STU001`; teachers are scoped to one of the three modules.
+- Attendance and assessment writes are bulk endpoints so a teacher can save a full week or cycle in one action.
+- The default configuration exposes 12 attendance weeks and 6 assessment cycles while report generation expands when later records exist.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Admins can manage one teacher per module, search the student register, and inspect all records.
+- Teachers can record weekly Present/Absent attendance and enter marks plus feedback for 15-day cycles for their module.
+- Students can register without approval and view attendance summaries, weekly status, assessment marks, and feedback.
+- The app is responsive, with role-aware navigation and mobile-friendly screens.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Keep the experience straightforward enough for a non-developer to maintain with AI assistance.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The default admin account is `admin` / `admin123`; change it through the account management flow before real use.
+- Run `pnpm --filter @workspace/api-spec run codegen` after changing `lib/api-spec/openapi.yaml`.
+- Run `pnpm --filter @workspace/db run push` after changing `lib/db/src/schema/index.ts`.
 
 ## Pointers
 
