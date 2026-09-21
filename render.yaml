@@ -1,0 +1,24 @@
+# Backend only. The client is built and served by Vercel, which rewrites /api/* here —
+# so the browser only ever sees the Vercel origin and the session cookies stay
+# first-party. This service therefore answers /api and nothing else: the static-serving
+# block in app.ts finds no client build and logs that it is serving /api only.
+services:
+  - type: web
+    name: course-tracker-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build
+    startCommand: pnpm --filter @workspace/api-server run start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Supabase connection string — set in the dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false
+      # Render mints a strong value on first deploy, so no human picks this.
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_DEFAULT_PASSWORD
+        sync: false

@@ -137,22 +137,30 @@ function sessionHash(token: string): string {
   return createHmac("sha256", SESSION_SECRET).update(token).digest("hex");
 }
 
+// `Secure` only in production: it tells the browser to withhold the cookie from any
+// plain-HTTP request, which is what we want on the deployed site, but local dev runs on
+// http://localhost and the cookie would simply never be stored.
+const COOKIE_FLAGS =
+  process.env.NODE_ENV === "production"
+    ? "Path=/; HttpOnly; SameSite=Lax; Secure"
+    : "Path=/; HttpOnly; SameSite=Lax";
+
 function setSessionCookie(res: Response, role: Role, token: string): void {
   // No Max-Age and no Expires: the browser holds this only until it is closed, so
   // shutting the browser signs every role out. SESSION_DAYS still caps the row itself.
   appendCookie(
     res,
-    `${SESSION_COOKIES[role]}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`,
+    `${SESSION_COOKIES[role]}=${encodeURIComponent(token)}; ${COOKIE_FLAGS}`,
   );
   // Retire the pre-split cookie so it stops shadowing the role-scoped ones.
   appendCookie(
     res,
-    `${LEGACY_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
+    `${LEGACY_SESSION_COOKIE}=; Max-Age=0; ${COOKIE_FLAGS}`,
   );
 }
 
 function clearSessionCookie(res: Response, name: string): void {
-  appendCookie(res, `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+  appendCookie(res, `${name}=; Max-Age=0; ${COOKIE_FLAGS}`);
 }
 
 export async function hashPassword(password: string): Promise<string> {
