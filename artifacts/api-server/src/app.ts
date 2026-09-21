@@ -39,6 +39,15 @@ app.use(attachAuth);
 
 app.use("/api", router);
 
+// A second health route outside the /api prefix, for uptime monitors. `/api/healthz`
+// works just as well, but a monitor pointed at the bare hostname is the easy mistake to
+// make, and a 404 there reads as an outage. Registered before the static block so it
+// answers whether or not a client build is present; it is not a client route, so it
+// never shadows one.
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 // In development Vite serves the client on its own port and proxies /api here. Nothing
 // does that in a deployment: the built bundle runs alone, so without the block below the
 // API answers /api/* and every other URL 404s — the site itself never appears.
@@ -67,6 +76,12 @@ if (fs.existsSync(path.join(clientDir, "index.html"))) {
 
   logger.info({ clientDir }, "Serving client build");
 } else {
+  // API-only deployment (the client lives on Vercel). Answer the bare root rather than
+  // 404-ing it, so an uptime monitor aimed at the hostname reports up instead of down.
+  app.get("/", (_req, res) => {
+    res.json({ status: "ok", service: "course-tracker-api" });
+  });
+
   logger.warn(
     { clientDir },
     "Client build not found — serving /api only. Run the course-tracker build before deploying.",
