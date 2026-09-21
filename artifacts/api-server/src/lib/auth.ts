@@ -105,9 +105,36 @@ function appendCookie(res: Response, value: string): void {
   res.setHeader("Set-Cookie", [...current, value]);
 }
 
+// Session tokens are only as private as this secret: anyone holding it can compute
+// the hash of a token they invented and hand themselves a live session. The fallback
+// below is committed to the repo, so it is a development convenience and nothing more
+// — in production the server refuses to start without a real one rather than quietly
+// signing sessions with a value the whole world can read.
+const DEV_SESSION_SECRET = "course-tracker-development-secret";
+
+function resolveSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET;
+  if (secret && secret.length >= 16) return secret;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SESSION_SECRET must be set to at least 16 characters in production. " +
+        "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+    );
+  }
+  if (secret) {
+    console.warn(
+      "[auth] SESSION_SECRET is shorter than 16 characters; falling back to the development secret.",
+    );
+  }
+  return DEV_SESSION_SECRET;
+}
+
+// Resolved once at startup so a misconfigured production deploy fails immediately and
+// loudly, not on whichever request happens to need a session first.
+const SESSION_SECRET = resolveSessionSecret();
+
 function sessionHash(token: string): string {
-  const secret = process.env.SESSION_SECRET ?? "course-tracker-development-secret";
-  return createHmac("sha256", secret).update(token).digest("hex");
+  return createHmac("sha256", SESSION_SECRET).update(token).digest("hex");
 }
 
 function setSessionCookie(res: Response, role: Role, token: string): void {
@@ -298,6 +325,13 @@ export function requireRole(...roles: Role[]) {
   };
 }
 
+// Seeds the `admin` row the first time it is needed. POST /auth/login checks this
+// row's hash, so whatever goes in here is a live credential — "admin123" was a real
+// way into the admin desk for anyone who had read the source.
+//
+// Production must supply ADMIN_DEFAULT_PASSWORD. If it does not, we seed a random one
+// instead of a guessable one and print it once: the operator can read it out of the
+// deploy log and change it, and nobody else can guess it in the meantime.
 export async function ensureDefaultAdmin(): Promise<void> {
   const existing = await db
     .select({ id: adminsTable.id })
@@ -305,9 +339,24 @@ export async function ensureDefaultAdmin(): Promise<void> {
     .where(eq(adminsTable.username, "admin"))
     .limit(1);
   if (existing.length > 0) return;
+
+  const configured = process.env.ADMIN_DEFAULT_PASSWORD;
+  let password: string;
+  if (configured && configured.length >= 8) {
+    password = configured;
+  } else if (process.env.NODE_ENV === "production") {
+    password = randomBytes(12).toString("base64url");
+    console.warn(
+      `[auth] ADMIN_DEFAULT_PASSWORD was not set. Seeded the "admin" account with a ` +
+        `one-off password: ${password} — sign in and change it now.`,
+    );
+  } else {
+    password = "admin123";
+  }
+
   await db.insert(adminsTable).values({
     username: "admin",
-    passwordHash: await hashPassword("admin123"),
+    passwordHash: await hashPassword(password),
     displayName: "AI Admin",
     module: "ai",
   });
