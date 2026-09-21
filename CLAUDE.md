@@ -67,7 +67,10 @@ Local dev helper scripts/logs/cookies live under `%TEMP%/opencode/` (`start-db.c
 After changing API source you must rebuild **and** restart the API process.
 
 Required env for API: `DATABASE_URL=postgres://postgres:postgres@localhost:5433/course_tracker`
-(already set inside the start scripts). Frontend proxies `/api` -> `API_PROXY_TARGET`
+(already set inside the start scripts).
+
+**Production also requires `SESSION_SECRET`** (>= 16 chars) — the server throws on startup without
+it. `ADMIN_DEFAULT_PASSWORD` is strongly recommended alongside it. Neither is needed for local dev. Frontend proxies `/api` -> `API_PROXY_TARGET`
 (default `http://localhost:5000`) via `vite.config.ts`.
 
 ## Database schema (`lib/db/src/schema/index.ts`)
@@ -90,8 +93,10 @@ Required env for API: `DATABASE_URL=postgres://postgres:postgres@localhost:5433/
 - `sessions` — token_hash unique, role, user_id, expires_at (14-day server-side cap; the **cookie**
   itself carries no Max-Age, so it dies when the browser closes)
 
-Default seed: one admin row `admin` / `admin123` (created by `ensureDefaultAdmin()` in
-`lib/auth.ts`), module `ai`.
+Default seed: one admin row `admin`, module `ai`, created by `ensureDefaultAdmin()` in
+`lib/auth.ts`. Its password is `admin123` **in development only**. In production the seed takes
+`ADMIN_DEFAULT_PASSWORD`; without it a random one is generated and logged once, because
+`POST /auth/login` checks this row and a committed default was a live way in.
 
 ## Auth model (read carefully — this bites often)
 
@@ -582,6 +587,25 @@ number; the client-side checks are only there to fail fast.
 **Only the AI module's three PDFs exist today.** Digital Marketing and Social Media are uploaded
 from the portal when they are ready — no code change needed any more.
 
+### 10. Deployment hardening
+
+Two committed defaults were live credentials, not just placeholders. Both now fail safe in
+production and stay convenient in development.
+
+**`SESSION_SECRET`.** `sessionHash()` HMACs the session token with it, so anyone holding the secret
+can compute the hash of a token they invented and award themselves a session. It used to fall back
+to `"course-tracker-development-secret"` — a string in this repo. It is now resolved **once at
+startup** (so a misconfigured deploy dies immediately rather than on whichever request first needs
+a session) and `NODE_ENV=production` without it throws.
+
+**`ADMIN_DEFAULT_PASSWORD`.** `ensureDefaultAdmin()` seeded `admin` / `admin123`, and
+`POST /auth/login` checks that row — so the documented default really did open the admin desk. In
+production the seed now uses `ADMIN_DEFAULT_PASSWORD`, or, failing that, a random password printed
+once to the log for the operator to pick up and change. Development still gets `admin123`.
+
+Neither change touches local workflow: with `NODE_ENV=development` and no env vars, the API starts
+and `admin` / `admin123` still signs in.
+
 ## Gotchas / decisions
 
 - **`/admin/students/status` must be declared before `/admin/students/:id`.** Express matches in
@@ -627,6 +651,8 @@ from the portal when they are ready — no code change needed any more.
   reintroduce any "one teacher per module" assumption. Isolation is unaffected: teacher routes
   still scope by `req.auth.module`, never by a module in the request body.
 - No test suite exists — `typecheck` is the safety net.
+- **Never reintroduce a committed fallback for `SESSION_SECRET` or the seeded admin password.**
+  Both are checked by live auth paths; a default in the repo is a default in production.
 - **`announcements.created_by` references `teachers.id`**, so anything written from the admin desk
   must leave it `null` and rely on `author_name`. Do not widen it to admins without a schema change.
 - **Course PDFs are uploads, not repo files.** Staff replace them from `/admin/documents` or
