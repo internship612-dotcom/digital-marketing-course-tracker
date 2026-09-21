@@ -57,3 +57,7 @@ Thumbs.db
 
 # drizzle-kit scratch output
 lib/db/drizzle/
+
+.vercel
+.env*
+!.env.example
