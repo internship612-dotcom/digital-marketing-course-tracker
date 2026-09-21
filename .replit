@@ -3,6 +3,11 @@ modules = ["nodejs-24"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
+# Builds both packages (typecheck, the client into course-tracker/dist/public, the API
+# bundle into api-server/dist) and then runs the API, which also serves that client
+# build. One process answers /api and the site itself.
+build = ["pnpm", "run", "build"]
+run = ["pnpm", "--filter", "@workspace/api-server", "run", "start"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]

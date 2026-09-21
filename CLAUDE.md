@@ -606,6 +606,27 @@ once to the log for the operator to pick up and change. Development still gets `
 Neither change touches local workflow: with `NODE_ENV=development` and no env vars, the API starts
 and `admin` / `admin123` still signs in.
 
+### 11. Deploying: one process serves both
+
+The API bundle now serves the client build as well. Until this landed the deploy had no
+way to show the site at all: Vite's dev server is the only thing that serves the SPA in
+development, and it does not run in a deployment, so `/api/*` answered and every other
+URL 404'd.
+
+`app.ts` mounts `express.static` on `artifacts/course-tracker/dist/public` (resolved
+relative to `import.meta.url`, which lands in the same place from `src/` and from
+`dist/`), then a middleware returns `index.html` for any other GET. It is a middleware
+rather than `app.get("*")` for two reasons: Express 5 rewrote wildcard patterns, and an
+unmatched `/api/*` has to keep falling through to a 404 instead of quietly getting HTML.
+If the client build is missing the server logs a warning and serves `/api` only.
+
+`.replit` gained the deployment `build` and `run` commands — it had a `deploymentTarget`
+but never said how to build or start, so it could not deploy.
+
+**Deploy needs, beyond the code:** a real `DATABASE_URL` (the embedded Postgres is local
+only, and autoscale's filesystem is ephemeral), `SESSION_SECRET`, and ideally
+`ADMIN_DEFAULT_PASSWORD`. See `.env.example`.
+
 ## Gotchas / decisions
 
 - **`/admin/students/status` must be declared before `/admin/students/:id`.** Express matches in
