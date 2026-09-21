@@ -8,7 +8,9 @@ services:
     runtime: node
     plan: free
     region: singapore
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build
+    # No `corepack enable` here: Render's build image already provides pnpm and its
+    # /usr/bin is read-only, so corepack dies trying to rewrite the shim.
+    buildCommand: pnpm install --frozen-lockfile && pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build
     startCommand: pnpm --filter @workspace/api-server run start
     healthCheckPath: /api/healthz
     envVars:

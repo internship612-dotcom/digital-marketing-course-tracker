@@ -11,7 +11,7 @@
   "private": true,
   "packageManager": "pnpm@10.25.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <25"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.1"
