@@ -16,4 +16,6 @@ export interface AssessmentEntry {
   marks?: number | null;
   /** @nullable */
   feedback?: string | null;
+  /** @nullable */
+  projectName?: string | null;
 }

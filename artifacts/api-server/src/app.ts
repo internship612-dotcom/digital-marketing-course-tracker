@@ -29,7 +29,8 @@ app.use(
 );
 app.use(cors());
 app.use(cookieParser());
-app.use(express.json());
+// Profile photos travel as data URLs, well past the 100kb default.
+app.use(express.json({ limit: "12mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(attachAuth);
 

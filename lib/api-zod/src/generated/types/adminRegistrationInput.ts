@@ -7,11 +7,14 @@
  */
 import type { Module } from './module';
 
-export interface Teacher {
-  id: number;
+export interface AdminRegistrationInput {
+  /** @minLength 3 */
   username: string;
-  module: Module;
+  /** @minLength 2 */
   displayName: string;
-  /** Usable owner password, kept so the admin can see it again on the panel logins page */
-  plainPassword?: string | null;
+  module: Module;
+  /** @minLength 6 */
+  password: string;
+  /** @minLength 6 */
+  confirmPassword: string;
 }

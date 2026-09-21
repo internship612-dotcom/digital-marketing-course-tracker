@@ -20,6 +20,29 @@ import {
 const scrypt = promisify(nodeScrypt);
 const SESSION_DAYS = 14;
 
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ?? "https://aeywrwzpgyoatwsrtlyd.supabase.co";
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY ??
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFleXdyd3pwZ3lvYXR3c3J0bHlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMjgyNDAsImV4cCI6MjEwNDYwNDI0MH0.oSIJYZvksfN-JFo_qha29J-OaQaRBmRMpUMwT7hqoJw";
+export const ADMIN_SUPABASE_EMAIL = (
+  process.env.SUPABASE_ADMIN_EMAIL ?? "zedkingservice@gmail.com"
+).toLowerCase();
+
+export async function resolveSupabaseUserEmail(
+  token: string,
+): Promise<string | null> {
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) return null;
+  const user = (await response.json()) as { email?: string | null };
+  return user.email ? normalizeEmail(user.email) : null;
+}
+
 export type AuthContext = {
   role: Role;
   userId: string;
@@ -37,15 +60,49 @@ declare global {
   }
 }
 
-function cookieValue(req: Request): string | null {
+// One cookie per role, so an admin, a module owner and a student can all be signed in
+// in the same browser without overwriting each other's session.
+const SESSION_COOKIES: Record<Role, string> = {
+  admin: "ct_session_admin",
+  teacher: "ct_session_teacher",
+  student: "ct_session_student",
+};
+const LEGACY_SESSION_COOKIE = "ct_session";
+const ROLE_ORDER: Role[] = ["admin", "teacher", "student"];
+
+function readCookie(req: Request, name: string): string | null {
   const raw = req.headers.cookie;
   if (!raw) return null;
-  const token = raw
+  const value = raw
     .split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith("ct_session="))
-    ?.slice("ct_session=".length);
-  return token ? decodeURIComponent(token) : null;
+    .find((part) => part.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
+  return value ? decodeURIComponent(value) : null;
+}
+
+// Which workspace is this request for? Data routes are already role-scoped by path;
+// the shared /auth/* routes rely on the x-ct-role hint the SPA sends.
+function requestedRole(req: Request): Role | null {
+  const header = req.headers["x-ct-role"];
+  const hint = Array.isArray(header) ? header[0] : header;
+  if (hint === "admin" || hint === "teacher" || hint === "student") return hint;
+  const path = req.path.startsWith("/api/") ? req.path.slice(4) : req.path;
+  if (path.startsWith("/admin")) return "admin";
+  if (path.startsWith("/teacher")) return "teacher";
+  if (path.startsWith("/student")) return "student";
+  return null;
+}
+
+function appendCookie(res: Response, value: string): void {
+  const existing = res.getHeader("Set-Cookie");
+  const current =
+    existing == null
+      ? []
+      : Array.isArray(existing)
+        ? existing.map(String)
+        : [String(existing)];
+  res.setHeader("Set-Cookie", [...current, value]);
 }
 
 function sessionHash(token: string): string {
@@ -53,19 +110,22 @@ function sessionHash(token: string): string {
   return createHmac("sha256", secret).update(token).digest("hex");
 }
 
-function setSessionCookie(res: Response, token: string): void {
-  const maxAge = SESSION_DAYS * 24 * 60 * 60 * 1000;
-  res.setHeader(
-    "Set-Cookie",
-    `ct_session=${encodeURIComponent(token)}; Max-Age=${Math.floor(maxAge / 1000)}; Path=/; HttpOnly; SameSite=Lax`,
+function setSessionCookie(res: Response, role: Role, token: string): void {
+  // No Max-Age and no Expires: the browser holds this only until it is closed, so
+  // shutting the browser signs every role out. SESSION_DAYS still caps the row itself.
+  appendCookie(
+    res,
+    `${SESSION_COOKIES[role]}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`,
+  );
+  // Retire the pre-split cookie so it stops shadowing the role-scoped ones.
+  appendCookie(
+    res,
+    `${LEGACY_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
   );
 }
 
-function clearSessionCookie(res: Response): void {
-  res.setHeader(
-    "Set-Cookie",
-    "ct_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
-  );
+function clearSessionCookie(res: Response, name: string): void {
+  appendCookie(res, `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -101,22 +161,35 @@ export async function createSession(
     userId: context.userId,
     expiresAt,
   });
-  setSessionCookie(res, token);
+  setSessionCookie(res, context.role, token);
 }
 
 export async function destroySession(req: Request, res: Response): Promise<void> {
-  const token = cookieValue(req);
-  if (token) {
-    await db
-      .delete(sessionsTable)
-      .where(eq(sessionsTable.tokenHash, sessionHash(token)));
+  const wanted = requestedRole(req);
+  // Signing out of one workspace must leave the other workspaces signed in.
+  const roles = wanted ? [wanted] : ROLE_ORDER;
+  for (const role of roles) {
+    const token = readCookie(req, SESSION_COOKIES[role]);
+    if (token) {
+      await db
+        .delete(sessionsTable)
+        .where(eq(sessionsTable.tokenHash, sessionHash(token)));
+    }
+    clearSessionCookie(res, SESSION_COOKIES[role]);
   }
-  clearSessionCookie(res);
+  const legacy = readCookie(req, LEGACY_SESSION_COOKIE);
+  if (legacy) {
+    const session = await loadSession(legacy);
+    if (session && (!wanted || session.role === wanted)) {
+      await db
+        .delete(sessionsTable)
+        .where(eq(sessionsTable.tokenHash, sessionHash(legacy)));
+    }
+  }
+  clearSessionCookie(res, LEGACY_SESSION_COOKIE);
 }
 
-export async function resolveAuth(req: Request): Promise<AuthContext | null> {
-  const token = cookieValue(req);
-  if (!token) return null;
+async function loadSession(token: string) {
   const [session] = await db
     .select()
     .from(sessionsTable)
@@ -127,8 +200,12 @@ export async function resolveAuth(req: Request): Promise<AuthContext | null> {
       ),
     )
     .limit(1);
-  if (!session) return null;
+  return session ?? null;
+}
 
+async function sessionContext(
+  session: typeof sessionsTable.$inferSelect,
+): Promise<AuthContext | null> {
   if (session.role === "admin") {
     const [admin] = await db
       .select()
@@ -139,9 +216,9 @@ export async function resolveAuth(req: Request): Promise<AuthContext | null> {
       ? {
           role: "admin",
           userId: String(admin.id),
-          displayName: "Administrator",
+          displayName: admin.displayName,
           email: null,
-          module: null,
+          module: admin.module,
           studentId: null,
         }
       : null;
@@ -180,6 +257,28 @@ export async function resolveAuth(req: Request): Promise<AuthContext | null> {
     : null;
 }
 
+export async function resolveAuth(req: Request): Promise<AuthContext | null> {
+  const wanted = requestedRole(req);
+  const tokens: string[] = [];
+  for (const role of wanted ? [wanted] : ROLE_ORDER) {
+    const token = readCookie(req, SESSION_COOKIES[role]);
+    if (token) tokens.push(token);
+  }
+  // Sessions minted before the cookie split still live under the old name; the
+  // session row itself is what says which role they are.
+  const legacy = readCookie(req, LEGACY_SESSION_COOKIE);
+  if (legacy) tokens.push(legacy);
+
+  for (const token of tokens) {
+    const session = await loadSession(token);
+    if (!session) continue;
+    if (wanted && session.role !== wanted) continue;
+    const context = await sessionContext(session);
+    if (context) return context;
+  }
+  return null;
+}
+
 export async function attachAuth(
   req: Request,
   _res: Response,
@@ -209,6 +308,8 @@ export async function ensureDefaultAdmin(): Promise<void> {
   await db.insert(adminsTable).values({
     username: "admin",
     passwordHash: await hashPassword("admin123"),
+    displayName: "AI Admin",
+    module: "ai",
   });
 }
 

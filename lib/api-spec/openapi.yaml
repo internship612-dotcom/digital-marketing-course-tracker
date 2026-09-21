@@ -91,6 +91,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /auth/register-admin:
+    post:
+      operationId: registerAdmin
+      tags: [auth]
+      summary: Register a module admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRegistrationInput"
+      responses:
+        "201":
+          description: Registered admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "400":
+          description: Invalid or duplicate registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /auth/logout:
     post:
       operationId: logout
@@ -99,6 +123,30 @@ paths:
       responses:
         "204":
           description: Signed out
+  /auth/admin/supabase:
+    post:
+      operationId: loginSupabaseAdmin
+      tags: [auth]
+      summary: Establish a course session for the Supabase-signed-in admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupabaseAdminLoginInput"
+      responses:
+        "200":
+          description: Signed in admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          description: Not an administrator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /admin/account/password:
     patch:
       operationId: updateAdminPassword
@@ -221,6 +269,71 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Student"
+    post:
+      operationId: createStudent
+      tags: [admin]
+      summary: Enroll a new student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudentCreateInput"
+      responses:
+        "201":
+          description: Created student
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Student"
+        "400":
+          description: Invalid or duplicate student data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/students/{id}:
+    get:
+      operationId: getStudent
+      tags: [admin]
+      summary: Get one student's full record
+      parameters:
+        - $ref: "#/components/parameters/StudentId"
+      responses:
+        "200":
+          description: Student record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Student"
+        "404":
+          description: Student not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/students/{id}/password:
+    patch:
+      operationId: updateStudentPassword
+      tags: [admin]
+      summary: Reset a student's password
+      parameters:
+        - $ref: "#/components/parameters/StudentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudentPasswordInput"
+      responses:
+        "204":
+          description: Password changed
+        "404":
+          description: Student not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /admin/attendance:
     get:
       operationId: listAllAttendance
@@ -369,6 +482,12 @@ components:
       required: true
       schema:
         type: integer
+    StudentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
     Search:
       name: search
       in: query
@@ -438,6 +557,24 @@ components:
         password:
           type: string
           minLength: 1
+    AdminRegistrationInput:
+      type: object
+      required: [username, displayName, module, password, confirmPassword]
+      properties:
+        username:
+          type: string
+          minLength: 3
+        displayName:
+          type: string
+          minLength: 2
+        module:
+          $ref: "#/components/schemas/Module"
+        password:
+          type: string
+          minLength: 6
+        confirmPassword:
+          type: string
+          minLength: 6
     AdminPasswordInput:
       type: object
       required: [currentPassword, newPassword]
@@ -448,6 +585,13 @@ components:
         newPassword:
           type: string
           minLength: 6
+    SupabaseAdminLoginInput:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
     StudentRegistrationInput:
       type: object
       required: [fullName, fathersName, course, dateOfJoining, contactNumber, email, password, confirmPassword]
@@ -476,6 +620,50 @@ components:
         confirmPassword:
           type: string
           minLength: 6
+        address:
+          type: string
+          nullable: true
+        guardianContact:
+          type: string
+          nullable: true
+    StudentPasswordInput:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 6
+    StudentCreateInput:
+      type: object
+      required: [fullName, fathersName, course, dateOfJoining, contactNumber, email, password]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+        fathersName:
+          type: string
+          minLength: 2
+        course:
+          type: string
+          minLength: 2
+        dateOfJoining:
+          type: string
+          format: date
+        contactNumber:
+          type: string
+          minLength: 6
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+        address:
+          type: string
+          nullable: true
+        guardianContact:
+          type: string
+          nullable: true
     Teacher:
       type: object
       required: [id, username, module, displayName]
@@ -488,6 +676,10 @@ components:
           $ref: "#/components/schemas/Module"
         displayName:
           type: string
+        plainPassword:
+          type: string
+          nullable: true
+          description: Usable owner password, kept so the admin can see it again on the panel logins page
     TeacherInput:
       type: object
       required: [username, password, module, displayName]
@@ -540,6 +732,18 @@ components:
         registrationDate:
           type: string
           format: date-time
+        photo:
+          type: string
+          nullable: true
+        remark:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        guardianContact:
+          type: string
+          nullable: true
     AttendanceRecord:
       type: object
       required: [studentId, module, week, status]
@@ -594,6 +798,8 @@ components:
           type: ["integer", "null"]
         feedback:
           type: ["string", "null"]
+        projectName:
+          type: ["string", "null"]
         enteredAt:
           type: ["string", "null"]
     AssessmentBulkInput:
@@ -619,6 +825,8 @@ components:
           minimum: 0
           maximum: 100
         feedback:
+          type: ["string", "null"]
+        projectName:
           type: ["string", "null"]
     AttendanceSummary:
       type: object

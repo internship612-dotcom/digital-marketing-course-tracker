@@ -49,11 +49,28 @@ export interface LoginInput {
   password: string;
 }
 
+export interface AdminRegistrationInput {
+  /** @minLength 3 */
+  username: string;
+  /** @minLength 2 */
+  displayName: string;
+  module: Module;
+  /** @minLength 6 */
+  password: string;
+  /** @minLength 6 */
+  confirmPassword: string;
+}
+
 export interface AdminPasswordInput {
   /** @minLength 1 */
   currentPassword: string;
   /** @minLength 6 */
   newPassword: string;
+}
+
+export interface SupabaseAdminLoginInput {
+  /** @minLength 1 */
+  token: string;
 }
 
 export interface StudentRegistrationInput {
@@ -71,6 +88,30 @@ export interface StudentRegistrationInput {
   password: string;
   /** @minLength 6 */
   confirmPassword: string;
+  address?: string | null;
+  guardianContact?: string | null;
+}
+
+export interface StudentPasswordInput {
+  /** @minLength 6 */
+  password: string;
+}
+
+export interface StudentCreateInput {
+  /** @minLength 2 */
+  fullName: string;
+  /** @minLength 2 */
+  fathersName: string;
+  /** @minLength 2 */
+  course: string;
+  dateOfJoining: string;
+  /** @minLength 6 */
+  contactNumber: string;
+  email: string;
+  /** @minLength 6 */
+  password: string;
+  address?: string | null;
+  guardianContact?: string | null;
 }
 
 export interface Teacher {
@@ -78,6 +119,8 @@ export interface Teacher {
   username: string;
   module: Module;
   displayName: string;
+  /** Usable owner password, kept so the admin can see it again on the panel logins page */
+  plainPassword?: string | null;
 }
 
 export interface TeacherInput {
@@ -109,6 +152,10 @@ export interface Student {
   contactNumber: string;
   email: string;
   registrationDate: string;
+  photo?: string | null;
+  remark?: string | null;
+  address?: string | null;
+  guardianContact?: string | null;
 }
 
 export type AttendanceRecordStatus = typeof AttendanceRecordStatus[keyof typeof AttendanceRecordStatus];
@@ -161,6 +208,8 @@ export interface AssessmentRecord {
   /** @nullable */
   feedback?: string | null;
   /** @nullable */
+  projectName?: string | null;
+  /** @nullable */
   enteredAt?: string | null;
 }
 
@@ -174,6 +223,8 @@ export interface AssessmentEntry {
   marks?: number | null;
   /** @nullable */
   feedback?: string | null;
+  /** @nullable */
+  projectName?: string | null;
 }
 
 export interface AssessmentBulkInput {

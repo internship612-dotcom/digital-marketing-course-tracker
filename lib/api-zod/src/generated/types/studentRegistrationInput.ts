@@ -21,4 +21,6 @@ export interface StudentRegistrationInput {
   password: string;
   /** @minLength 6 */
   confirmPassword: string;
+  address?: string | null;
+  guardianContact?: string | null;
 }

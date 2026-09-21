@@ -6,6 +6,8 @@ export type ErrorType<T = unknown> = ApiError<T>;
 
 export type BodyType<T> = T;
 
+export type RoleHintGetter = () => "admin" | "teacher" | "student" | null;
+
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
 
 const NO_BODY_STATUS = new Set([204, 205, 304]);
@@ -17,6 +19,7 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _roleHintGetter: RoleHintGetter | null = null;
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -42,6 +45,18 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+/**
+ * Register a getter that names the workspace the caller is acting in
+ * ("admin" | "teacher" | "student").  When it returns a value, an
+ * `x-ct-role` header is attached so the API knows which of the
+ * simultaneously-signed-in sessions to resolve.
+ *
+ * Pass `null` to clear the getter.
+ */
+export function setRoleHintGetter(getter: RoleHintGetter | null): void {
+  _roleHintGetter = getter;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -347,6 +362,13 @@ export async function customFetch<T = unknown>(
 
   if (responseType === "json" && !headers.has("accept")) {
     headers.set("accept", DEFAULT_JSON_ACCEPT);
+  }
+
+  if (_roleHintGetter && !headers.has("x-ct-role")) {
+    const role = _roleHintGetter();
+    if (role) {
+      headers.set("x-ct-role", role);
+    }
   }
 
   // Attach bearer token when an auth getter is configured and no

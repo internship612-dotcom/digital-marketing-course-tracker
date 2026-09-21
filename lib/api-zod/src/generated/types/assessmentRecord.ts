@@ -17,5 +17,7 @@ export interface AssessmentRecord {
   /** @nullable */
   feedback?: string | null;
   /** @nullable */
+  projectName?: string | null;
+  /** @nullable */
   enteredAt?: string | null;
 }

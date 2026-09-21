@@ -7,6 +7,7 @@
  */
 
 export * from './adminPasswordInput';
+export * from './adminRegistrationInput';
 export * from './adminSummary';
 export * from './adminSummaryModuleCounts';
 export * from './assessmentBulkInput';
@@ -37,7 +38,10 @@ export * from './module';
 export * from './role';
 export * from './searchParameter';
 export * from './student';
+export * from './studentCreateInput';
+export * from './studentPasswordInput';
 export * from './studentRegistrationInput';
+export * from './supabaseAdminLoginInput';
 export * from './teacher';
 export * from './teacherInput';
 export * from './teacherUpdate';

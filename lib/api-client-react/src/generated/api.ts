@@ -21,6 +21,7 @@ import type {
 
 import type {
   AdminPasswordInput,
+  AdminRegistrationInput,
   AdminSummary,
   AssessmentBulkInput,
   AssessmentRecord,
@@ -37,7 +38,10 @@ import type {
   ListTeacherStudentsParams,
   LoginInput,
   Student,
+  StudentCreateInput,
+  StudentPasswordInput,
   StudentRegistrationInput,
+  SupabaseAdminLoginInput,
   Teacher,
   TeacherInput,
   TeacherUpdate
@@ -366,6 +370,77 @@ export const useRegisterStudent = <TError = ErrorType<Error>,
       return useMutation(getRegisterStudentMutationOptions(options));
     }
 
+export const getRegisterAdminUrl = () => {
+
+
+
+
+  return `/api/auth/register-admin`
+}
+
+/**
+ * @summary Register a module admin
+ */
+export const registerAdmin = async (adminRegistrationInput: AdminRegistrationInput, options?: Parameters<typeof customFetch>[1]): Promise<CurrentUser> => {
+
+  return customFetch<CurrentUser>(getRegisterAdminUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(adminRegistrationInput)
+  }
+);}
+
+
+
+
+
+export const getRegisterAdminMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerAdmin>>, TError,{data: BodyType<AdminRegistrationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof registerAdmin>>, TError,{data: BodyType<AdminRegistrationInput>}, TContext> => {
+
+const mutationKey = ['registerAdmin'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof registerAdmin>>, {data: BodyType<AdminRegistrationInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  registerAdmin(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RegisterAdminMutationResult = NonNullable<Awaited<ReturnType<typeof registerAdmin>>>
+    export type RegisterAdminMutationBody = BodyType<AdminRegistrationInput>
+    export type RegisterAdminMutationError = ErrorType<Error>
+
+    /**
+ * @summary Register a module admin
+ */
+export const useRegisterAdmin = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerAdmin>>, TError,{data: BodyType<AdminRegistrationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof registerAdmin>>,
+        TError,
+        {data: BodyType<AdminRegistrationInput>},
+        TContext
+      > => {
+      return useMutation(getRegisterAdminMutationOptions(options));
+    }
+
 export const getLogoutUrl = () => {
 
 
@@ -435,6 +510,77 @@ export const useLogout = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getLogoutMutationOptions(options));
+    }
+
+export const getLoginSupabaseAdminUrl = () => {
+
+
+
+
+  return `/api/auth/admin/supabase`
+}
+
+/**
+ * @summary Establish a course session for the Supabase-signed-in admin
+ */
+export const loginSupabaseAdmin = async (supabaseAdminLoginInput: SupabaseAdminLoginInput, options?: Parameters<typeof customFetch>[1]): Promise<CurrentUser> => {
+
+  return customFetch<CurrentUser>(getLoginSupabaseAdminUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(supabaseAdminLoginInput)
+  }
+);}
+
+
+
+
+
+export const getLoginSupabaseAdminMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof loginSupabaseAdmin>>, TError,{data: BodyType<SupabaseAdminLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof loginSupabaseAdmin>>, TError,{data: BodyType<SupabaseAdminLoginInput>}, TContext> => {
+
+const mutationKey = ['loginSupabaseAdmin'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof loginSupabaseAdmin>>, {data: BodyType<SupabaseAdminLoginInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  loginSupabaseAdmin(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LoginSupabaseAdminMutationResult = NonNullable<Awaited<ReturnType<typeof loginSupabaseAdmin>>>
+    export type LoginSupabaseAdminMutationBody = BodyType<SupabaseAdminLoginInput>
+    export type LoginSupabaseAdminMutationError = ErrorType<Error>
+
+    /**
+ * @summary Establish a course session for the Supabase-signed-in admin
+ */
+export const useLoginSupabaseAdmin = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof loginSupabaseAdmin>>, TError,{data: BodyType<SupabaseAdminLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof loginSupabaseAdmin>>,
+        TError,
+        {data: BodyType<SupabaseAdminLoginInput>},
+        TContext
+      > => {
+      return useMutation(getLoginSupabaseAdminMutationOptions(options));
     }
 
 export const getUpdateAdminPasswordUrl = () => {
@@ -959,6 +1105,226 @@ export function useListStudents<TData = Awaited<ReturnType<typeof listStudents>>
 
 
 
+
+export const getCreateStudentUrl = () => {
+
+
+
+
+  return `/api/admin/students`
+}
+
+/**
+ * @summary Enroll a new student
+ */
+export const createStudent = async (studentCreateInput: StudentCreateInput, options?: Parameters<typeof customFetch>[1]): Promise<Student> => {
+
+  return customFetch<Student>(getCreateStudentUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(studentCreateInput)
+  }
+);}
+
+
+
+
+
+export const getCreateStudentMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStudent>>, TError,{data: BodyType<StudentCreateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createStudent>>, TError,{data: BodyType<StudentCreateInput>}, TContext> => {
+
+const mutationKey = ['createStudent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createStudent>>, {data: BodyType<StudentCreateInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createStudent(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateStudentMutationResult = NonNullable<Awaited<ReturnType<typeof createStudent>>>
+    export type CreateStudentMutationBody = BodyType<StudentCreateInput>
+    export type CreateStudentMutationError = ErrorType<Error>
+
+    /**
+ * @summary Enroll a new student
+ */
+export const useCreateStudent = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStudent>>, TError,{data: BodyType<StudentCreateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createStudent>>,
+        TError,
+        {data: BodyType<StudentCreateInput>},
+        TContext
+      > => {
+      return useMutation(getCreateStudentMutationOptions(options));
+    }
+
+export const getGetStudentUrl = (id: string,) => {
+
+
+
+
+  return `/api/admin/students/${id}`
+}
+
+/**
+ * @summary Get one student's full record
+ */
+export const getStudent = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Student> => {
+
+  return customFetch<Student>(getGetStudentUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetStudentQueryKey = (id: string,) => {
+    return [
+    `/api/admin/students/${id}`
+    ] as const;
+    }
+
+
+export const getGetStudentQueryOptions = <TData = Awaited<ReturnType<typeof getStudent>>, TError = ErrorType<Error>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStudent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetStudentQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStudent>>> = ({ signal }) => getStudent(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getStudent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetStudentQueryResult = NonNullable<Awaited<ReturnType<typeof getStudent>>>
+export type GetStudentQueryError = ErrorType<Error>
+
+
+/**
+ * @summary Get one student's full record
+ */
+
+export function useGetStudent<TData = Awaited<ReturnType<typeof getStudent>>, TError = ErrorType<Error>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStudent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetStudentQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateStudentPasswordUrl = (id: string,) => {
+
+
+
+
+  return `/api/admin/students/${id}/password`
+}
+
+/**
+ * @summary Reset a student's password
+ */
+export const updateStudentPassword = async (id: string,
+    studentPasswordInput: StudentPasswordInput, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getUpdateStudentPasswordUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(studentPasswordInput)
+  }
+);}
+
+
+
+
+
+export const getUpdateStudentPasswordMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStudentPassword>>, TError,{id: string;data: BodyType<StudentPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateStudentPassword>>, TError,{id: string;data: BodyType<StudentPasswordInput>}, TContext> => {
+
+const mutationKey = ['updateStudentPassword'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateStudentPassword>>, {id: string;data: BodyType<StudentPasswordInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateStudentPassword(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateStudentPasswordMutationResult = NonNullable<Awaited<ReturnType<typeof updateStudentPassword>>>
+    export type UpdateStudentPasswordMutationBody = BodyType<StudentPasswordInput>
+    export type UpdateStudentPasswordMutationError = ErrorType<Error>
+
+    /**
+ * @summary Reset a student's password
+ */
+export const useUpdateStudentPassword = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStudentPassword>>, TError,{id: string;data: BodyType<StudentPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateStudentPassword>>,
+        TError,
+        {id: string;data: BodyType<StudentPasswordInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateStudentPasswordMutationOptions(options));
+    }
 
 export const getListAllAttendanceUrl = () => {
 

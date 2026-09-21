@@ -6,17 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface Student {
-  id: string;
+export interface StudentCreateInput {
+  /** @minLength 2 */
   fullName: string;
+  /** @minLength 2 */
   fathersName: string;
+  /** @minLength 2 */
   course: string;
   dateOfJoining: Date;
+  /** @minLength 6 */
   contactNumber: string;
   email: string;
-  registrationDate: Date;
-  photo?: string | null;
-  remark?: string | null;
+  /** @minLength 6 */
+  password: string;
   address?: string | null;
   guardianContact?: string | null;
 }
