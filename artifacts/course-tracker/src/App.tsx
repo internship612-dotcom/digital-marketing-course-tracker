@@ -1897,38 +1897,9 @@ function StudentPage({ user }: { user: CurrentUser }) {
 
 type NewStudentInput = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; email: string; password: string; address: string | null; guardianContact: string | null };
 
-const MONTH_OPTIONS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
 function JoiningDateField({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
-  const thisYear = new Date().getFullYear();
-  const years = Array.from({ length: 12 }, (_, i) => String(thisYear + 2 - i));
-  // The parent only stores a complete date and emits '' until all three parts are
-  // chosen, so the picks live here — otherwise each single selection would reset the
-  // other two back to DD / MM / YYYY.
-  const [day, setDay] = useState('');
-  const [month, setMonth] = useState('');
-  const [year, setYear] = useState('');
-  const emit = (d: string, m: string, y: string) => onChange(d && m && y ? `${y}-${m}-${d}` : '');
-  useEffect(() => {
-    const [y = '', m = '', d = ''] = value ? value.split('-') : [];
-    if (y !== year || m !== month || d !== day) { setDay(d); setMonth(m); setYear(y); }
-  }, [value]);
-  const select = 'h-9 min-w-0 flex-1 rounded-md border border-input bg-card px-2 text-sm';
   return <label className="grid gap-1.5 text-sm font-medium">Joining date
-    <div className="flex gap-2">
-      <select className={select} value={day} onChange={(e) => { const d = e.target.value; setDay(d); emit(d, month, year); }} data-testid="select-joining-day" aria-label="Joining day">
-        <option value="">DD</option>
-        {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0')).map((d) => <option key={d} value={d}>{d}</option>)}
-      </select>
-      <select className={`${select} flex-[1.6]`} value={month} onChange={(e) => { const m = e.target.value; setMonth(m); emit(day, m, year); }} data-testid="select-joining-month" aria-label="Joining month">
-        <option value="">MM</option>
-        {MONTH_OPTIONS.map((name, i) => <option key={name} value={String(i + 1).padStart(2, '0')}>{String(i + 1).padStart(2, '0')} — {name}</option>)}
-      </select>
-      <select className={select} value={year} onChange={(e) => { const y = e.target.value; setYear(y); emit(day, month, y); }} data-testid="select-joining-year" aria-label="Joining year">
-        <option value="">YYYY</option>
-        {years.map((y) => <option key={y} value={y}>{y}</option>)}
-      </select>
-    </div>
+    <input type="date" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={value} onChange={(e) => onChange(e.target.value)} data-testid="input-student-doj" aria-label="Joining date" />
   </label>;
 }
 
