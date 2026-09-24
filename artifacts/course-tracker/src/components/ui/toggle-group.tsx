@@ -1,5 +1,4 @@
-'use client';
-
+﻿
 import * as React from 'react';
 import * as ToggleGroupPrimitive from '@radix-ui/react-toggle-group';
 import { toggleVariants } from '@/components/ui/toggle';

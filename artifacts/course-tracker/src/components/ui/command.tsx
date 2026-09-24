@@ -1,5 +1,4 @@
-'use client';
-
+﻿
 import * as React from 'react';
 import { type DialogProps } from '@radix-ui/react-dialog';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
