@@ -2201,13 +2201,12 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
 
   return <>
     <Link href={backHref} className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground" data-testid="link-back-students"><ChevronLeft size={16} /> Back to student list</Link>
-    <PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title={student.fullName} detail="The full record, the photo, and the sign-in details for this learner." action={<StudentAvatar student={student} size={48} />} />
+    <PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title={student.fullName} detail="The full record, the photo, and the sign-in details for this learner." action={<div className="flex items-center gap-3">{!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}<StudentAvatar student={student} size={48} /></div>} />
     <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
       <section className="rounded-xl border border-border bg-card p-5">
         <p className="text-xs font-semibold text-primary">Student record</p>
         <div className="mt-1 flex items-start justify-between gap-3">
           <h2 className="font-display text-2xl font-bold">Complete information</h2>
-          {!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}
         </div>
         {editing ? <form onSubmit={saveProfile} className="mt-6 grid gap-3 sm:grid-cols-2" data-testid="form-edit-student-profile">
           <Field label="Full name" value={profileForm.fullName} onChange={(e) => setProfileForm((v) => ({ ...v, fullName: e.target.value }))} minLength={2} required data-testid="input-edit-full-name" />
