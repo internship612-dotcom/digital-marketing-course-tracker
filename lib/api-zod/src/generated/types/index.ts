@@ -41,6 +41,7 @@ export * from './student';
 export * from './studentCreateInput';
 export * from './studentPasswordInput';
 export * from './studentRegistrationInput';
+export * from './studentUpdateInput';
 export * from './supabaseAdminLoginInput';
 export * from './teacher';
 export * from './teacherInput';

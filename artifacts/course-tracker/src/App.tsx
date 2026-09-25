@@ -1897,6 +1897,8 @@ function StudentPage({ user }: { user: CurrentUser }) {
 
 type NewStudentInput = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; email: string; password: string; address: string | null; guardianContact: string | null };
 
+type StudentProfileForm = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; guardianContact: string; email: string; address: string };
+
 function JoiningDateField({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
   return <label className="grid gap-1.5 text-sm font-medium">Joining date
     <input type="date" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={value} onChange={(e) => onChange(e.target.value)} data-testid="input-student-doj" aria-label="Joining date" />
@@ -2054,6 +2056,8 @@ function readSquarePhoto(file: File, size = 320): Promise<string> {
   });
 }
 
+const emptyProfileForm: StudentProfileForm = { fullName: '', fathersName: '', course: 'Digital Marketing with AI', dateOfJoining: '', contactNumber: '', guardianContact: '', email: '', address: '' };
+
 function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
   const params = useParams<{ id: string }>();
   const base = `/api/${scope}/students/${encodeURIComponent(params.id)}`;
@@ -2072,6 +2076,11 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
   const [remarkNotice, setRemarkNotice] = useState('');
   const [remarkError, setRemarkError] = useState('');
   const [reportToken, setReportToken] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [profileForm, setProfileForm] = useState<StudentProfileForm>(emptyProfileForm);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileNotice, setProfileNotice] = useState('');
+  const [profileError, setProfileError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const { data: viewer } = useCurrentUser();
   // A module owner sees their own module's attendance and marks; the admin sees all three.
@@ -2133,6 +2142,46 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
       .finally(() => setSaving(false));
   };
 
+  const openEdit = () => {
+    setProfileError(''); setProfileNotice('');
+    setProfileForm({
+      fullName: student?.fullName ?? '',
+      fathersName: student?.fathersName ?? '',
+      course: student?.course ?? 'Digital Marketing with AI',
+      dateOfJoining: student?.dateOfJoining ?? '',
+      contactNumber: student?.contactNumber ?? '',
+      guardianContact: student?.guardianContact ?? '',
+      email: student?.email ?? '',
+      address: student?.address ?? '',
+    });
+    setEditing(true);
+  };
+
+  const cancelEdit = () => { setEditing(false); setProfileError(''); setProfileNotice(''); setProfileForm(emptyProfileForm); };
+
+  const saveProfile = (event: FormEvent) => {
+    event.preventDefault();
+    setProfileError(''); setProfileNotice('');
+    if (!profileForm.dateOfJoining) { setProfileError('Choose the joining date.'); return; }
+    const joining = new Date(`${profileForm.dateOfJoining}T00:00:00Z`);
+    if (Number.isNaN(joining.getTime()) || joining.toISOString().slice(0, 10) !== profileForm.dateOfJoining) { setProfileError('That joining date does not exist. Check the day against the month.'); return; }
+    const emailError = validateStudentEmail(profileForm.email);
+    if (emailError) { setProfileError(emailError); return; }
+    setProfileSaving(true);
+    fetch(base, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fullName: profileForm.fullName.trim(), fathersName: profileForm.fathersName.trim(), course: profileForm.course, dateOfJoining: profileForm.dateOfJoining, contactNumber: profileForm.contactNumber.trim(), email: profileForm.email.trim().toLowerCase(), address: profileForm.address.trim() || null, guardianContact: profileForm.guardianContact.trim() || null }) })
+      .then((res) => res.json().then((body) => ({ ok: res.ok, status: res.status, body })))
+      .then(({ ok, status, body }) => {
+        if (!ok) { if (status === 409) throw new Error('An account with this email already exists.'); throw new Error('save failed'); }
+        setStudent(body as Student);
+        setEditing(false);
+        setProfileForm(emptyProfileForm);
+        setProfileNotice('Profile updated.');
+        setReportToken((v) => v + 1);
+      })
+      .catch((err) => setProfileError(err instanceof Error && err.message === 'An account with this email already exists.' ? err.message : 'We could not save those details. Try again.'))
+      .finally(() => setProfileSaving(false));
+  };
+
   const backHref = scope === 'admin' ? '/admin/students/enrolled' : '/teacher/students';
   if (loadError) return <><PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title="Student record" detail="We could not open this record." /><ErrorState retry={load} /></>;
   if (!student) return <LoadingScreen label="Opening student record" />;
@@ -2156,11 +2205,29 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
     <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
       <section className="rounded-xl border border-border bg-card p-5">
         <p className="text-xs font-semibold text-primary">Student record</p>
-        <h2 className="mt-1 font-display text-2xl font-bold">Complete information</h2>
-        <dl className="mt-6 grid gap-0 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label} className="border-b border-border/70 py-4 pr-4" data-testid={`detail-${label.toLowerCase().replaceAll(' ', '-')}`}>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <h2 className="font-display text-2xl font-bold">Complete information</h2>
+          {!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}
+        </div>
+        {editing ? <form onSubmit={saveProfile} className="mt-6 grid gap-3 sm:grid-cols-2" data-testid="form-edit-student-profile">
+          <Field label="Full name" value={profileForm.fullName} onChange={(e) => setProfileForm((v) => ({ ...v, fullName: e.target.value }))} minLength={2} required data-testid="input-edit-full-name" />
+          <Field label="Father&apos;s name" value={profileForm.fathersName} onChange={(e) => setProfileForm((v) => ({ ...v, fathersName: e.target.value }))} minLength={2} required data-testid="input-edit-fathers-name" />
+          <label className="grid gap-1.5 text-sm font-medium">Course<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={profileForm.course} onChange={(e) => setProfileForm((v) => ({ ...v, course: e.target.value }))} data-testid="select-edit-course"><option>Digital Marketing with AI</option></select></label>
+          <JoiningDateField value={profileForm.dateOfJoining} onChange={(iso) => setProfileForm((v) => ({ ...v, dateOfJoining: iso }))} />
+          <Field label="Contact number" value={profileForm.contactNumber} onChange={(e) => setProfileForm((v) => ({ ...v, contactNumber: e.target.value }))} minLength={6} maxLength={12} required data-testid="input-edit-contact" />
+          <Field label="Parent / guardian contact" value={profileForm.guardianContact} onChange={(e) => setProfileForm((v) => ({ ...v, guardianContact: e.target.value }))} maxLength={12} placeholder="Optional" data-testid="input-edit-guardian-contact" />
+          <div className="sm:col-span-2"><Field label="Email address" type="email" value={profileForm.email} onChange={(e) => setProfileForm((v) => ({ ...v, email: e.target.value }))} required data-testid="input-edit-email" /></div>
+          <div className="sm:col-span-2"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Optional — house, street, city, pin code" value={profileForm.address} onChange={(ev) => setProfileForm((v) => ({ ...v, address: ev.target.value }))} data-testid="input-edit-address" /></label></div>
+          <div className="flex items-center gap-2">
+            <Button type="submit" size="sm" disabled={profileSaving} data-testid="button-save-student-profile">{profileSaving ? 'Saving…' : 'Save changes'}</Button>
+            <Button type="button" size="sm" variant="outline" onClick={cancelEdit} disabled={profileSaving} data-testid="button-cancel-student-profile">Cancel</Button>
+          </div>
+        </form> : <dl className="mt-6 grid gap-0 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label} className="border-b border-border/70 py-4 pr-4" data-testid={`detail-${label.toLowerCase().replaceAll(' ', '-')}`}>
           <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
           <dd className="mt-1 break-words text-sm font-semibold">{value}</dd>
-        </div>)}</dl>
+        </div>)}</dl>}
+        {profileError && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-profile-error">{profileError}</p>}
+        {profileNotice && <p className="mt-4 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-profile-success">{profileNotice}</p>}
         <StudentProgressSection key={reportToken} base={base} moduleFilter={moduleFilter} />
         {scope === 'teacher' && <MarksUpload student={student} module={viewer?.module} onSaved={() => setReportToken((v) => v + 1)} />}
       </section>

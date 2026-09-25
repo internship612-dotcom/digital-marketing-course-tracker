@@ -344,6 +344,50 @@ export const GetStudentResponse = zod.object({
 
 
 /**
+ * @summary Update a student's profile details
+ */
+export const UpdateStudentParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const updateStudentBodyFullNameMin = 2;
+
+export const updateStudentBodyFathersNameMin = 2;
+
+export const updateStudentBodyCourseMin = 2;
+
+export const updateStudentBodyContactNumberMin = 6;
+
+
+
+export const UpdateStudentBody = zod.object({
+  "fullName": zod.string().min(updateStudentBodyFullNameMin),
+  "fathersName": zod.string().min(updateStudentBodyFathersNameMin),
+  "course": zod.string().min(updateStudentBodyCourseMin),
+  "dateOfJoining": zod.coerce.date(),
+  "contactNumber": zod.string().min(updateStudentBodyContactNumberMin),
+  "email": zod.string().email(),
+  "address": zod.string().nullish(),
+  "guardianContact": zod.string().nullish()
+})
+
+export const UpdateStudentResponse = zod.object({
+  "id": zod.string(),
+  "fullName": zod.string(),
+  "fathersName": zod.string(),
+  "course": zod.string(),
+  "dateOfJoining": zod.coerce.date(),
+  "contactNumber": zod.string(),
+  "email": zod.string().email(),
+  "registrationDate": zod.coerce.date(),
+  "photo": zod.string().nullish(),
+  "remark": zod.string().nullish(),
+  "address": zod.string().nullish(),
+  "guardianContact": zod.string().nullish()
+})
+
+
+/**
  * @summary Reset a student's password
  */
 export const UpdateStudentPasswordParams = zod.object({

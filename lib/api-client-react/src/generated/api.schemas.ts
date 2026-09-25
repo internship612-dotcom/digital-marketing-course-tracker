@@ -114,6 +114,21 @@ export interface StudentCreateInput {
   guardianContact?: string | null;
 }
 
+export interface StudentUpdateInput {
+  /** @minLength 2 */
+  fullName: string;
+  /** @minLength 2 */
+  fathersName: string;
+  /** @minLength 2 */
+  course: string;
+  dateOfJoining: string;
+  /** @minLength 6 */
+  contactNumber: string;
+  email: string;
+  address?: string | null;
+  guardianContact?: string | null;
+}
+
 export interface Teacher {
   id: number;
   username: string;

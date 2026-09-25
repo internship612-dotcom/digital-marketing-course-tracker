@@ -312,6 +312,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateStudent
+      tags: [admin]
+      summary: Update a student's profile details
+      parameters:
+        - $ref: "#/components/parameters/StudentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudentUpdateInput"
+      responses:
+        "200":
+          description: Updated student
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Student"
+        "400":
+          description: Invalid student data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Student not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Email already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /admin/students/{id}/password:
     patch:
       operationId: updateStudentPassword
@@ -658,6 +695,34 @@ components:
         password:
           type: string
           minLength: 6
+        address:
+          type: string
+          nullable: true
+        guardianContact:
+          type: string
+          nullable: true
+    StudentUpdateInput:
+      type: object
+      required: [fullName, fathersName, course, dateOfJoining, contactNumber, email]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+        fathersName:
+          type: string
+          minLength: 2
+        course:
+          type: string
+          minLength: 2
+        dateOfJoining:
+          type: string
+          format: date
+        contactNumber:
+          type: string
+          minLength: 6
+        email:
+          type: string
+          format: email
         address:
           type: string
           nullable: true

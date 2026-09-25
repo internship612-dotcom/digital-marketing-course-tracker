@@ -49,6 +49,7 @@ import {
   CreateStudentResponse,
   GetStudentParams,
   GetStudentResponse,
+  UpdateStudentBody,
   UpdateStudentPasswordBody,
   UpdateStudentPasswordParams,
   SaveTeacherAssessmentsBody,
@@ -1232,6 +1233,51 @@ router.patch(
       .update(studentsTable)
       .set({ remark: remark === "" ? null : remark })
       .where(eq(studentsTable.id, String(req.params.id ?? "")))
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(studentView(student));
+  },
+);
+
+// Admin and module owners edit the same record. The email has to stay unique across
+// the register, so a value already held by another student is refused (409).
+router.patch(
+  ["/admin/students/:id", "/teacher/students/:id"],
+  requireRole("admin", "teacher"),
+  async (req, res): Promise<void> => {
+    const parsed = UpdateStudentBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Please complete all student fields correctly." });
+      return;
+    }
+    const data = parsed.data;
+    const id = String(req.params.id ?? "");
+    const email = normalizeEmail(data.email);
+    const [clash] = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(and(eq(studentsTable.email, email), ne(studentsTable.id, id)))
+      .limit(1);
+    if (clash) {
+      res.status(409).json({ error: "An account with this email already exists." });
+      return;
+    }
+    const [student] = await db
+      .update(studentsTable)
+      .set({
+        fullName: data.fullName.trim(),
+        fathersName: data.fathersName.trim(),
+        course: data.course.trim(),
+        dateOfJoining: data.dateOfJoining.toISOString().slice(0, 10),
+        contactNumber: data.contactNumber.trim(),
+        email,
+        address: optionalText(data.address),
+        guardianContact: optionalText(data.guardianContact),
+      })
+      .where(eq(studentsTable.id, id))
       .returning();
     if (!student) {
       res.status(404).json({ error: "Student not found." });

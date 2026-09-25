@@ -155,6 +155,11 @@ Data (`routes/data.ts`, all role-scoped):
 - `DELETE /admin/teachers/:id`
 - `GET   /admin/students`, `POST /admin/students`
 - `GET   /admin/students/:id`, `DELETE /admin/students/:id`
+- `PATCH /admin/students/:id` — update a student's profile (full name, father's name,
+  course, joining date, contact, email, address, guardian contact). Mounted on
+  `/teacher/students/:id` too (the shared admin/teacher handler pattern), so a module
+  owner edits the same record. Revalidates the email against *other* rows (409); the
+  joining date feeds the report, so changing it shifts every attendance month.
 - `PATCH /admin/students/:id/password`
 - `GET   /admin/attendance`, `GET /admin/assessments` (cross-module admin views)
 - `GET   /teacher/students`, `POST /teacher/students` — module owners enrol students from
@@ -289,6 +294,10 @@ Data (`routes/data.ts`, all role-scoped):
   same code, fetching `/api/{scope}/students/:id/...`. It holds the full record, the photo
   (uploaded through `readSquarePhoto`, which centre-crops and downscales to a 320px JPEG in the
   browser so a phone photo does not arrive as megabytes), the password reveal, and the reset.
+  An **Edit profile** button swaps the read-only record for the same fields the enrolment
+  form uses (name, father's name, course, joining date, contacts, email, address) and saves
+  through `PATCH {base}`; a 409 surfaces the "email already in use" message, and the returned
+  record replaces the one on screen, so the report re-reads the new joining date.
   `MonthlyProgress` is the single month-switching report: one `<select>` drives both the
   attendance tiles (percentage / present / absent, then a per-module row) and the project-marks
   cards (one card per module, both of that month's projects). `StudentPage` renders it full size;
