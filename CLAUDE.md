@@ -191,12 +191,17 @@ Data (`routes/data.ts`, all role-scoped):
 - Attendance percentages come from the **mon..sat day flags**, not `attendance.status` — the
   teacher UI always writes `status: "present"`, so a status-based percentage is always 100% and
   meaningless.
-- The course runs **six months from the admission date**, sliced **admission-to-admission**: month
-  N runs from the admission day-of-month N-1 months on, to the day before month N+1 starts. A
-  student admitted on the 5th gets 5 Sep → 4 Oct, 5 Oct → 4 Nov, and so on — **always exactly six
-  contiguous slices**, no stub. (It used to slice by calendar month, which gave a short first *and*
-  last slice — seven in total — and that is the bug section 7 fixed.) Sundays are excluded, so
-  `total` is that slice's actual teaching-day count, never a flat figure. `buildStudentReport`
+- The course is **six calendar months starting with the month the student joined in**: month 1
+  runs from the admission date to the end of that calendar month, and months 2-6 are whole
+  calendar months. A student admitted on 15 Sep gets 15 Sep → 30 Sep (14 teaching days), then
+  1-31 Oct, 1-30 Nov, … — **always exactly six contiguous slices**, no stub. (It used to slice
+  *admission-to-admission*, which ran a mid-month joiner's month 1 across two calendar months —
+  see section 12 for why that changed.) **One exception:** Sunday is never a teaching day, so
+  someone who enrols on the last Sunday of a month would have an empty month 1; their course
+  starts on the 1st of the next month instead. `monthForJoining()` in `App.tsx` mirrors that
+  rule, because the marks form derives the live month from a joining date with no report loaded
+  and the two must never disagree. Sundays are otherwise excluded, so `total` is that slice's
+  actual teaching-day count, never a flat figure. `buildStudentReport`
   converts each stored `(week, day-flag)` pair back into a real date via the Monday of the joining
   week, then files it under the slice it falls in. A day counts as present when the student
   attended **any** module that day, so the month total is days, not days × modules.
@@ -465,11 +470,10 @@ password was not necessarily the one written down; the module owner can now enro
 
 Landed in one later pass. Where it contradicts sections 2-6, **this section wins**.
 
-**Course months are now admission-to-admission.** `courseMonths()` used to slice by calendar month,
-which left a stub 7th slice for any mid-month admission (5 Sep 2026 → 7 slices). Month N now runs
-from the admission day-of-month N-1 months on, to the day before month N+1 starts, so there are
-**always exactly six contiguous slices** (5 Sep → 4 Oct, 5 Oct → 4 Nov, …). This feeds every
-attendance figure in the app, and the marks form's month picker is 1-6 to match.
+**Course months were admission-to-admission, then reverted to calendar months** — see section 12,
+which wins. The admission-to-admission rule ran month N from the admission day-of-month N-1
+months on, so there were always exactly six contiguous slices. Section 12 went back to calendar
+months with a short first month, which is what the institute actually bills and marks against.
 
 **Attendance moved off the student list onto its own page.** `/teacher/attendance`
 (`AttendanceRegisterPage`), its own item in the module owner's sidebar. It opens on **today** and
@@ -642,6 +646,49 @@ but never said how to build or start, so it could not deploy.
 **Deploy needs, beyond the code:** a real `DATABASE_URL` (the embedded Postgres is local
 only, and autoscale's filesystem is ephemeral), `SESSION_SECRET`, and ideally
 `ADMIN_DEFAULT_PASSWORD`. See `.env.example`.
+
+### 12. Course months follow the joining date (calendar months)
+
+**The rule.** The course is **six calendar months starting with the month the student joined
+in**. Month 1 runs from the admission date to the end of that calendar month; months 2-6 are
+whole calendar months. So a 15 Sep admission gets 15 Sep → 30 Sep (14 teaching days) as month
+1, then 1-31 Oct, 1-30 Nov, and so on — still exactly six contiguous slices and no stub.
+
+This replaced the **admission-to-admission** rule (month N ran from the admission day-of-month
+N-1 months on, so a 15 Sep joiner's month 1 was 15 Sep → 14 Oct, straddling two calendar
+months). The user asked for the calendar version: join on the 15th/20th and that month's
+attendance is only the days left in it, not a full 30/31 days.
+
+**Why there is no 7th slice.** The old complaint about calendar slicing was a stub seventh
+month. That came from slicing *calendar* months and then extending six of them past the course
+end. Here the count is fixed at six and the short month is taken out of the *front* (month 1),
+which is the user's explicit requirement. Verified over every valid joining date in three years:
+six slices, contiguous, no Sunday, no duplicate days, no day before admission, and M2-M6 always
+hold every teaching day of a full calendar month.
+
+**The Sunday edge case.** Sunday is never a teaching day, so someone enrolling on the **last
+Sunday of a month** (28 Feb 2027, say) would get a month 1 with nothing in it. `courseMonths()`
+now detects an empty first month and moves that student's course to the 1st of the next month.
+`monthForJoining()` in `App.tsx` mirrors this rule exactly — it is what the marks form uses,
+since that form has a joining date but no loaded report, and the two must never disagree by a
+month.
+
+**The month pickers follow today, not month 1.** `MonthlyProgress` (student portal, teacher
+record and admin record all render it) now opens on the course month that contains today,
+read off the real `start`/`end` dates the API already sends — `courseMonthFor()`. Before this it
+opened on the first month that happened to have records, which is month 1 for a new student.
+A course not yet started or already finished falls back to the first month with records.
+
+**Nothing else needed changing.** Every attendance figure reads off `courseMonths()`, so the
+report, the per-module rows, the module status icons, the marks due dates (`marksPendingFor`)
+and `/admin/modules/:module/attendance/summary` all move together. Cycle numbering is untouched
+(`cycle = (month-1)*2 + project`), so **no marks data migration** — cycle 3 is still month 2
+project 1. Only the *window* each month covers changed.
+
+**Verified** by a throwaway script that extracts the real `courseMonths()` and the real
+`monthForJoining()` out of the two source files, transpiles them with the repo's own esbuild and
+runs them (25,208 assertions). It lives in `%TEMP%/opencode/verify-months.mjs`, not in the repo —
+there is still no test suite, and `typecheck` remains the safety net.
 
 ## Gotchas / decisions
 
