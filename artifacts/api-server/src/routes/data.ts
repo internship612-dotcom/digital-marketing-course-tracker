@@ -1136,6 +1136,42 @@ router.get(
   },
 );
 
+// Students set their own profile picture. Same rules as the staff upload: a PNG/JPEG/
+// WebP data URL (JSON, so Photo files are read client-side and cropped first), ≤1.5 MB.
+router.patch(
+  "/student/photo",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const photo = req.body?.photo;
+    if (photo !== null && typeof photo !== "string") {
+      res.status(400).json({ error: "Send a photo data URL, or null to remove it." });
+      return;
+    }
+    if (typeof photo === "string" && !/^data:image\/(png|jpeg|webp);base64,/.test(photo)) {
+      res.status(400).json({ error: "Only PNG, JPEG or WebP images are accepted." });
+      return;
+    }
+    if (typeof photo === "string" && photo.length > 1_500_000) {
+      res.status(400).json({ error: "That image is too large." });
+      return;
+    }
+    const [student] = await db
+      .update(studentsTable)
+      .set({ photo })
+      .where(eq(studentsTable.id, req.auth.studentId))
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json({ photo: student.photo });
+  },
+);
+
 router.get(
   "/student/monthly",
   requireRole("student"),

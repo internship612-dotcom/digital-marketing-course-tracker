@@ -33,6 +33,7 @@ import {
   BarChart3,
   BookOpen,
   CalendarCheck2,
+  Camera,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -1711,8 +1712,23 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
   };
   useEffect(load, []);
 
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
   if (failed) return <><PageHeader kicker="Student / my profile" title="My profile" detail="We could not open your details." /><ErrorState retry={load} /></>;
   if (!profile) return <LoadingScreen label="Opening your profile" />;
+
+  const uploadPhoto = (file: File | undefined) => {
+    if (!file) return;
+    setPhotoError(''); setPhotoBusy(true);
+    readSquarePhoto(file)
+      .then((photo) => fetch('/api/student/photo', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }) }))
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (!ok) throw new Error('upload failed'); setProfile((v) => (v ? { ...v, photo: (data as { photo: string | null }).photo } : v)); })
+      .catch(() => setPhotoError('We could not upload that image. Try a PNG or JPEG under 1.5 MB.'))
+      .finally(() => { setPhotoBusy(false); if (fileRef.current) fileRef.current.value = ''; });
+  };
 
   const rows: Array<[string, string]> = [
     ['Name', profile.fullName],
@@ -1724,16 +1740,30 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
   ];
 
   return <>
-    <PageHeader kicker="Student / my profile" title="My profile" detail="The details your institute holds for you. To change anything, ask your institute." action={<div className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2"><Avatar photo={profile.photo} name={profile.fullName} size={32} testId="header-profile-photo" /><span className="text-xs font-semibold">{user.studentId ?? 'Student'}</span></div>} />
+    <PageHeader kicker="Student / my profile" title="My profile" detail="The details your institute holds for you. Your photo is the one detail you can change yourself — tap the camera on it. For anything else, ask your institute." action={<div className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2"><Avatar photo={profile.photo} name={profile.fullName} size={32} testId="header-profile-photo" /><span className="text-xs font-semibold">{user.studentId ?? 'Student'}</span></div>} />
     <section className="rounded-xl border border-border bg-card p-5">
       <p className="text-xs font-semibold text-primary">Your record</p>
       <h2 className="mt-1 font-display text-2xl font-bold">Basic details</h2>
       <div className="mt-5 flex items-center gap-4 border-b border-border/70 pb-5">
-        <Avatar photo={profile.photo} name={profile.fullName} size={88} testId="profile-photo" placeholderTestId="profile-photo-placeholder" />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={photoBusy}
+          className="group relative shrink-0 cursor-pointer rounded-full disabled:cursor-wait"
+          title={profile.photo ? 'Change your photo' : 'Add your photo'}
+          data-testid="button-change-my-photo"
+        >
+          <Avatar photo={profile.photo} name={profile.fullName} size={88} testId="profile-photo" placeholderTestId="profile-photo-placeholder" />
+          <span className="absolute -bottom-0.5 -right-0.5 grid h-8 w-8 place-items-center rounded-full border-2 border-card bg-primary text-primary-foreground shadow-sm transition group-hover:scale-105" data-testid="span-photo-camera">
+            <Camera size={15} />
+          </span>
+        </button>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => uploadPhoto(e.target.files?.[0])} data-testid="input-my-photo" />
         <div className="min-w-0">
           <p className="truncate font-display text-xl font-bold">{profile.fullName}</p>
           <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{user.studentId ?? 'Student'}</p>
-          {!profile.photo && <p className="mt-1 text-xs text-muted-foreground">No photo on your record yet — your institute can add one.</p>}
+          <p className="mt-1 text-xs text-muted-foreground">{photoBusy ? 'Uploading your photo…' : profile.photo ? 'Tap the camera to change your photo.' : 'Tap the camera to add your photo.'}</p>
+          {photoError && <p className="mt-1 text-xs text-destructive" data-testid="status-my-photo-error">{photoError}</p>}
         </div>
       </div>
       <dl className="mt-2 grid gap-0 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label} className="border-b border-border/70 py-4 pr-4" data-testid={`profile-${label.toLowerCase().replaceAll(' ', '-').replaceAll('.', '')}`}>
