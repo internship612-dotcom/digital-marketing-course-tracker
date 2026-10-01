@@ -79,9 +79,12 @@ it. `ADMIN_DEFAULT_PASSWORD` is strongly recommended alongside it. Neither is ne
 - `teachers` — id, username unique, password_hash, module (**not** unique — a module can hold several logins), display_name, **plain_password** (stored so admin can reveal it)
 - `students` — id (STUxxx), full_name, fathers_name, course, date_of_joining, contact_number, email unique, password_hash, **plain_password** (revealable, same deliberate trade-off as teachers), **photo** (data URL of a small square JPEG), **remark** (free-text staff note), **address**, **guardian_contact** (both optional, added later, so old rows are null)
 - `attendance` — PK (student_id, module, week); status present/absent; mon..sat booleans;
-  **locked_days** (int bitmask, bit 0 = mon … bit 5 = sat — which days have actually been saved and
-  are therefore closed to edits; a recorded absent and an untouched day both leave the day flag
-  false, so this is the only thing that tells them apart); recorded_by (teacher), recorded_by_admin
+  **locked_days** (int bitmask, bit 0 = mon … bit 5 = sat — which days have *ever* been saved. It no
+  longer closes a day to edits: attendance stays editable, but a recorded absent and a day nobody
+  touched both leave the day flag false, so this bit is still what tells the status icons "today was
+  handled"); **leave_days** (int bitmask, bit 0 = mon … bit 5 = sat — a day on leave sets the same day
+  flag as present, so it counts as attended, and this bit is what tells the register present from
+  leave when it reads back); recorded_by (teacher), recorded_by_admin
 - `assessments` — PK (student_id, module, cycle); marks, feedback, **project_name** (typed by the
   module owner), entered_by / entered_by_admin
 - `announcements` — id (serial), module, title, body, author_name, created_by (teacher, set null),
@@ -222,12 +225,14 @@ Data (`routes/data.ts`, all role-scoped):
 - `GET   /student/profile` — the student's own basic details for "My profile": name, father's
   name, course, address, contact, email, photo. Deliberately narrow — **no remark, no password**.
 - `GET   /teacher/attendance/day?date=YYYY-MM-DD` — one row per student for a single calendar
-  date: `studentView` plus `{ week, eligible, present, recorded, locked }`. `eligible` is false on
-  a Sunday or outside that student's course; `locked` means that day has already been saved.
-- `POST  /teacher/attendance/day` — `{ date, present[], absent[] }`. Ticked ids become present,
-  the `absent` list becomes absent, and anyone in **neither** array is left untouched. Only the
-  one day moves — the rest of the student's week row is preserved — and a day whose `locked_days`
-  bit is set is refused. Returns `{ saved, skipped, locked }`.
+date: `studentView` plus `{ week, eligible, present, leave, recorded }`. `eligible` is false on
+a Sunday or outside that student's course; `leave` is a dedicated bit (leave records the day flag
+as present, so `present` stays true and `leave` says why).
+- `POST  /teacher/attendance/day` — `{ date, present[], absent[], leave[] }`. Ticked ids become
+present, the `leave` list becomes leave (counted as attended), the `absent` list becomes absent,
+and anyone in **none** of the arrays is left untouched. Only the one day moves — the rest of the
+student's week row is preserved. Days stay **editable**: saving again overwrites the day, nothing
+is refused. Returns `{ saved, skipped }`.
 - `GET   /admin/students/status` — the admin twin of `/teacher/overview/students`, across all
   three modules. **Registered ahead of `/admin/students/:id`** or Express reads "status" as an id.
 - `GET   /teacher/announcements`, `POST /teacher/announcements` (`{ title, body, publish }`),
@@ -469,19 +474,21 @@ attendance figure in the app, and the marks form's month picker is 1-6 to match.
 **Attendance moved off the student list onto its own page.** `/teacher/attendance`
 (`AttendanceRegisterPage`), its own item in the module owner's sidebar. It opens on **today** and
 re-reads the clock every minute, so a tab left open overnight rolls onto the new day by itself —
-no date or month picker to touch. Each student row is the shared `StudentTable` with two
-checkboxes in the last column: **P** ticks green, **A** ticks red, neither stays grey and is left
-alone. `All P` / `All A` / `Clear` sit in that column's header, not in a toolbar. Sunday is inert.
-The per-student `AttendanceCalendarPanel` and `StatusPill` were deleted — that chip was their only
-entry point.
+no date or month picker to touch. Rows are a custom compact table — serial number, student ID,
+name and father's name only — with three checkboxes in the last column: **P** ticks green,
+**A** ticks red, **L** ticks amber for leave (which counts as attended). Neither stays grey and
+is left alone. `All P` / `All A` / `All L` / `Clear` sit in that column's header, not in a
+toolbar. Sunday is inert. The per-student `AttendanceCalendarPanel` and `StatusPill` were deleted
+— that chip was their only entry point.
 
-**Saved attendance is final.** `attendance.locked_days` is a mon..sat bitmask of the days that have
-actually been submitted. It exists because a recorded *absent* and a day nobody touched both leave
-the day flag `false`, so there was no way to tell them apart. `POST /teacher/attendance/day`
-refuses to move a day whose bit is already set and reports how many it skipped; the register draws
-those rows greyed with "Saved — locked". Locking is **per day**, not per week, so the rest of the
-week stays open. Rows written before this column existed have `locked_days = 0` and are still
-editable.
+**Saved attendance stays editable.** `attendance.locked_days` is still written (bit 0 = mon … bit
+5 = sat) purely so a recorded *absent* and a day nobody touched — both of which leave the day flag
+`false` — can be told apart for the today-pending status icons. It no longer refuses any edit:
+`POST /teacher/attendance/day` saves the submitted day over whatever was there. `leave_days`
+bitmask records which days were on leave. Because the new `leave_days` column would otherwise
+never reach hosted databases (migrated by hand), the API server adds it itself on boot with
+`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS leave_days integer NOT NULL DEFAULT 0` before it
+starts listening.
 
 **The two chips became read-only icons, measured against the current date.** `StudentTable` gained
 `statusFor` and two columns, `Attendance` and `Marks`, each a `StatusIcon` — green when there is
