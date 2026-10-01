@@ -1042,7 +1042,10 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 // Marks now live on the student record, directly under that student's report, so the
 // person reading the report can fill the gap they just spotted.
 function MarksUpload({ student, module, onSaved }: { student: Student; module: Module | null | undefined; onSaved: () => void }) {
-  const [month, setMonth] = useState(1);
+  // The month the student is actually in, worked out from the admission date, so the
+  // teacher is not uploading this month's marks onto last month's. The project stays
+  // unpicked: marks overwrite silently, so that one choice has to be deliberate.
+  const [month, setMonth] = useState(() => monthForJoining(student.dateOfJoining, todayIso()));
   // No project is picked for you — marks are final once saved, so the choice is explicit.
   const [project, setProject] = useState<'' | 1 | 2>('');
   const [marks, setMarks] = useState('');
@@ -1318,8 +1321,37 @@ function percentTone(value: number): string {
   return 'text-destructive';
 }
 
+// Which course month a student is sitting in right now. The API sends each month's real
+// first and last day, and those days are already admission-anchored, so the month holding
+// today is the answer — no date maths here. Before the course starts or after it ends
+// there is no such month, so fall back to the first month that has records.
+function courseMonthFor(report: StudentReport, today: string): number {
+  const live = report.months.find((m) => m.start && m.end && m.start <= today && today <= m.end);
+  return live?.month ?? report.months.find((m) => m.recorded)?.month ?? 1;
+}
+
+// The same question asked without a loaded report, which is what the marks form has —
+// only a joining date. The course is six calendar months starting with the joining month,
+// so today sits in month N where N is how many calendar-month boundaries have passed.
+// One rule has to match the API exactly: Sunday is never a teaching day, so someone who
+// enrols on the last Sunday of a month starts their course on the 1st of the next month
+// instead of having an empty month 1. Mirror that here or the two disagree by a month.
+function monthForJoining(dateOfJoining: string, today: string): number {
+  const joined = new Date(`${dateOfJoining}T00:00:00Z`);
+  const now = new Date(`${today}T00:00:00Z`);
+  if (Number.isNaN(joined.getTime()) || Number.isNaN(now.getTime())) return 1;
+  let anchor = joined;
+  while (anchor.getUTCDay() === 0) {
+    anchor = new Date(anchor.getTime() + 86_400_000);
+    if (anchor.getUTCMonth() !== joined.getUTCMonth() || anchor.getUTCFullYear() !== joined.getUTCFullYear()) break;
+  }
+  const month = (now.getUTCFullYear() - anchor.getUTCFullYear()) * 12
+    + (now.getUTCMonth() - anchor.getUTCMonth()) + 1;
+  return Math.min(6, Math.max(1, month));
+}
+
 // The API sends each month's real first and last day; month 1 starts on the
-// admission date rather than the 1st.
+// admission date rather than the 1st, and every later month runs a whole calendar month.
 function monthRange(entry: ReportMonth): string {
   if (!entry.start || !entry.end) return '';
   const label = (iso: string) => {
@@ -1332,8 +1364,11 @@ function monthRange(entry: ReportMonth): string {
 // moduleFilter narrows the whole report to one module, so a module owner sees their
 // own attendance and their own project marks instead of all three modules at once.
 function MonthlyProgress({ report, compact = false, moduleFilter }: { report: StudentReport; compact?: boolean; moduleFilter?: Module | null }) {
-  const firstRecorded = report.months.find((m) => m.recorded)?.month ?? 1;
-  const [month, setMonth] = useState(firstRecorded);
+  // The month shown is the one the student is actually in: the course month that holds
+  // today, read off the real start/end dates the API sends. Opening the page mid course
+  // therefore lands on the live month rather than month 1; a course that has not started
+  // or has already finished falls back to the first month with records.
+  const [month, setMonth] = useState(() => courseMonthFor(report, todayIso()));
   const selected = report.months.find((m) => m.month === month) ?? report.months[0];
   if (!selected) return null;
   const range = monthRange(selected);
@@ -1386,7 +1421,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
           <span className="text-xs text-muted-foreground">{item.present} present · {item.absent} absent · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span></span>
         </div>)}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off. The course runs six months from the admission date, and each month runs from that date to the day before the next one.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off. The course is six calendar months starting with the month you joined in, so month 1 covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
     </section>
 
     <section className={`mt-6 rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>

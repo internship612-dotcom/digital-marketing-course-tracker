@@ -944,10 +944,11 @@ router.get(
   },
 );
 
-// Every attendance figure in the app is counted the same way: the course runs six
-// months from the admission date, and each month runs from one admission anniversary
-// to the day before the next. A student admitted on the 4th has months that run 4th
-// to 3rd, so there are always exactly six of them and none is a stub.
+// Every attendance figure in the app is counted the same way: the course is six calendar
+// months starting with the month the student was admitted in. Month 1 is whatever is left
+// of the admission month — a student admitted on the 15th has a month 1 that runs 15th to
+// the 31st, Sundays off — and each month after it is a whole calendar month. There are
+// always exactly six of them and none is a stub.
 // Sunday is never a teaching day.
 const COURSE_MONTHS = 6;
 const DAY_FLAG_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat"] as const;
@@ -968,27 +969,49 @@ function mondayOf(date: Date): Date {
 
 type CourseMonth = { month: number; start: string; end: string; days: string[] };
 
-// The six admission-to-admission slices of one student's course. Month N starts on
-// the admission day-of-month N-1 months on, and ends the day before month N+1 starts,
-// so the six slices are contiguous and cover exactly six months.
+// The six calendar-month slices of one student's course. They start with the month the
+// student was admitted in: slice 1 begins on the admission date and is clipped to the end
+// of that calendar month, so a mid-month admission gets a short first month. Slices 2 to
+// 6 are then whole calendar months.
 function courseMonths(joinedOn: string | null): CourseMonth[] {
   if (!joinedOn) return [];
   const joinDate = new Date(`${joinedOn}T00:00:00Z`);
   if (Number.isNaN(joinDate.getTime())) return [];
   const year = joinDate.getUTCFullYear();
-  const month0 = joinDate.getUTCMonth();
-  const day = joinDate.getUTCDate();
+  let month0 = joinDate.getUTCMonth();
+
+  // Sunday is never a teaching day, so a student who enrols on the last Sunday of a month
+  // would have a first month with nothing in it and every percentage after it measured
+  // against a shifted window. Give them the whole next month as month 1 instead.
+  let start = joinDate;
+  for (;;) {
+    const nextMonth = utcDay(year, month0 + 1, 1);
+    const end = new Date(nextMonth.getTime() - 86_400_000);
+    let teachingDays = 0;
+    for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      if (d.getUTCDay() !== 0) teachingDays += 1;
+    }
+    if (teachingDays > 0) break;
+    // No teaching day is left this month: move the course on to the next one. A calendar
+    // month always has one, so this can only ever run once.
+    month0 += 1;
+    start = utcDay(year, month0, 1);
+  }
 
   const slices: CourseMonth[] = [];
-  for (let month = 1; month <= COURSE_MONTHS; month += 1) {
-    const start = utcDay(year, month0 + month - 1, day);
-    const end = utcDay(year, month0 + month, day - 1);
+  for (let index = 0; index < COURSE_MONTHS; index += 1) {
+    const firstOfMonth = utcDay(year, month0 + index, 1);
+    const nextMonth = utcDay(year, month0 + index + 1, 1);
+    const sliceStart = index === 0 ? start : firstOfMonth;
+    // The last day of the calendar month this slice belongs to.
+    const end = new Date(nextMonth.getTime() - 86_400_000);
+    if (end.getTime() < sliceStart.getTime()) break;
     const days: string[] = [];
-    for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    for (const d = new Date(sliceStart); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       if (d.getUTCDay() === 0) continue; // Sunday is off
       days.push(isoDay(d));
     }
-    slices.push({ month, start: isoDay(start), end: isoDay(end), days });
+    slices.push({ month: slices.length + 1, start: isoDay(sliceStart), end: isoDay(end), days });
   }
   return slices;
 }
