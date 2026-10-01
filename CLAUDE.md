@@ -93,6 +93,9 @@ it. `ADMIN_DEFAULT_PASSWORD` is strongly recommended alongside it. Neither is ne
   project_guidelines; file_name, content_type, size_bytes, **content** (base64 of the PDF),
   uploaded_by_name, created_at, updated_at. The composite PK is the whole replace story: an upload
   upserts, so there is only ever one current file per slot.
+- `calendar_events` — id (serial), **date unique, no module column** (one institute-wide PTM/holiday
+  stops all three modules), title, type (`event` | `ptm` | `holiday` | `exam`), created_by (teacher,
+  set null) / created_by_admin, created_at. Created at boot by `ensureCalendarEventsTable()`.
 - `sessions` — token_hash unique, role, user_id, expires_at (14-day server-side cap; the **cookie**
   itself carries no Max-Age, so it dies when the browser closes)
 
@@ -263,6 +266,11 @@ is refused. Returns `{ saved, skipped }`.
   `%PDF-` magic-number check so a renamed `.docx` cannot slip through, and an 8 MB cap.
   Upserts on (module, kind).
 - `DELETE /admin/documents/:module/:kind` / `DELETE /teacher/documents/:kind`.
+- `GET   /admin|teacher|student/events?from=&to=` — institute-wide non-teaching days. All three
+  roles can read (a student may see why a day is missing from their percentage).
+- `POST  /admin|teacher/events` — `{ date, title }`, upserts on the unique `date`. A module owner
+  writing one is enough; the other two desks and every student pick it up.
+- `DELETE /admin|teacher/events/:date` — removes it, and the register comes back.
 
 ## Frontend (`artifacts/course-tracker/src`)
 
@@ -689,6 +697,52 @@ project 1. Only the *window* each month covers changed.
 `monthForJoining()` out of the two source files, transpiles them with the repo's own esbuild and
 runs them (25,208 assertions). It lives in `%TEMP%/opencode/verify-months.mjs`, not in the repo —
 there is still no test suite, and `typecheck` remains the safety net.
+
+### 13. Events: a PTM day stops all three modules
+
+**The rule.** An institute event (PTM, holiday, exam) is recorded **once against the date** and
+applies to every module and every student. The day is **excluded entirely** — it is not a present,
+not an absent, and not in the percentage denominator. This was the user's explicit ask: an unmarked
+day would otherwise silently become an absence nobody earned.
+
+**Institute-wide, not per module.** `calendar_events` has a **unique `date` and no module column**.
+A module owner writes it and the other two desks see it. That is correct here (the institute
+closes as a whole) and is the opposite of every other teacher route, which is module-scoped — do
+not "fix" it by adding a module.
+
+**Where the exclusion happens.** `courseMonths(joinedOn, events)` takes the event set and filters
+them out of `slice.days` alongside Sundays. Because **every** attendance figure is derived from
+`slice.days`, one change moves all of them together: the month total, `present`, `absent`,
+`percentage`, the per-module rows, `/admin/modules/:module/attendance/summary`, and
+`attendancePendingFor` (an event day is not outstanding, so the status icons stay green).
+`eventDates()` is the one helper that loads them — a `date::text` select, because the Postgres
+`date` local-midnight trap applies here as everywhere else.
+
+**The register page.** `AttendanceRegisterPage` carries an event box: a title input and
+**Mark this day as an event**. Once an event exists for the date, the search bar, the table and
+the Save button are **hidden** (`event == null &&` guards), so there is nothing to fill in and
+nothing to accidentally submit. **Remove event** deletes the row and brings the register back.
+`GET /teacher/events?from=&to=` reads just that one day; `POST /teacher/events` upserts; `DELETE
+/teacher/events/:date` removes it.
+
+**Why the title alone is the remark.** The user asked for the event to "become the remark", so
+`title` is what is shown — there is no separate body column. Do not add one without asking.
+
+**Reports say how many days went.** Each month in `buildStudentReport` now carries
+`events: string[]` (the event dates inside that slice), so `MonthlyProgress` can say "…and 1 event
+day excluded" rather than leaving a student wondering why the denominator is short. The count is
+computed from `slice.start`/`slice.end`, not from `slice.days`, because an event on a Sunday is a
+no-op that must not be advertised as a lost day.
+
+**Migration.** `calendar_events` is created by `ensureCalendarEventsTable()` in `index.ts` at
+boot, chained before `listen()` the same way `leave_days` was — the hosted database is not
+migrated by hand any more.
+
+**Verified** by `%TEMP%/opencode/verify-events.mjs`, which extracts the real `courseMonths()` out
+of `data.ts` and checks the reported case (joined 15 Sep 2026, PTM on 26 Sep → month 1 goes 14
+days to 13, percentage unchanged at 100% because nobody was marked), that an event outside the
+course changes nothing, that an event on a Sunday is a no-op, and that every slice stays
+contiguous with no duplicate days. 24 assertions, all passing.
 
 ## Gotchas / decisions
 
