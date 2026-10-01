@@ -833,14 +833,15 @@ function longDate(iso: string): string {
   return `${weekday}, ${date.getUTCDate()} ${MONTH_LABELS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
-type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; recorded: boolean; locked: boolean };
-type Mark = 'present' | 'absent';
+type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean };
+type Mark = 'present' | 'absent' | 'leave';
 
-// Two checkboxes per student: P ticks green, A ticks red, and a row with neither
-// ticked stays grey and is left exactly as it was. They are always drawn, even when
-// the date is out of range, so the column reads the same on every row.
+// Three checkboxes per student: P ticks green, A ticks red, L ticks amber for leave
+// (which still counts as attended). A row with none ticked stays grey and is left exactly
+// as it was. Everything that has been recorded before can be ticked again to fix it —
+// saved days are no longer locked.
 function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: RegisterRow; mark: Mark | undefined; disabled: boolean; reason: string; onPick: (next: Mark | undefined) => void }) {
-  const box = (kind: Mark, letter: string, on: string) => {
+  const box = (kind: Mark, letter: string, on: string, accent: string) => {
     const checked = mark === kind;
     return <label
       className={`inline-flex select-none items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-bold transition ${disabled ? 'cursor-not-allowed border-border bg-muted/50 text-muted-foreground/60' : checked ? on : 'cursor-pointer border-border bg-muted text-muted-foreground hover:border-foreground/30'}`}
@@ -852,7 +853,7 @@ function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: Register
         disabled={disabled}
         onChange={(event) => { event.stopPropagation(); onPick(checked ? undefined : kind); }}
         onClick={(event) => event.stopPropagation()}
-        className={`h-4 w-4 ${kind === 'present' ? 'accent-emerald-600' : 'accent-red-600'} ${disabled ? '' : 'cursor-pointer'}`}
+        className={`h-4 w-4 ${accent} ${disabled ? '' : 'cursor-pointer'}`}
         aria-label={`${row.fullName} ${kind}`}
         data-testid={`check-${kind}-${row.id}`}
       />
@@ -861,8 +862,9 @@ function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: Register
   };
   return <div className="flex flex-col items-end gap-1">
     <div className="flex items-center gap-1.5">
-      {box('present', 'P', 'border-emerald-600 bg-emerald-500/15 text-emerald-700')}
-      {box('absent', 'A', 'border-destructive bg-destructive/10 text-destructive')}
+      {box('present', 'P', 'border-emerald-600 bg-emerald-500/15 text-emerald-700', 'accent-emerald-600')}
+      {box('absent', 'A', 'border-destructive bg-destructive/10 text-destructive', 'accent-red-600')}
+      {box('leave', 'L', 'border-amber-500 bg-amber-500/15 text-amber-700', 'accent-amber-500')}
     </div>
     {disabled && <span className="whitespace-nowrap text-[10px] text-muted-foreground" data-testid={`reason-${row.id}`}>{reason}</span>}
   </div>;
@@ -897,10 +899,11 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
         if (!ok) { setError('Could not open the register for this date.'); setRows([]); return; }
         const list = data as RegisterRow[];
         setRows(list);
-        // Saved rows come back showing what was recorded; the rest start grey.
+        // Saved rows come back showing what was recorded; the rest start grey. Every
+        // row stays tickable, so a saved day can be changed and saved again.
         setMarks(Object.fromEntries(list
-          .filter((r) => r.eligible && r.locked)
-          .map((r) => [r.id, r.present ? 'present' : 'absent'] as const)));
+          .filter((r) => r.eligible && r.recorded)
+          .map((r) => [r.id, r.leave ? 'leave' : r.present ? 'present' : 'absent'] as const)));
       })
       .catch(() => { if (alive) { setError('Could not open the register for this date.'); setRows([]); } });
     return () => { alive = false; };
@@ -911,35 +914,34 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   const sunday = dayIndex(new Date(`${date}T00:00:00Z`)) > 5;
   const all = rows ?? [];
   const eligible = all.filter((row) => row.eligible);
-  const open = eligible.filter((row) => !row.locked);
-  const lockedRows = eligible.filter((row) => row.locked);
   const query = search.trim().toLowerCase();
   const shown = all.filter((row) => studentMatches(row, query));
-  const presentIds = open.filter((row) => marks[row.id] === 'present').map((row) => row.id);
-  const absentIds = open.filter((row) => marks[row.id] === 'absent').map((row) => row.id);
-  const untouched = open.length - presentIds.length - absentIds.length;
+  const presentIds = eligible.filter((row) => marks[row.id] === 'present').map((row) => row.id);
+  const absentIds = eligible.filter((row) => marks[row.id] === 'absent').map((row) => row.id);
+  const leaveIds = eligible.filter((row) => marks[row.id] === 'leave').map((row) => row.id);
+  const touchedIds = presentIds.length + absentIds.length + leaveIds.length;
+  const untouched = eligible.length - touchedIds;
 
-  const markable = sunday ? 0 : open.length;
-  // Bulk controls leave already-saved rows exactly as they are.
+  const markable = sunday ? 0 : eligible.length;
   const setAll = (mark: Mark | undefined) => setMarks((v) => {
-    const kept = Object.fromEntries(lockedRows.map((row) => [row.id, v[row.id]!]).filter(([, m]) => m));
-    return mark ? { ...kept, ...Object.fromEntries(open.map((row) => [row.id, mark])) } : kept;
+    if (mark) return { ...v, ...Object.fromEntries(eligible.map((row) => [row.id, mark])) };
+    const cleared = new Set(eligible.map((row) => row.id));
+    return Object.fromEntries(Object.entries(v).filter(([id]) => !cleared.has(id)));
   });
 
   const save = () => {
-    if (presentIds.length + absentIds.length === 0) { setError('Mark at least one student P or A before saving.'); return; }
+    if (touchedIds === 0) { setError('Mark at least one student P, A or L before saving.'); return; }
     setSaving(true); setError(''); setNotice('');
     fetch('/api/teacher/attendance/day', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, present: presentIds, absent: absentIds }),
+      body: JSON.stringify({ date, present: presentIds, absent: absentIds, leave: leaveIds }),
     })
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error('save failed');
-        const body = data as { saved: number; locked: number };
-        setNotice(`Saved for ${longDate(date)} — ${presentIds.length} present, ${absentIds.length} absent${untouched ? `, ${untouched} left blank` : ''}. Saved rows are now locked.`);
-        if (body.locked) setError(`${body.locked} row${body.locked === 1 ? ' was' : 's were'} already saved and left unchanged.`);
+        const body = data as { saved: number; skipped?: number };
+        setNotice(`Saved for ${longDate(date)} — ${presentIds.length} present, ${absentIds.length} absent, ${leaveIds.length} on leave${untouched ? `, ${untouched} left blank` : ''}. You can still go back and change any row.`);
         setReloadToken((v) => v + 1);
       })
       .catch(() => setError('Could not save the register. Try again.'))
@@ -950,7 +952,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark attendance"
-      detail="Today's register, ready to fill. Tick P for present or A for absent; anything left grey is not recorded either way. Check it before you save — once a row is saved it is locked and cannot be changed."
+      detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
       action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
     />
 
@@ -975,9 +977,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       Nobody can be marked on {longDate(date)} — every student&apos;s joining date is later than this, so their course has not started yet. Each row below shows the date it opens from.
     </p>}
 
-    {!sunday && rows != null && eligible.length > 0 && open.length === 0 && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-all-locked">
-      This register was saved and is closed. Attendance cannot be changed once it has been saved.
-    </p>}
+    {!sunday && rows != null && eligible.length > 0 && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-all-locked">This register has been filled in before. Everything you see came back from the saved records — tick a different box and save to change it.</p>}
 
     <div className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="relative w-full sm:max-w-md">
@@ -990,25 +990,48 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
     <section className="rounded-xl border border-border bg-card p-5">
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <h2 className="font-display text-2xl font-bold">All students</h2>
-        <p className="text-xs text-muted-foreground" data-testid="text-register-tally"><strong className="text-emerald-600">{presentIds.length} present</strong> · <strong className="text-destructive">{absentIds.length} absent</strong> · {untouched} not marked{lockedRows.length ? ` · ${lockedRows.length} already saved` : ''}</p>
+        <p className="text-xs text-muted-foreground" data-testid="text-register-tally"><strong className="text-emerald-600">{presentIds.length} present</strong> · <strong className="text-destructive">{absentIds.length} absent</strong> · <strong className="text-amber-600">{leaveIds.length} on leave</strong> · {untouched} not marked</p>
       </div>
       {rows == null ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
         : shown.length === 0 ? <EmptyState title="No matching students" detail={all.length === 0 ? 'Nobody is enrolled yet.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
-        : <StudentTable students={shown} testIdPrefix="row-register" actionLabel={<div className="flex flex-col items-end gap-1.5">
-            <span>Attendance</span>
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={() => setAll('present')} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-emerald-600 hover:text-emerald-700 disabled:opacity-40" data-testid="button-all-present">All P</button>
-              <button type="button" onClick={() => setAll('absent')} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-destructive hover:text-destructive disabled:opacity-40" data-testid="button-all-absent">All A</button>
-              <button type="button" onClick={() => setAll(undefined)} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-foreground/40 hover:text-foreground disabled:opacity-40" data-testid="button-clear-marks">Clear</button>
-            </div>
-          </div>} action={(student) => {
-            const row = shown.find((r) => r.id === student.id)!;
-            const reason = sunday ? 'Sunday — off day' : !row.eligible ? `Joins ${joinedOn(row.dateOfJoining)}` : row.locked ? 'Saved — locked' : '';
-            return <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible || row.locked} reason={reason} onPick={(next) => setMarks((v) => {
-              if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
-              return { ...v, [row.id]: next };
-            })} />;
-          }} />}
+        : <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left text-sm" data-testid="table-register">
+            <thead>
+              <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                <th className="py-2 pr-2 font-semibold">#</th>
+                <th className="py-2 pr-2 font-semibold">Student ID</th>
+                <th className="py-2 pr-2 font-semibold">Name</th>
+                <th className="py-2 pr-2 font-semibold">Father&apos;s name</th>
+                <th className="py-2 text-right font-semibold">
+                  <span className="mr-2 align-middle">Attendance</span>
+                  <span className="inline-flex items-center gap-1">
+                    <button type="button" onClick={() => setAll('present')} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-emerald-600 hover:text-emerald-700 disabled:opacity-40" data-testid="button-all-present">All P</button>
+                    <button type="button" onClick={() => setAll('absent')} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-destructive hover:text-destructive disabled:opacity-40" data-testid="button-all-absent">All A</button>
+                    <button type="button" onClick={() => setAll('leave')} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-amber-500 hover:text-amber-700 disabled:opacity-40" data-testid="button-all-leave">All L</button>
+                    <button type="button" onClick={() => setAll(undefined)} disabled={sunday || markable === 0} className="rounded-full border border-border px-2 py-0.5 text-[10px] font-bold transition hover:border-foreground/40 hover:text-foreground disabled:opacity-40" data-testid="button-clear-marks">Clear</button>
+                  </span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((row, index) => {
+                const reason = sunday ? 'Sunday — off day' : !row.eligible ? `Joins ${joinedOn(row.dateOfJoining)}` : '';
+                return <tr key={row.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40" data-testid={`row-register-${row.id}`}>
+                  <td className="py-2.5 pr-2 text-muted-foreground">{index + 1}</td>
+                  <td className="py-2.5 pr-2 font-mono-ui text-xs font-semibold text-muted-foreground">{row.id}</td>
+                  <td className="py-2.5 pr-2 font-medium">{row.fullName}</td>
+                  <td className="py-2.5 pr-2 text-muted-foreground">{row.fathersName}</td>
+                  <td className="py-2.5 text-right">
+                    <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible} reason={reason} onPick={(next) => setMarks((v) => {
+                      if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
+                      return { ...v, [row.id]: next };
+                    })} />
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>}
       {error && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-register-error">{error}</p>}
       {notice && <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-register-success">{notice}</p>}
     </section>

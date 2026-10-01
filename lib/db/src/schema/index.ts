@@ -85,6 +85,10 @@ export const attendanceTable = pgTable(
     // Bit 0 = mon … bit 5 = sat. A recorded absent and a day nobody touched both
     // leave the day flag false, so this is what tells them apart.
     lockedDays: integer("locked_days").notNull().default(0),
+    // Which of mon..sat are on leave. Bit 0 = mon … bit 5 = sat. Leave sets the same
+    // day flag as present (so it counts as attended), this bit is what tells the two
+    // apart when the register is read back.
+    leaveDays: integer("leave_days").notNull().default(0),
     recordedBy: integer("recorded_by").references(() => teachersTable.id, {
       onDelete: "set null",
     }),

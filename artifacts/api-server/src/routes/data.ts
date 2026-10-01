@@ -2040,17 +2040,19 @@ router.get(
           // eligible = the date sits inside this student's course and is not a Sunday
           eligible: slot != null,
           present: slot && row ? Boolean(row[slot.day]) : false,
+          // On leave records the day flag as present too; this bit tells them apart.
+          leave: slot && row ? ((row.leaveDays ?? 0) & dayBit(slot.day)) !== 0 : false,
           recorded: Boolean(row),
-          // Saved once, and closed from then on.
-          locked: slot ? isLocked(row?.lockedDays, slot.day) : false,
         };
       }),
     );
   },
 );
 
-// Ticked students become present, the rest of the submitted list becomes absent, and
-// anyone left out of both arrays keeps whatever they already had.
+// Ticked students become present, the leave list becomes leave (which still counts as
+// attended), the rest of the submitted list becomes absent, and anyone left out of all
+// three arrays keeps whatever they already had. Days stay editable: saving again just
+// overwrites the day, so a mistake can be fixed.
 router.post(
   "/teacher/attendance/day",
   requireRole("teacher"),
@@ -2063,6 +2065,7 @@ router.post(
       date?: string;
       present?: unknown;
       absent?: unknown;
+      leave?: unknown;
     };
     const date = parseDayParam(body.date);
     const present = Array.isArray(body.present)
@@ -2071,12 +2074,15 @@ router.post(
     const absent = Array.isArray(body.absent)
       ? body.absent.filter((id): id is string => typeof id === "string")
       : [];
-    if (!date || present.length + absent.length === 0) {
+    const leave = Array.isArray(body.leave)
+      ? body.leave.filter((id): id is string => typeof id === "string")
+      : [];
+    if (!date || present.length + absent.length + leave.length === 0) {
       res.status(400).json({ error: "Choose a date and at least one student." });
       return;
     }
 
-    const touched = [...new Set([...present, ...absent])];
+    const touched = [...new Set([...present, ...absent, ...leave])];
     const students = await db
       .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
       .from(studentsTable)
@@ -2092,9 +2098,9 @@ router.post(
       );
 
     const presentSet = new Set(present);
+    const leaveSet = new Set(leave);
     let saved = 0;
     let skipped = 0;
-    let locked = 0;
     for (const student of students) {
       const slot = weekAndDayFor(student.dateOfJoining, date);
       if (!slot) {
@@ -2104,16 +2110,18 @@ router.post(
       const row = existing.find(
         (r) => r.studentId === student.id && r.week === slot.week,
       );
-      // A day that has already been saved stays as it was — attendance is final.
-      if (isLocked(row?.lockedDays, slot.day)) {
-        locked += 1;
-        continue;
-      }
       // Only this one day moves; the rest of the week keeps whatever it held.
       const flags = Object.fromEntries(
         DAY_FLAG_ORDER.map((key) => [key, row ? Boolean(row[key]) : false]),
       ) as Record<(typeof DAY_FLAG_ORDER)[number], boolean>;
-      flags[slot.day] = presentSet.has(student.id);
+      flags[slot.day] = presentSet.has(student.id) || leaveSet.has(student.id);
+      // Leave marks the day attended, but the leave bit says why.
+      const leaveDays = leaveSet.has(student.id)
+        ? (row?.leaveDays ?? 0) | dayBit(slot.day)
+        : (row?.leaveDays ?? 0) & ~dayBit(slot.day);
+      // The lock bits are still written so "today was handled" stays derivable for the
+      // status icons (an absence leaves the day flag false), but they no longer refuse
+      // an edit — this day is saved as whatever was just submitted.
       const lockedDays = (row?.lockedDays ?? 0) | dayBit(slot.day);
       await db
         .insert(attendanceTable)
@@ -2123,6 +2131,7 @@ router.post(
           week: slot.week,
           status: "present",
           ...flags,
+          leaveDays,
           lockedDays,
           recordedBy: Number(req.auth.userId),
         })
@@ -2135,6 +2144,7 @@ router.post(
           set: {
             status: "present",
             ...flags,
+            leaveDays,
             lockedDays,
             recordedBy: Number(req.auth.userId),
             recordedAt: new Date(),
@@ -2142,7 +2152,7 @@ router.post(
         });
       saved += 1;
     }
-    res.json({ saved, skipped, locked });
+    res.json({ saved, skipped });
   },
 );
 
