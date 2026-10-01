@@ -5,17 +5,21 @@ import {
   count,
   desc,
   eq,
+  gte,
   ilike,
   inArray,
   isNotNull,
+  lte,
   max,
   ne,
   or,
+  sql,
 } from "drizzle-orm";
 import {
   announcementsTable,
   assessmentsTable,
   attendanceTable,
+  calendarEventsTable,
   courseDocumentsTable,
   db,
   sessionsTable,
@@ -973,7 +977,11 @@ type CourseMonth = { month: number; start: string; end: string; days: string[] }
 // student was admitted in: slice 1 begins on the admission date and is clipped to the end
 // of that calendar month, so a mid-month admission gets a short first month. Slices 2 to
 // 6 are then whole calendar months.
-function courseMonths(joinedOn: string | null): CourseMonth[] {
+//
+// `events` are the institute-wide non-teaching days. They are dropped from `days`, which is
+// what removes them from the percentage entirely — a PTM is neither present nor absent, and
+// counting it as absent would punish students for a holiday.
+function courseMonths(joinedOn: string | null, events: ReadonlySet<string> = new Set()): CourseMonth[] {
   if (!joinedOn) return [];
   const joinDate = new Date(`${joinedOn}T00:00:00Z`);
   if (Number.isNaN(joinDate.getTime())) return [];
@@ -1009,7 +1017,9 @@ function courseMonths(joinedOn: string | null): CourseMonth[] {
     const days: string[] = [];
     for (const d = new Date(sliceStart); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       if (d.getUTCDay() === 0) continue; // Sunday is off
-      days.push(isoDay(d));
+      const iso = isoDay(d);
+      if (events.has(iso)) continue; // PTM, holiday, exam — not a teaching day at all
+      days.push(iso);
     }
     slices.push({ month: slices.length + 1, start: isoDay(sliceStart), end: isoDay(end), days });
   }
@@ -1038,6 +1048,16 @@ function presentDatesByModule(
   return byDate;
 }
 
+// Institute-wide non-teaching days as plain YYYY-MM-DD strings, so they can be compared
+// against the day strings `courseMonths` produces. Postgres hands `date` columns back as
+// local-midnight Date objects, which read a day early in IST, so select the text form.
+async function eventDates(): Promise<Set<string>> {
+  const rows = await db
+    .select({ date: sql<string>`${calendarEventsTable.date}::text` })
+    .from(calendarEventsTable);
+  return new Set(rows.map((row) => row.date));
+}
+
 async function buildStudentReport(studentId: string) {
   const [student] = await db
     .select({ dateOfJoining: studentsTable.dateOfJoining })
@@ -1056,7 +1076,8 @@ async function buildStudentReport(studentId: string) {
     .orderBy(asc(assessmentsTable.cycle));
 
   const joinedOn = student?.dateOfJoining ?? null;
-  const slices = courseMonths(joinedOn);
+  const events = await eventDates();
+  const slices = courseMonths(joinedOn, events);
   const presentOn = presentDatesByModule(joinedOn, attendanceRows);
 
   const months = slices.map((slice) => {
@@ -1094,6 +1115,9 @@ async function buildStudentReport(studentId: string) {
       present,
       absent: Math.max(0, total - present),
       total,
+      // Event days inside this slice, so the UI can say why the denominator is short
+      // instead of leaving a student wondering where days went.
+      events: [...events].filter((day) => day >= slice.start && day <= slice.end).sort(),
       percentage: total ? Math.round((present / total) * 100) : 0,
       recorded: perModule.some((item) => item.recorded),
       modules: perModule,
@@ -1655,8 +1679,9 @@ router.get(
     let studentsMarked = 0;
     let presentDays = 0;
     let possibleDays = 0;
+    const events = await eventDates();
     for (const student of students) {
-      const slice = courseMonths(student.dateOfJoining).find((s) => s.month === month);
+      const slice = courseMonths(student.dateOfJoining, events).find((s) => s.month === month);
       if (!slice) continue;
       possibleDays += slice.days.length;
       const presentOn = presentDatesByModule(
@@ -1948,9 +1973,11 @@ function attendancePendingFor(
   rows: (typeof attendanceTable.$inferSelect)[],
   module: Module,
   today: string,
+  isEvent = false,
 ): number {
   const date = new Date(`${today}T00:00:00Z`);
   if ((date.getUTCDay() + 6) % 7 > 5) return 0; // Sunday
+  if (isEvent) return 0; // a PTM or holiday: nobody was marked, nobody is at fault
   const slot = weekAndDayFor(joinedOn, date);
   if (!slot) return 1; // outside this student's course — nothing recorded for today
   const row = rows.find((r) => r.module === module && r.week === slot.week);
@@ -1965,9 +1992,10 @@ function marksPendingFor(
   rows: (typeof assessmentsTable.$inferSelect)[],
   module: Module,
   today: string,
+  events: ReadonlySet<string> = new Set(),
 ): number {
   let pending = 0;
-  for (const slice of courseMonths(joinedOn)) {
+  for (const slice of courseMonths(joinedOn, events)) {
     const start = new Date(`${slice.start}T00:00:00Z`).getTime();
     const end = new Date(`${slice.end}T00:00:00Z`).getTime();
     const dueDates = [isoDay(new Date(start + Math.floor((end - start) / 2))), slice.end];
@@ -1997,6 +2025,8 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
     .from(studentsTable);
   const attendanceRows = await db.select().from(attendanceTable);
   const assessmentRows = await db.select().from(assessmentsTable);
+  const events = await eventDates();
+  const isEventToday = events.has(today);
 
   const payload: StatusPayload = {
     attendance: [],
@@ -2015,8 +2045,9 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
         ownAttendance.filter((row) => row.module === module),
         module,
         today,
+        isEventToday,
       );
-      marksPending += marksPendingFor(student.dateOfJoining, ownAssessments, module, today);
+      marksPending += marksPendingFor(student.dateOfJoining, ownAssessments, module, today, events);
     }
     payload.pendingAttendance[student.id] = attendancePending;
     payload.pendingMarks[student.id] = marksPending;
@@ -2212,6 +2243,112 @@ router.post(
       saved += 1;
     }
     res.json({ saved, skipped });
+  },
+);
+
+// ---------------------------------------------------------------- institute events
+// A PTM, a holiday or an exam that stops all three modules on one day. Recorded once by
+// whichever desk noticed it first and shown to everyone, because the institute closes as a
+// whole — which is also why the day leaves the attendance percentage entirely rather than
+// counting as an absence (`courseMonths` drops it).
+
+const EVENT_TYPES = ["holiday", "event", "meeting", "other"] as const;
+
+function eventView(record: typeof calendarEventsTable.$inferSelect) {
+  return {
+    // Drizzle hands this back as the plain string it was written as, so no reformatting.
+    date: record.date,
+    title: record.title,
+    type: record.type ?? "event",
+  };
+}
+
+router.get(
+  ["/admin/events", "/teacher/events", "/student/events"],
+  requireRole("admin", "teacher", "student"),
+  async (req, res): Promise<void> => {
+    // A range keeps the response small on a long course; without one the desk asks for the
+    // single date it is showing, which is the common case.
+    const from = typeof req.query["from"] === "string" ? req.query["from"] : null;
+    const to = typeof req.query["to"] === "string" ? req.query["to"] : null;
+    const where = from
+      ? to
+        ? and(gte(calendarEventsTable.date, from), lte(calendarEventsTable.date, to))
+        : gte(calendarEventsTable.date, from)
+      : undefined;
+    const rows = await db
+      .select()
+      .from(calendarEventsTable)
+      .where(where)
+      .orderBy(asc(calendarEventsTable.date));
+    res.json(rows.map(eventView));
+  },
+);
+
+router.post(
+  ["/admin/events", "/teacher/events"],
+  requireRole("admin", "teacher"),
+  async (req, res): Promise<void> => {
+    const raw = (req.body ?? {}) as { date?: unknown; title?: unknown; type?: unknown };
+    const date = typeof raw.date === "string" ? raw.date.trim() : "";
+    const title = typeof raw.title === "string" ? raw.title.trim() : "";
+    const type = typeof raw.type === "string" && (EVENT_TYPES as readonly string[]).includes(raw.type)
+      ? raw.type
+      : "event";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T00:00:00Z`).getTime())) {
+      res.status(400).json({ error: "Pick the date this event falls on." });
+      return;
+    }
+    if (!title) {
+      res.status(400).json({ error: "Say what the event was, e.g. PTM or Diwali holiday." });
+      return;
+    }
+    // One entry per date: a second desk saving the same day corrects the first rather than
+    // stacking a duplicate on top of it.
+    const row: typeof calendarEventsTable.$inferInsert = {
+      date,
+      title,
+      type,
+      createdBy: req.auth?.role === "teacher" ? Number(req.auth.userId) : null,
+      createdByAdmin: req.auth?.role === "admin" ? Number(req.auth.userId) : null,
+    };
+    const [saved] = await db
+      .insert(calendarEventsTable)
+      .values(row)
+      .onConflictDoUpdate({
+        target: calendarEventsTable.date,
+        set: { title: row.title, type: row.type },
+      })
+      .returning();
+    if (!saved) {
+      res.status(500).json({ error: "Could not save that event." });
+      return;
+    }
+    res.json(eventView(saved));
+  },
+);
+
+router.delete(
+  ["/admin/events/:date", "/teacher/events/:date"],
+  requireRole("admin", "teacher"),
+  async (req, res): Promise<void> => {
+    const rawDate = req.params["date"];
+    const date = Array.isArray(rawDate) ? (rawDate[0] ?? "") : (rawDate ?? "");
+    // A `date` column compared against text would not match, and an unparseable value would
+    // throw inside Postgres rather than returning nothing.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ error: "That is not a date we can remove." });
+      return;
+    }
+    const [deleted] = await db
+      .delete(calendarEventsTable)
+      .where(eq(sql`${calendarEventsTable.date}::text`, date))
+      .returning();
+    if (!deleted) {
+      res.status(404).json({ error: "There is no event on that date." });
+      return;
+    }
+    res.status(204).end();
   },
 );
 

@@ -871,6 +871,10 @@ function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: Register
   </div>;
 }
 
+// One institute-wide non-teaching day. Written once by whichever desk noticed it first and
+// shown to all three, because the institute closes as a whole.
+type CalendarEvent = { date: string; title: string; type: string };
+
 function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   // `today` re-reads the clock so a tab left open overnight rolls onto the new day by
   // itself; `override` only exists for going back and fixing an earlier date.
@@ -889,6 +893,52 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
+  // The institute-wide non-teaching days. An event on the date being shown replaces the
+  // register: there is nothing to mark, and the day must not be counted against anybody.
+  const [event, setEvent] = useState<CalendarEvent | null>(null);
+  const [eventTitle, setEventTitle] = useState('');
+  const [eventBusy, setEventBusy] = useState(false);
+  const [eventError, setEventError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/teacher/events?from=${date}&to=${date}`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!alive) return;
+        const found = ok ? (data as CalendarEvent[])[0] ?? null : null;
+        setEvent(found);
+        setEventTitle(found?.title ?? '');
+      })
+      .catch(() => { if (alive) setEvent(null); });
+    return () => { alive = false; };
+  }, [date, reloadToken]);
+
+  const saveEvent = () => {
+    if (!eventTitle.trim()) { setEventError('Say what the event was, e.g. PTM or Diwali holiday.'); return; }
+    setEventBusy(true); setEventError('');
+    fetch('/api/teacher/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, title: eventTitle }),
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) { setEventError(((data as { error?: string }).error) ?? 'Could not save that event.'); return; }
+        setEvent(data as CalendarEvent);
+        setReloadToken((v) => v + 1);
+      })
+      .catch(() => setEventError('Could not save that event.'))
+      .finally(() => setEventBusy(false));
+  };
+
+  const clearEvent = () => {
+    setEventBusy(true); setEventError('');
+    fetch(`/api/teacher/events/${date}`, { method: 'DELETE' })
+      .then((res) => { if (res.ok) { setEvent(null); setEventTitle(''); setReloadToken((v) => v + 1); } else setEventError('Could not remove that event.'); })
+      .catch(() => setEventError('Could not remove that event.'))
+      .finally(() => setEventBusy(false));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -954,7 +1004,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark attendance"
       detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
-      action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
+      action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
     />
 
     <section className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -974,12 +1024,47 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
     {sunday && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-sunday">Sunday is not a teaching day, so nothing can be recorded against it. The date still moves on to tomorrow by itself.</p>}
 
-    {!sunday && rows != null && all.length > 0 && eligible.length === 0 && <p className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="status-none-eligible">
+    {/* An event replaces the register for the day. Saying it here is the whole point: the
+        day then counts for nobody in any module, instead of showing up as an absence. */}
+    <section className={`mb-5 rounded-xl border p-4 ${event ? 'border-amber-400/60 bg-amber-50/60' : 'border-dashed border-border bg-card'}`} data-testid="panel-event">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Event on this day</p>
+          {event
+            ? <p className="mt-1 font-display text-lg font-bold text-amber-800" data-testid="text-event-title">{event.title}</p>
+            : <p className="mt-1 text-sm text-muted-foreground">PTM, a holiday or an exam? Record it once here. All three modules get the day off and it is left out of every student&apos;s attendance percentage.</p>}
+        </div>
+        {event && <Button type="button" size="sm" variant="outline" onClick={clearEvent} disabled={eventBusy} data-testid="button-clear-event">Remove event</Button>}
+      </div>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Input
+          className="sm:max-w-sm"
+          placeholder={event ? 'Change what it says' : 'e.g. PTM, Diwali holiday, exam'}
+          value={eventTitle}
+          onChange={(e) => setEventTitle(e.target.value)}
+          disabled={sunday || eventBusy}
+          data-testid="input-event-title"
+          aria-label="Event title"
+        />
+        <Button type="button" onClick={saveEvent} disabled={sunday || eventBusy || eventTitle.trim() === ''} data-testid="button-save-event">
+          {eventBusy ? 'Saving…' : event ? 'Update event' : 'Mark this day as an event'}
+        </Button>
+      </div>
+      {sunday && <p className="mt-2 text-xs text-muted-foreground">It is a Sunday, so there is nothing to mark off anyway.</p>}
+      {eventError && <p className="mt-2 text-xs text-destructive" data-testid="status-event-error">{eventError}</p>}
+    </section>
+
+    {event != null && rows != null && <p className="mb-5 rounded-xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 text-sm text-amber-900" data-testid="status-event-day">{longDate(date)} is marked as <strong>{event.title}</strong>. No attendance is being taken and the day is excluded from everyone&apos;s percentage. Remove the event above if that is wrong.</p>}
+
+    {!sunday && event == null && rows != null && all.length > 0 && eligible.length === 0 && <p className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="status-none-eligible">
       Nobody can be marked on {longDate(date)} — every student&apos;s joining date is later than this, so their course has not started yet. Each row below shows the date it opens from.
     </p>}
 
-    {!sunday && rows != null && eligible.length > 0 && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-all-locked">This register has been filled in before. Everything you see came back from the saved records — tick a different box and save to change it.</p>}
+    {!sunday && event == null && rows != null && eligible.length > 0 && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-all-locked">This register has been filled in before. Everything you see came back from the saved records — tick a different box and save to change it.</p>}
 
+    {/* The search box and the table are hidden while an event stands, so there is nothing to
+        fill in and no Save button to press. */}
+    {event == null && <>
     <div className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="relative w-full sm:max-w-md">
         <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
@@ -1036,6 +1121,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       {error && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-register-error">{error}</p>}
       {notice && <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-register-success">{notice}</p>}
     </section>
+    </>}
   </>;
 }
 
@@ -1306,7 +1392,7 @@ function TeacherStudentListPage({ user }: { user: CurrentUser }) {
 
 type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null };
 type ReportModule = { module: Module; present: number; absent: number; total: number; percentage: number; recorded: boolean; projects: ProjectMark[] };
-type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; modules: ReportModule[] };
+type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; events?: string[]; modules: ReportModule[] };
 type StudentReport = {
   joinedOn: string | null;
   courseStart: string | null;
@@ -1380,6 +1466,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
   const absent = scoped ? scoped.absent : selected.absent;
   const percentage = scoped ? scoped.percentage : selected.percentage;
   const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
+  const eventCount = selected.events?.length ?? 0;
 
   return <>
     <section className={`rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>
@@ -1421,7 +1508,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
           <span className="text-xs text-muted-foreground">{item.present} present · {item.absent} absent · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span></span>
         </div>)}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off. The course is six calendar months starting with the month you joined in, so month 1 covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month you joined in, so month 1 covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
     </section>
 
     <section className={`mt-6 rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>

@@ -16,6 +16,7 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
   "present",
   "absent",
 ]);
+
 export const documentKindEnum = pgEnum("document_kind", [
   "syllabus",
   "project_plan",
@@ -177,13 +178,37 @@ export const courseDocumentsTable = pgTable(
     sizeBytes: integer("size_bytes").notNull(),
     content: text("content").notNull(),
     uploadedByName: text("uploaded_by_name"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.module, table.kind] }),
   }),
 );
+
+// An institute-wide non-teaching day: a PTM, a holiday, an exam. Recorded once and shown
+// on every module desk, because the three modules stop together. A date can carry at most
+// one entry (`.unique()`), so re-saving a day replaces its note rather than stacking up.
+// `date` is a Postgres date rather than text, so the register page can filter on a range.
+export const calendarEventsTable = pgTable("calendar_events", {
+  id: serial("id").primaryKey(),
+  date: date("date").notNull().unique(),
+  title: text("title").notNull(),
+  type: text("type").default("event"),
+  createdBy: integer("created_by").references(() => teachersTable.id, {
+    onDelete: "set null",
+  }),
+  createdByAdmin: integer("created_by_admin").references(() => adminsTable.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
 
 export type Module = "ai" | "dm" | "sm";
 export type Role = "admin" | "teacher" | "student";

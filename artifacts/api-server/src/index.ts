@@ -8,7 +8,7 @@ const parsedPort = Number(rawPort);
 const port =
   rawPort && !Number.isNaN(parsedPort) && parsedPort > 0 ? parsedPort : 5000;
 
-// Hosted deployments get their schema by hand, so a new column never reaches the
+// Hosted deployments get their schema by hand, so a new column or table never reaches the
 // database unless this server adds it itself. Run before listening: idempotent on the
 // first boot with the new code, a no-op afterwards.
 async function ensureAttendanceLeaveColumn(): Promise<void> {
@@ -23,13 +23,39 @@ async function ensureAttendanceLeaveColumn(): Promise<void> {
   }
 }
 
-ensureAttendanceLeaveColumn().finally(() => {
-  app.listen(port, (err) => {
-    if (err) {
-      logger.error({ err }, "Error listening on port");
-      process.exit(1);
-    }
+// Institute-wide non-teaching days. Kept separate from the column above because this one is
+// a whole table, and it has to be created with its unique constraint on `date` — that is
+// what stops two desks recording two different events for the same day.
+async function ensureCalendarEventsTable(): Promise<void> {
+  try {
+    await db.execute(
+      sql.raw(`
+        CREATE TABLE IF NOT EXISTS calendar_events (
+          id serial PRIMARY KEY,
+          date date NOT NULL UNIQUE,
+          title text NOT NULL,
+          type text DEFAULT 'event',
+          created_by integer REFERENCES teachers(id) ON DELETE SET NULL,
+          created_by_admin integer REFERENCES admins(id) ON DELETE SET NULL,
+          created_at timestamp with time zone DEFAULT now() NOT NULL
+        )
+      `),
+    );
+  } catch (err) {
+    logger.warn({ err }, "Could not ensure calendar_events table");
+  }
+}
 
-    logger.info({ port }, "Server listening");
+ensureCalendarEventsTable()
+  .then(ensureAttendanceLeaveColumn)
+  .catch((err) => logger.warn({ err }, "Schema checks failed"))
+  .finally(() => {
+    app.listen(port, (err) => {
+      if (err) {
+        logger.error({ err }, "Error listening on port");
+        process.exit(1);
+      }
+
+      logger.info({ port }, "Server listening");
+    });
   });
-});
