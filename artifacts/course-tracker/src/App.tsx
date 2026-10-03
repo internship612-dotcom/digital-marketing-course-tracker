@@ -832,57 +832,20 @@ function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId }: { module
   </div>;
 }
 
-function DayAssessmentCard({ moduleKey, scope }: { moduleKey: Module; scope: 'admin' | 'teacher' }) {
-  const [date, setDate] = useState(todayIso);
-  const [status, setStatus] = useState<DayStatus | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setStatus(null);
-    const url = scope === 'admin'
-      ? `/api/admin/modules/${moduleKey}/day-status?date=${date}`
-      : `/api/teacher/day-status?date=${date}`;
-    fetch(url)
-      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => { if (alive && ok) setStatus(data as DayStatus); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [moduleKey, scope, date]);
-
-  const marked = status?.assessmentMarked ?? 0;
-  const pending = status?.assessmentPending ?? 0;
-
-  return <div className="rounded-xl border border-border bg-card p-5" data-testid="card-assessments">
+function ProgressCard({ label, done, pending, doneLabel, pendingLabel, icon: Icon, testId }: { label: string; done: number; pending: number; doneLabel: string; pendingLabel: string; icon: typeof Users; testId: string }) {
+  const total = done + pending;
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
     <div className="flex items-center justify-between">
-      <span className="flex items-center gap-3">
-        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><ClipboardCheck size={17} /></span>
-        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Assessments</span>
-      </span>
+      <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
+      <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
     </div>
-    <div className="mt-4">
-      <DatePicker value={date} onChange={setDate} testId="card-assessments-date">
-        <span className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left transition hover:bg-muted" data-testid="card-assessments-day">
-          <CalendarCheck2 size={15} className="shrink-0 text-muted-foreground" />
-          <span className="font-display text-sm font-bold leading-tight">Due by {longDate(date)}</span>
-        </span>
-      </DatePicker>
+    <p className="mt-6 font-display text-4xl font-bold">{done}<span className="text-2xl text-muted-foreground"> / {total}</span></p>
+    <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+      <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} {doneLabel}</span>
+      <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} {pendingLabel}</span>
     </div>
-    {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
-      : <p className="mt-4 font-display text-4xl font-bold">{marked}<span className="text-2xl text-muted-foreground"> students clear</span></p>}
-    {status == null ? null : <>
-      <p className="mt-1 text-xs text-muted-foreground">student{marked === 1 ? '' : 's'} clear of every project that fell due by this day</p>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <div className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid="card-assessments-marked">
-          <p className="font-display text-xl font-bold text-emerald-600">{marked}</p>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Clear</p>
-        </div>
-        <div className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid="card-assessments-pending">
-          <p className="font-display text-xl font-bold text-destructive">{pending}</p>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Projects due</p>
-        </div>
-      </div>
-      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Projects not due yet are not counted.</p>
-    </>}
   </div>;
 }
 
@@ -899,20 +862,21 @@ function TeacherPage({ user }: { user: CurrentUser }) {
   return <>
     <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands today, day by day. Fill the register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
     <div className="grid gap-4 lg:grid-cols-3" data-testid="module-desk-summary">
-      <div className="rounded-xl border border-accent/40 bg-accent/15 p-5" data-testid="card-total-students">
-        <div className="flex items-center justify-between">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-primary"><Users size={17} /></span>
-          <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Total students</span>
+      {/* Just the number. This one box is not a status, so it stays small and says nothing
+          else — the other two cards carry the detail. */}
+      <div className="flex items-center gap-4 self-start rounded-xl border border-accent/40 bg-accent/15 px-4 py-3.5" data-testid="card-total-students">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-primary"><Users size={15} /></span>
+        <div>
+          <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Total students</p>
+          <p className="font-display text-2xl font-bold leading-tight">{total}</p>
         </div>
-        <p className="mt-6 font-display text-4xl font-bold">{total}</p>
-        <p className="mt-3 text-xs text-muted-foreground">on the {moduleShort[user.module ?? 'ai']} roster</p>
       </div>
-      {/* Both cards answer for the day, not the whole course. Each has its own calendar icon,
-          so the two can be read on different dates if that is what is wanted. */}
+      {/* Attendance counts for the day the picker is on. Assessments stay across the whole
+          course, as before. */}
       <DayStatusCard moduleKey={moduleKey} scope="teacher" label="Attendance" icon={CalendarCheck2} testId="card-attendance" />
-      <DayAssessmentCard moduleKey={moduleKey} scope="teacher" />
+      <ProgressCard label="Assessments" done={overview?.assessmentMarked ?? 0} pending={overview?.assessmentPending ?? 0} doneLabel="marks uploaded" pendingLabel="no marks yet" icon={ClipboardCheck} testId="card-assessments" />
     </div>
-    <p className="mt-4 text-xs text-muted-foreground">Pick a back date on either card to read that day. Week-by-week and project-by-project detail is in the <Link href="/teacher/students" className="font-semibold text-primary hover:underline">student list</Link>.</p>
+    <p className="mt-4 text-xs text-muted-foreground">Tap the calendar on the attendance card to read a back date. Week-by-week and project-by-project detail is in the <Link href="/teacher/students" className="font-semibold text-primary hover:underline">student list</Link>.</p>
   </>;
 }
 
