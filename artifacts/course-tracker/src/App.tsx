@@ -62,7 +62,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import zedkingLogo from './assets/zedking-logo.png';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -306,6 +306,7 @@ const nav: NavItem[] = user.role === 'admin'
         { href: `/admin/${user.module ?? 'ai'}`, label: 'Module desk', icon: ClipboardCheck },
         { href: '/teacher/add-student', label: 'Add student', icon: Users, children: [{ href: '/teacher/students', label: 'Student list', icon: UserCheck }] },
         { href: '/teacher/attendance', label: 'Mark attendance', icon: CalendarCheck2 },
+        { href: '/teacher/assessment', label: 'Mark assessment', icon: ClipboardCheck },
         { href: '/teacher/announcements', label: 'Announcements', icon: Megaphone },
         { href: '/teacher/documents', label: 'Course files', icon: FileText },
       ]
@@ -2891,7 +2892,7 @@ function Protected({ role, children }: { role: Role; children: ReactNode }) {
 }
 
 function Router() {
-  return <ErrorBoundary resetKey={useLocation()[0]}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/:panel"><ModulePanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={useLocation()[0]}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/:panel"><ModulePanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -2922,6 +2923,149 @@ function TeacherDocumentsFromRoute() {
 function TeacherAttendanceFromRoute() {
   const { data: user } = useCurrentUser();
   return user ? <AttendanceRegisterPage user={user} /> : null;
+}
+
+// Marks for one project, for every student on the module roster at once. The single-student
+// form still lives on the record; this is the pass you make when you have a class full of
+// marks to enter and do not want to open twenty records to do it.
+function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
+  const students = useListTeacherStudents();
+  const [month, setMonth] = useState(1);
+  const [project, setProject] = useState<'' | 1 | 2>('');
+  const [rows, setRows] = useState<Record<string, { marks: string; feedback: string }>>({});
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const cycle = project === '' ? null : (month - 1) * 2 + project;
+
+  const load = useCallback(async (target: number) => {
+    setLoading(true); setError('');
+    try {
+      const res = await fetch(`/api/teacher/assessments?cycle=${target}`);
+      const data = res.ok ? await res.json() as { studentId: string; marks: number | null; feedback: string | null }[] : null;
+      if (data == null) { setError('Could not load this project.'); return; }
+      const next: Record<string, { marks: string; feedback: string }> = {};
+      for (const record of data) next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+      setRows(next);
+    } catch { setError('Could not load this project.'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    setNotice('');
+    // No project is picked for the teacher: marks overwrite silently, so that choice has to
+    // be deliberate before a single row is editable.
+    if (cycle == null) { setRows({}); return; }
+    void load(cycle);
+  }, [cycle, load]);
+
+  const all = students.data ?? [];
+  const query = search.trim().toLowerCase();
+  const shown = all.filter((student) => studentMatches(student, query));
+  const draft = (id: string) => rows[id] ?? { marks: '', feedback: '' };
+
+  const saveOne = async (studentId: string) => {
+    if (cycle == null) return;
+    const row = draft(studentId);
+    setSaving(studentId); setError(''); setNotice('');
+    try {
+      const res = await fetch('/api/teacher/assessments/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle, records: [{ studentId, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback }] }),
+      });
+      if (!res.ok) { setError('Could not save those marks. Try again.'); return; }
+      setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
+    } catch { setError('Could not save those marks. Try again.'); }
+    finally { setSaving(''); }
+  };
+
+  return <>
+    <PageHeader
+      kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
+      title="Mark assessment"
+      detail="Every project on your module roster in one place. Pick the month and project, then type marks against each student. A blank marks box saves as 'not marked'."
+      action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link>}
+    />
+
+    <section className="rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-wrap items-end gap-4">
+        <label className="grid gap-1.5 text-sm font-medium">Month
+          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-assessment-month">
+            {[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}
+          </select>
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium">Project
+          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={project} onChange={(e) => setProject(e.target.value === '' ? '' : Number(e.target.value) === 1 ? 1 : 2)} data-testid="select-assessment-project">
+            <option value="">Select project</option>
+            <option value={1}>Project 1</option>
+            <option value={2}>Project 2</option>
+          </select>
+        </label>
+        <div className="relative ml-auto w-full sm:max-w-md">
+          <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
+          <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1.</p>
+    </section>
+
+    {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to start. Nothing is editable until you do, because saving overwrites whatever is already stored.</p>}
+
+    {project !== '' && <section className="mt-5 rounded-xl border border-border bg-card p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-2xl font-bold">Month {month} · Project {project}</h2>
+        <span className="text-xs text-muted-foreground">{shown.length} student{shown.length === 1 ? '' : 's'}</span>
+      </div>
+      {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
+        : shown.length === 0 ? <EmptyState title="No matching students" detail={all.length === 0 ? 'Nobody is enrolled yet.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
+          : <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] border-collapse text-left text-sm" data-testid="table-assessment">
+              <thead>
+                <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <th className="py-2 pr-3 font-semibold">#</th>
+                  <th className="py-2 pr-3 font-semibold">Student ID</th>
+                  <th className="py-2 pr-3 font-semibold">Name</th>
+                  <th className="py-2 pr-3 font-semibold">Marks</th>
+                  <th className="py-2 pr-3 font-semibold">Feedback</th>
+                  <th className="py-2 font-semibold">Save</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((student, index) => {
+                  const row = draft(student.id);
+                  return <tr key={student.id} className="border-b border-border/60">
+                    <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
+                    <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
+                    <td className="py-2 pr-3">
+                      <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
+                    </td>
+                    <td className="py-2 pr-3">
+                      <Input className="h-9 w-24" type="number" min={0} max={100} placeholder="0 – 100" value={row.marks} onChange={(e) => setRows((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-marks-${student.id}`} />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setRows((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-feedback-${student.id}`} />
+                    </td>
+                    <td className="py-2">
+                      <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : 'Save'}</Button>
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>}
+    </section>}
+
+    {error && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-assessment-error">{error}</p>}
+    {notice && <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-assessment-success">{notice}</p>}
+  </>;
+}
+
+function TeacherAssessmentFromRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <AssessmentRegisterPage user={user} /> : null;
 }
 
 function TeacherStudentListFromRoute() {
