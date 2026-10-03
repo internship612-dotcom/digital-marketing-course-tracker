@@ -981,7 +981,7 @@ type CourseMonth = { month: number; start: string; end: string; days: string[] }
 // `events` are the institute-wide non-teaching days. They are dropped from `days`, which is
 // what removes them from the percentage entirely — a PTM is neither present nor absent, and
 // counting it as absent would punish students for a holiday.
-function courseMonths(joinedOn: string | null, events: ReadonlySet<string> = new Set()): CourseMonth[] {
+function courseMonths(joinedOn: string | null, events: ReadonlyMap<string, string> = new Map()): CourseMonth[] {
   if (!joinedOn) return [];
   const joinDate = new Date(`${joinedOn}T00:00:00Z`);
   if (Number.isNaN(joinDate.getTime())) return [];
@@ -1050,12 +1050,13 @@ function presentDatesByModule(
 
 // Institute-wide non-teaching days as plain YYYY-MM-DD strings, so they can be compared
 // against the day strings `courseMonths` produces. Postgres hands `date` columns back as
-// local-midnight Date objects, which read a day early in IST, so select the text form.
-async function eventDates(): Promise<Set<string>> {
+// local-midnight Date objects, which read a day early in IST, so select the text form. The
+// title rides along because the report says which event it was, not just that a day went.
+async function eventDates(): Promise<Map<string, string>> {
   const rows = await db
-    .select({ date: sql<string>`${calendarEventsTable.date}::text` })
+    .select({ date: sql<string>`${calendarEventsTable.date}::text`, title: calendarEventsTable.title })
     .from(calendarEventsTable);
-  return new Set(rows.map((row) => row.date));
+  return new Map(rows.map((row) => [row.date, row.title]));
 }
 
 async function buildStudentReport(studentId: string) {
@@ -1115,9 +1116,13 @@ async function buildStudentReport(studentId: string) {
       present,
       absent: Math.max(0, total - present),
       total,
-      // Event days inside this slice, so the UI can say why the denominator is short
-      // instead of leaving a student wondering where days went.
-      events: [...events].filter((day) => day >= slice.start && day <= slice.end).sort(),
+      // The event days inside this slice, with what each one was, so the UI can say why the
+      // denominator is short instead of leaving a student wondering where days went. Counted
+      // from start/end rather than from slice.days, because an event on a Sunday is a no-op
+      // that must not be advertised as a lost day.
+      events: [...events]
+        .filter(([day]) => day >= slice.start && day <= slice.end)
+        .map(([day, title]) => ({ date: day, title })),
       percentage: total ? Math.round((present / total) * 100) : 0,
       recorded: perModule.some((item) => item.recorded),
       modules: perModule,
@@ -1992,7 +1997,7 @@ function marksPendingFor(
   rows: (typeof assessmentsTable.$inferSelect)[],
   module: Module,
   today: string,
-  events: ReadonlySet<string> = new Set(),
+  events: ReadonlyMap<string, string> = new Map(),
 ): number {
   let pending = 0;
   for (const slice of courseMonths(joinedOn, events)) {

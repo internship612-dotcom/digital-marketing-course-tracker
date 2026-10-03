@@ -834,6 +834,11 @@ function longDate(iso: string): string {
   return `${weekday}, ${date.getUTCDate()} ${MONTH_LABELS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
+function shortDate(iso: string): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  return `${date.getUTCDate()} ${MONTH_LABELS[date.getUTCMonth()]}`;
+}
+
 type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean };
 type Mark = 'present' | 'absent' | 'leave';
 
@@ -922,13 +927,16 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date, title: eventTitle }),
     })
-      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok) { setEventError(((data as { error?: string }).error) ?? 'Could not save that event.'); return; }
-        setEvent(data as CalendarEvent);
-        setReloadToken((v) => v + 1);
+      .then((res) => res.json().then((data) => ({ ok: res.ok, status: res.status, data })))
+      .then(({ ok, status, data }) => {
+        if (ok) { setEvent(data as CalendarEvent); setReloadToken((v) => v + 1); return; }
+        // A 404 means the server has not been redeployed with this route yet, which is not
+        // something the user can fix by retyping the title.
+        setEventError(status === 404
+          ? 'The server does not have the event feature yet — it needs to be redeployed. Nothing was saved.'
+          : ((data as { error?: string }).error) ?? `Could not save that event (error ${status}).`);
       })
-      .catch(() => setEventError('Could not save that event.'))
+      .catch(() => setEventError('Could not reach the server to save that event.'))
       .finally(() => setEventBusy(false));
   };
 
@@ -1014,6 +1022,9 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
           <p className="font-display text-lg font-bold leading-tight" data-testid="text-register-date">{longDate(date)}</p>
           <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{override ? 'Earlier date' : 'Today · updates on its own'}</p>
         </div>
+        {/* The event sits beside the date, so anyone opening the register for that day reads
+            what it was without having to open the event box. */}
+        {event && <span className="ml-2 rounded-full border border-amber-400/70 bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800" data-testid="text-register-event-chip">{event.title}</span>}
       </div>
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => setOverride(shiftIso(date, -1))} className="rounded-md p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Previous day" data-testid="button-prev-day"><ChevronLeft size={16} /></button>
@@ -1392,7 +1403,7 @@ function TeacherStudentListPage({ user }: { user: CurrentUser }) {
 
 type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null };
 type ReportModule = { module: Module; present: number; absent: number; total: number; percentage: number; recorded: boolean; projects: ProjectMark[] };
-type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; events?: string[]; modules: ReportModule[] };
+type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; events?: { date: string; title: string }[]; modules: ReportModule[] };
 type StudentReport = {
   joinedOn: string | null;
   courseStart: string | null;
@@ -1509,6 +1520,10 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         </div>)}
       </div>
       <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month you joined in, so month 1 covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
+      {/* Name each event day, so a shorter denominator is never a mystery. */}
+      {eventCount > 0 && <ul className="mt-2 flex flex-wrap gap-2" data-testid="list-month-events">
+        {selected.events?.map((ev) => <li key={ev.date} className="rounded-full border border-amber-400/70 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800">{shortDate(ev.date)} · {ev.title}</li>)}
+      </ul>}
     </section>
 
     <section className={`mt-6 rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>
