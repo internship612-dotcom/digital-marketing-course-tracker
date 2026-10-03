@@ -789,7 +789,7 @@ function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId, wide = fal
   ];
 
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
-    <div className={wide ? 'flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between' : ''}>
+    <div className={wide ? 'flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between' : ''}>
       <div className={wide ? 'lg:w-64 lg:shrink-0' : ''}>
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-3">
@@ -824,8 +824,9 @@ function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId, wide = fal
           </div>}
       </div>
 
-      {/* Wide: the four buckets sit beside the headline instead of under it. */}
-      {status != null && status.event == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
+      {/* Wide: the four buckets sit beside the headline, vertically centred against it
+          rather than hanging off the top. */}
+      {status != null && status.event == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 self-center sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
         {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-3 text-center" data-testid={`${testId}-${tile.key}`}>
           <p className={`font-display text-2xl font-bold ${tile.tone}`}>{tile.value}</p>
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
@@ -868,9 +869,9 @@ function TeacherPage({ user }: { user: CurrentUser }) {
   return <>
     <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands today, day by day. Fill the register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
     <div className="grid gap-4 lg:grid-cols-2" data-testid="module-desk-summary">
-      {/* Just the number. This one box is not a status, so it stays small and says nothing
-          else — the other cards carry the detail. */}
-      <div className="flex items-center gap-4 self-start rounded-xl border border-accent/40 bg-accent/15 px-4 py-3.5" data-testid="card-total-students">
+      {/* Just the number, but stretched to the same height as the card beside it — the two
+          sit side by side and one being shorter read as a mistake. */}
+      <div className="flex items-center gap-4 rounded-xl border border-accent/40 bg-accent/15 px-4 py-3.5" data-testid="card-total-students">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-primary"><Users size={15} /></span>
         <div>
           <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Total students</p>
