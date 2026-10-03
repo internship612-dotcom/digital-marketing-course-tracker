@@ -789,14 +789,22 @@ function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId }: { module
   ];
 
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
-    <div className="flex items-start justify-between gap-2">
-      <div className="flex items-center gap-3">
+    <div className="flex items-center justify-between">
+      <span className="flex items-center gap-3">
         <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
         <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      </div>
-      <DatePicker value={date} onChange={setDate} testId={`${testId}-date`} />
+      </span>
     </div>
-    <p className="mt-4 font-display text-lg font-bold leading-tight" data-testid={`${testId}-day`}>{longDate(date)}</p>
+    {/* The date carries the calendar icon and is itself the picker, so there is only one
+        control on the card. */}
+    <div className="mt-4">
+      <DatePicker value={date} onChange={setDate} testId={`${testId}-date`}>
+        <span className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left transition hover:bg-muted" data-testid={`${testId}-day`}>
+          <CalendarCheck2 size={15} className="shrink-0 text-muted-foreground" />
+          <span className="font-display text-sm font-bold leading-tight">{longDate(date)}</span>
+        </span>
+      </DatePicker>
+    </div>
 
     {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
       : status.event != null ? <div className="mt-4 rounded-lg border border-amber-400/70 bg-amber-50 p-4" data-testid={`${testId}-event`}>
@@ -845,14 +853,20 @@ function DayAssessmentCard({ moduleKey, scope }: { moduleKey: Module; scope: 'ad
   const pending = status?.assessmentPending ?? 0;
 
   return <div className="rounded-xl border border-border bg-card p-5" data-testid="card-assessments">
-    <div className="flex items-start justify-between gap-2">
-      <div className="flex items-center gap-3">
+    <div className="flex items-center justify-between">
+      <span className="flex items-center gap-3">
         <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><ClipboardCheck size={17} /></span>
         <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Assessments</span>
-      </div>
-      <DatePicker value={date} onChange={setDate} testId="card-assessments-date" />
+      </span>
     </div>
-    <p className="mt-4 font-display text-lg font-bold leading-tight" data-testid="card-assessments-day">Due by {longDate(date)}</p>
+    <div className="mt-4">
+      <DatePicker value={date} onChange={setDate} testId="card-assessments-date">
+        <span className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left transition hover:bg-muted" data-testid="card-assessments-day">
+          <CalendarCheck2 size={15} className="shrink-0 text-muted-foreground" />
+          <span className="font-display text-sm font-bold leading-tight">Due by {longDate(date)}</span>
+        </span>
+      </DatePicker>
+    </div>
     {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
       : <p className="mt-4 font-display text-4xl font-bold">{marked}<span className="text-2xl text-muted-foreground"> students clear</span></p>}
     {status == null ? null : <>
@@ -956,11 +970,14 @@ function shortDate(iso: string): string {
 type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean };
 type Mark = 'present' | 'absent' | 'leave';
 
-// A calendar icon that opens a month grid, so any past day can be picked without a native
+// A month grid behind a calendar icon, so any past day can be picked without a native
 // <input type="date"> — that one renders in the browser's own locale and puts the month
-// first, which is not the order this app uses anywhere else. Reused by the module desk,
-// the admin module page and the register itself.
-function DatePicker({ value, onChange, max, testId }: { value: string; onChange: (iso: string) => void; max?: string; testId?: string }) {
+// first, which is not the order this app uses anywhere else.
+//
+// The trigger is whatever the caller passes as children, so the calendar icon that is
+// already on screen becomes the control rather than a second button appearing beside it.
+// Reused by the module desk, the admin module page and the register itself.
+function DatePicker({ value, onChange, max, testId, children, align = 'right' }: { value: string; onChange: (iso: string) => void; max?: string; testId?: string; children: ReactNode; align?: 'left' | 'right' }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState(() => new Date(`${value}T00:00:00Z`));
   const limit = max ?? todayIso();
@@ -983,18 +1000,10 @@ function DatePicker({ value, onChange, max, testId }: { value: string; onChange:
   const move = (delta: number) => setView(new Date(Date.UTC(view.getUTCFullYear(), month + delta, 1)));
 
   return <div className="relative" data-day-picker>
-    <button
-      type="button"
-      onClick={() => setOpen((v) => !v)}
-      className="rounded-md border border-border bg-card p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-      aria-label="Pick a date"
-      aria-expanded={open}
-      title="Pick a date"
-      data-testid={testId}
-    >
-      <CalendarCheck2 size={16} />
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-label="Pick a date" aria-expanded={open} title="Pick a date" data-testid={testId}>
+      {children}
     </button>
-    {open && <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-card p-3 shadow-lg" role="dialog" aria-label="Pick a date" data-testid={testId ? `${testId}-popover` : undefined}>
+    {open && <div className={`absolute z-30 mt-2 w-64 rounded-xl border border-border bg-card p-3 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`} role="dialog" aria-label="Pick a date" data-testid={testId ? `${testId}-popover` : undefined}>
       <div className="mb-2 flex items-center justify-between">
         <button type="button" onClick={() => move(-1)} className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Previous month"><ChevronLeft size={16} /></button>
         <p className="font-display text-sm font-bold">{MONTH_LABELS[month]} {view.getUTCFullYear()}</p>
@@ -1197,17 +1206,18 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
     <section className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary"><CalendarCheck2 size={19} /></span>
+        {/* The icon that was already on this date panel is the picker. Clicking it opens the
+            month grid — no second button sitting beside it. */}
+        <DatePicker value={date} onChange={(iso) => setOverride(iso === today ? null : iso)} testId="register-date-picker" align="left">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary transition hover:opacity-80" data-testid="register-date-icon"><CalendarCheck2 size={19} /></span>
+        </DatePicker>
         <div>
           <p className="font-display text-lg font-bold leading-tight" data-testid="text-register-date">{longDate(date)}</p>
-          <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{override ? 'Earlier date' : 'Today · updates on its own'}</p>
+          <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{override ? 'Earlier date · tap the calendar to change' : 'Today · updates on its own'}</p>
         </div>
         {/* The event sits beside the date, so anyone opening the register for that day reads
             what it was without having to open the event box. */}
         {event && <span className="ml-2 rounded-full border border-amber-400/70 bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800" data-testid="text-register-event-chip">{event.title}</span>}
-        {/* The calendar icon jumps straight to a date; the arrows either side step one day
-            at a time from here. */}
-        <div className="ml-auto"><DatePicker value={date} onChange={(iso) => setOverride(iso === today ? null : iso)} testId="register-date-picker" /></div>
       </div>
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => setOverride(shiftIso(date, -1))} className="rounded-md p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Previous day" data-testid="button-prev-day"><ChevronLeft size={16} /></button>
