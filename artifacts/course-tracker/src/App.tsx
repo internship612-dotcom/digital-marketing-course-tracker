@@ -2848,10 +2848,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [month, setMonth] = useState(1);
   const [project, setProject] = useState<'' | 1 | 2>('');
   const [rows, setRows] = useState<Record<string, { marks: string; feedback: string }>>({});
-  // Which rows are open for editing. Nothing is editable by default — a saved row stays
-  // read-only until its own Edit is pressed, so a stray keystroke cannot rewrite marks.
-  const [editing, setEditing] = useState<Record<string, boolean>>({});
+  // Rows are always typeable — a locked grid just looks broken. `saved` only records that a
+  // row has been written, which is what puts the Edit button back on it.
   const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const marksBox = useRef<Record<string, HTMLInputElement | null>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState('');
@@ -2868,7 +2868,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       const next: Record<string, { marks: string; feedback: string }> = {};
       for (const record of data) next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
       setRows(next);
-      setEditing({}); setSaved({});
+      setSaved({});
     } catch { setError('Could not load this project.'); }
     finally { setLoading(false); }
   }, []);
@@ -2877,7 +2877,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     setNotice('');
     // No project is picked for the teacher: marks overwrite silently, so that choice has to
     // be deliberate before a single row is editable.
-    if (cycle == null) { setRows({}); setEditing({}); setSaved({}); return; }
+    if (cycle == null) { setRows({}); setSaved({}); return; }
     void load(cycle);
   }, [cycle, load]);
 
@@ -2897,10 +2897,8 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
         body: JSON.stringify({ cycle, records: [{ studentId, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback }] }),
       });
       if (!res.ok) { setError('Could not save those marks. Try again.'); return; }
-      // Close the row again so it reads as a finished entry, and offer Edit on it.
-      setEditing((v) => ({ ...v, [studentId]: false }));
       setSaved((v) => ({ ...v, [studentId]: true }));
-      setNotice(`Saved for ${studentId} — month ${month}, project ${project}. Edit the row if anything needs changing.`);
+      setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
     } catch { setError('Could not save those marks. Try again.'); }
     finally { setSaving(''); }
   };
@@ -2909,7 +2907,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark assessment"
-      detail="Every project on your module roster in one place. Pick the month and project, then add or edit marks against each student. A saved row stays locked until you press Edit on it."
+      detail="Every project on your module roster in one place. Pick the month and project, then type marks and feedback against each student and press Save."
       action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link>}
     />
 
@@ -2932,10 +2930,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
           <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
         </div>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1. Press Edit on a saved row to change it; Cancel discards your changes and keeps what is stored.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1. A blank marks box saves as 'not marked'. After saving you get an Edit button on that row.</p>
     </section>
 
-    {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to start. Nothing is editable until you do, because saving overwrites whatever is already stored.</p>}
+    {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to load the roster and start entering marks.</p>}
 
     {project !== '' && <section className="mt-5 rounded-xl border border-border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -2959,9 +2957,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
               <tbody>
                 {shown.map((student, index) => {
                   const row = draft(student.id);
-                  const open = editing[student.id] === true;
                   const isSaved = saved[student.id] === true;
-                  const hasMarks = row.marks.trim() !== '';
                   const setCell = (patch: Partial<{ marks: string; feedback: string }>) =>
                     setRows((v) => ({ ...v, [student.id]: { ...row, ...patch } }));
                   return <tr key={student.id} className="border-b border-border/60">
@@ -2971,29 +2967,25 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                       <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
                     </td>
                     <td className="py-2 pr-3">
-                      <Input className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} readOnly={!open} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
+                      <Input ref={(node) => { marksBox.current[student.id] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
                     </td>
                     <td className="py-2 pr-3">
-                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} readOnly={!open} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
+                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                     </td>
                     <td className="py-2">
-                      {open
-                        ? <span className="flex items-center gap-2">
-                            <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : 'Save'}</Button>
-                            <Button type="button" size="sm" variant="ghost" onClick={() => {
-                              // Cancel throws the keystrokes away and reloads what is stored.
-                              setEditing((v) => ({ ...v, [student.id]: false }));
-                              setSaved((v) => ({ ...v, [student.id]: false }));
-                              if (cycle != null) void load(cycle);
-                            }} disabled={saving === student.id} data-testid={`button-cancel-marks-${student.id}`}>Cancel</Button>
-                          </span>
-                        : <span className="flex items-center gap-2">
-                            <Button type="button" size="sm" variant={hasMarks ? 'outline' : 'default'} onClick={() => {
-                              setEditing((v) => ({ ...v, [student.id]: true }));
-                              setSaved((v) => ({ ...v, [student.id]: false }));
-                            }} data-testid={`button-edit-marks-${student.id}`}>{hasMarks ? 'Edit' : 'Add marks'}</Button>
-                            {isSaved && <span className="text-[11px] font-medium text-emerald-700">Saved</span>}
-                          </span>}
+                      <span className="flex items-center gap-2">
+                        <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
+                        {isSaved && <>
+                          <span className="text-[11px] font-medium text-emerald-700">Saved</span>
+                          <Button type="button" size="sm" variant="ghost" onClick={() => {
+                            // The box was never locked, so Edit only needs to say "this row is
+                            // open again" and put the caret in it.
+                            setSaved((v) => ({ ...v, [student.id]: false }));
+                            setNotice(`Editing ${student.id} — type the new marks and press Update.`);
+                            marksBox.current[student.id]?.focus();
+                          }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
+                        </>}
+                      </span>
                     </td>
                   </tr>;
                 })}
