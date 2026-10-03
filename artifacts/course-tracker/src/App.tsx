@@ -763,7 +763,7 @@ type DayStatus = {
   assessmentPending: number;
 };
 
-function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId }: { moduleKey: Module; scope: 'admin' | 'teacher'; label: string; icon: typeof Users; testId: string }) {
+function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId, wide = false }: { moduleKey: Module; scope: 'admin' | 'teacher'; label: string; icon: typeof Users; testId: string; wide?: boolean }) {
   const [date, setDate] = useState(todayIso);
   const [status, setStatus] = useState<DayStatus | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -789,46 +789,52 @@ function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId }: { module
   ];
 
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
-    <div className="flex items-center justify-between">
-      <span className="flex items-center gap-3">
-        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
-        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      </span>
-    </div>
-    {/* The date carries the calendar icon and is itself the picker, so there is only one
-        control on the card. */}
-    <div className="mt-4">
-      <DatePicker value={date} onChange={setDate} testId={`${testId}-date`}>
-        <span className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left transition hover:bg-muted" data-testid={`${testId}-day`}>
-          <CalendarCheck2 size={15} className="shrink-0 text-muted-foreground" />
-          <span className="font-display text-sm font-bold leading-tight">{longDate(date)}</span>
-        </span>
-      </DatePicker>
-    </div>
-
-    {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
-      : status.event != null ? <div className="mt-4 rounded-lg border border-amber-400/70 bg-amber-50 p-4" data-testid={`${testId}-event`}>
-        <p className="font-mono-ui text-[10px] uppercase tracking-wider text-amber-700">Event</p>
-        <p className="mt-1 font-display text-xl font-bold text-amber-900">{status.event.title}</p>
-        <p className="mt-1 text-xs text-amber-800">No attendance is counted on this day for any module, and it is left out of everyone&apos;s percentage.</p>
-      </div>
-      : status.sunday ? <div className="mt-4 rounded-lg bg-muted/50 p-4" data-testid={`${testId}-sunday`}>
-        <p className="font-display text-xl font-bold text-muted-foreground">Sunday</p>
-        <p className="mt-1 text-xs text-muted-foreground">Not a teaching day, so nothing was marked and nothing is counted.</p>
-      </div>
-      : <>
-        <p className="mt-4 font-display text-4xl font-bold">{status.present}<span className="text-2xl text-muted-foreground"> / {status.eligible}</span></p>
-        <p className="mt-1 text-xs text-muted-foreground">present on this day out of {status.eligible} student{status.eligible === 1 ? '' : 's'} whose course is running</p>
-        <div className="mt-4 grid grid-cols-4 gap-2">
-          {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid={`${testId}-${tile.key}`}>
-            <p className={`font-display text-xl font-bold ${tile.tone}`}>{tile.value}</p>
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
-          </div>)}
+    <div className={wide ? 'flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between' : ''}>
+      <div className={wide ? 'lg:w-64 lg:shrink-0' : ''}>
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-3">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
+            <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+          </span>
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          {status.totalStudents} on the roster{status.eligible < status.totalStudents ? `, ${status.totalStudents - status.eligible} not in a course on this day` : ''}. {status.unmarked > 0 ? `${status.unmarked} still to mark.` : 'Everyone has been marked.'}
-        </p>
-      </>}
+        {/* The date carries the calendar icon and is itself the picker, so there is only one
+            control on the card. */}
+        <div className="mt-4">
+          <DatePicker value={date} onChange={setDate} testId={`${testId}-date`}>
+            <span className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left transition hover:bg-muted" data-testid={`${testId}-day`}>
+              <CalendarCheck2 size={15} className="shrink-0 text-muted-foreground" />
+              <span className="font-display text-sm font-bold leading-tight">{longDate(date)}</span>
+            </span>
+          </DatePicker>
+        </div>
+
+        {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
+          : status.event != null ? <div className="mt-4 rounded-lg border border-amber-400/70 bg-amber-50 p-4" data-testid={`${testId}-event`}>
+            <p className="font-mono-ui text-[10px] uppercase tracking-wider text-amber-700">Event</p>
+            <p className="mt-1 font-display text-xl font-bold text-amber-900">{status.event.title}</p>
+            <p className="mt-1 text-xs text-amber-800">No attendance is counted on this day for any module, and it is left out of everyone&apos;s percentage.</p>
+          </div>
+          : status.sunday ? <div className="mt-4 rounded-lg bg-muted/50 p-4" data-testid={`${testId}-sunday`}>
+            <p className="font-display text-xl font-bold text-muted-foreground">Sunday</p>
+            <p className="mt-1 text-xs text-muted-foreground">Not a teaching day, so nothing was marked and nothing is counted.</p>
+          </div>
+          : <div className="mt-4">
+            <p className="font-display text-4xl font-bold">{status.present}<span className="text-2xl text-muted-foreground"> / {status.eligible}</span></p>
+            <p className="mt-1 text-xs text-muted-foreground">present on this day out of {status.eligible} student{status.eligible === 1 ? '' : 's'} whose course is running</p>
+          </div>}
+      </div>
+
+      {/* Wide: the four buckets sit beside the headline instead of under it. */}
+      {status != null && status.event == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
+        {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-3 text-center" data-testid={`${testId}-${tile.key}`}>
+          <p className={`font-display text-2xl font-bold ${tile.tone}`}>{tile.value}</p>
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
+        </div>)}
+      </div>}
+    </div>
+    {status != null && status.event == null && !status.sunday && <p className="mt-4 text-xs text-muted-foreground lg:mt-3">
+      {status.totalStudents} on the roster{status.eligible < status.totalStudents ? `, ${status.totalStudents - status.eligible} not in a course on this day` : ''}. {status.unmarked > 0 ? `${status.unmarked} still to mark.` : 'Everyone has been marked.'}
+    </p>}
   </div>;
 }
 
@@ -861,9 +867,9 @@ function TeacherPage({ user }: { user: CurrentUser }) {
   const moduleKey = (user.module ?? 'ai') as Module;
   return <>
     <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands today, day by day. Fill the register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
-    <div className="grid gap-4 lg:grid-cols-3" data-testid="module-desk-summary">
+    <div className="grid gap-4 lg:grid-cols-2" data-testid="module-desk-summary">
       {/* Just the number. This one box is not a status, so it stays small and says nothing
-          else — the other two cards carry the detail. */}
+          else — the other cards carry the detail. */}
       <div className="flex items-center gap-4 self-start rounded-xl border border-accent/40 bg-accent/15 px-4 py-3.5" data-testid="card-total-students">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-primary"><Users size={15} /></span>
         <div>
@@ -871,10 +877,13 @@ function TeacherPage({ user }: { user: CurrentUser }) {
           <p className="font-display text-2xl font-bold leading-tight">{total}</p>
         </div>
       </div>
-      {/* Attendance counts for the day the picker is on. Assessments stay across the whole
-          course, as before. */}
-      <DayStatusCard moduleKey={moduleKey} scope="teacher" label="Attendance" icon={CalendarCheck2} testId="card-attendance" />
+      {/* Assessments stay across the whole course, as before. */}
       <ProgressCard label="Assessments" done={overview?.assessmentMarked ?? 0} pending={overview?.assessmentPending ?? 0} doneLabel="marks uploaded" pendingLabel="no marks yet" icon={ClipboardCheck} testId="card-assessments" />
+    </div>
+    {/* Attendance gets the full width underneath: it is the card that moves day by day, so
+        it has room for the date and all four buckets side by side. */}
+    <div className="mt-4" data-testid="module-desk-attendance">
+      <DayStatusCard moduleKey={moduleKey} scope="teacher" label="Attendance" icon={CalendarCheck2} testId="card-attendance" wide />
     </div>
     <p className="mt-4 text-xs text-muted-foreground">Tap the calendar on the attendance card to read a back date. Week-by-week and project-by-project detail is in the <Link href="/teacher/students" className="font-semibold text-primary hover:underline">student list</Link>.</p>
   </>;
@@ -1295,7 +1304,9 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
 // Marks now live on the student record, directly under that student's report, so the
 // person reading the report can fill the gap they just spotted.
-function MarksUpload({ student, module, onSaved }: { student: Student; module: Module | null | undefined; onSaved: () => void }) {
+// The module is not passed in: every teacher assessment route takes it from the session,
+// so this form could not post to another module even if it tried.
+function MarksUpload({ student, onSaved }: { student: Student; onSaved: () => void }) {
   // The month the student is actually in, worked out from the admission date, so the
   // teacher is not uploading this month's marks onto last month's. The project stays
   // unpicked: marks overwrite silently, so that one choice has to be deliberate.
@@ -1353,9 +1364,9 @@ function MarksUpload({ student, module, onSaved }: { student: Student; module: M
       .finally(() => setSaving(false));
   };
 
-  return <section className="mt-6 rounded-xl border border-border bg-card p-4" data-testid="section-marks-upload">
-    <p className="text-xs font-semibold text-primary">{module ? moduleNames[module] : 'Module'}</p>
-    <h2 className="mt-1 font-display text-xl font-bold">Upload project marks</h2>
+  return <section className="rounded-xl border border-border bg-card p-5" data-testid="section-marks-upload">
+    <p className="text-xs font-semibold text-primary">Assessment</p>
+    <h2 className="mt-1 font-display text-2xl font-bold">Mark assessment</h2>
     <p className="mt-1 text-xs text-muted-foreground">Month 1 is {joinedOn(student.dateOfJoining)}, when this student enrolled · two projects a month</p>
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-assessment-month">{[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}</select></label>
@@ -2550,6 +2561,7 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
     <Link href={backHref} className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground" data-testid="link-back-students"><ChevronLeft size={16} /> Back to student list</Link>
     <PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title={student.fullName} detail="The full record, the photo, and the sign-in details for this learner." action={<div className="flex items-center gap-3">{!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}<StudentAvatar student={student} size={48} /></div>} />
     <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid gap-6">
       <section className="rounded-xl border border-border bg-card p-5">
         <p className="text-xs font-semibold text-primary">Student record</p>
         <div className="mt-1 flex items-start justify-between gap-3">
@@ -2574,11 +2586,21 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
         </div>)}</dl>}
         {profileError && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-profile-error">{profileError}</p>}
         {profileNotice && <p className="mt-4 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-profile-success">{profileNotice}</p>}
-        <StudentProgressSection key={reportToken} base={base} moduleFilter={moduleFilter} />
-        {scope === 'teacher' && <MarksUpload student={student} module={viewer?.module} onSaved={() => setReportToken((v) => v + 1)} />}
       </section>
 
-      <div className="grid gap-6">
+      {/* The report and the marks form are their own panels, stacked, so the left column
+          reads as: who this student is, how their attendance looks, how their marks look. */}
+      <section className="rounded-xl border border-border bg-card p-5">
+        <p className="text-xs font-semibold text-primary">Attendance</p>
+        <h2 className="mt-1 font-display text-2xl font-bold">Mark attendance</h2>
+        <StudentProgressSection key={reportToken} base={base} moduleFilter={moduleFilter} />
+      </section>
+      {scope === 'teacher' && <MarksUpload student={student} onSaved={() => setReportToken((v) => v + 1)} />}
+      </div>
+
+      {/* self-start so the card is only as tall as its content. It used to stretch to the
+          left column and leave a blank box under the remark. */}
+      <div className="grid gap-6 self-start">
         <section className="rounded-xl border border-border bg-card p-5">
           <p className="text-xs font-semibold text-primary">Account</p>
           <h2 className="mt-1 font-display text-2xl font-bold">Photo &amp; password</h2>
