@@ -703,7 +703,6 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
   // "How many students are still missing" is the question this section answers, so
   // say it in students — not a bare Updated/Pending badge.
   const total = summary?.totalStudents ?? 0;
-  const attendanceDone = summary?.studentsMarked ?? 0;
   const projects = summary?.projects ?? [];
   // A student counts as done for the month once both of its projects carry a mark.
   const assessmentDone = projects.length ? Math.min(...projects.map((p) => p.marked)) : 0;
@@ -733,31 +732,143 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module has uploaded for, and how many are still missing, in month {month}.</p>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a given day, and how many projects were due by it.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-status-month">{[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}</select></label>
     </div>
-    <div className="mt-5 grid gap-4 sm:grid-cols-2">
-      <Card label="Attendance" done={attendanceDone} total={total} detail={`Students with at least one week of month ${month} in the register.`} icon={CalendarCheck2} testId="status-attendance" />
+    {/* Attendance is counted for one day at a time, so it reads the day the module owner is
+        looking at rather than the whole month. */}
+    <div className="mt-5">
+      <DayStatusCard moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
+    </div>
+    <div className="mt-4">
       <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${((p.cycle - 1) % 2) + 1}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
     </div>
   </section>;
 }
 
-function ProgressCard({ label, done, pending, doneLabel, pendingLabel, icon: Icon, testId }: { label: string; done: number; pending: number; doneLabel: string; pendingLabel: string; icon: typeof Users; testId: string }) {
-  const total = done + pending;
-  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+// One day of one module, counted four ways. Shared by the module desk and the admin
+// module page so the two desks can never read different numbers for the same day.
+type DayStatus = {
+  date: string;
+  sunday: boolean;
+  event: { date: string; title: string } | null;
+  totalStudents: number;
+  eligible: number;
+  present: number;
+  absent: number;
+  leave: number;
+  unmarked: number;
+  assessmentMarked: number;
+  assessmentPending: number;
+};
+
+function DayStatusCard({ moduleKey, scope, label, icon: Icon, testId }: { moduleKey: Module; scope: 'admin' | 'teacher'; label: string; icon: typeof Users; testId: string }) {
+  const [date, setDate] = useState(todayIso);
+  const [status, setStatus] = useState<DayStatus | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setStatus(null);
+    const url = scope === 'admin'
+      ? `/api/admin/modules/${moduleKey}/day-status?date=${date}`
+      : `/api/teacher/day-status?date=${date}`;
+    fetch(url)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (alive && ok) setStatus(data as DayStatus); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, scope, date, reloadToken]);
+
+  const tiles = status == null ? [] : [
+    { key: 'present', label: 'Present', value: status.present, tone: 'text-emerald-600' },
+    { key: 'absent', label: 'Absent', value: status.absent, tone: 'text-destructive' },
+    { key: 'leave', label: 'On leave', value: status.leave, tone: 'text-amber-600' },
+    { key: 'unmarked', label: 'Not marked', value: status.unmarked, tone: 'text-muted-foreground' },
+  ];
+
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
-    <div className="flex items-center justify-between">
-      <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
-      <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
+        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      </div>
+      <DatePicker value={date} onChange={setDate} testId={`${testId}-date`} />
     </div>
-    <p className="mt-6 font-display text-4xl font-bold">{done}<span className="text-2xl text-muted-foreground"> / {total}</span></p>
-    <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
-    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-      <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} {doneLabel}</span>
-      <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} {pendingLabel}</span>
+    <p className="mt-4 font-display text-lg font-bold leading-tight" data-testid={`${testId}-day`}>{longDate(date)}</p>
+
+    {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
+      : status.event != null ? <div className="mt-4 rounded-lg border border-amber-400/70 bg-amber-50 p-4" data-testid={`${testId}-event`}>
+        <p className="font-mono-ui text-[10px] uppercase tracking-wider text-amber-700">Event</p>
+        <p className="mt-1 font-display text-xl font-bold text-amber-900">{status.event.title}</p>
+        <p className="mt-1 text-xs text-amber-800">No attendance is counted on this day for any module, and it is left out of everyone&apos;s percentage.</p>
+      </div>
+      : status.sunday ? <div className="mt-4 rounded-lg bg-muted/50 p-4" data-testid={`${testId}-sunday`}>
+        <p className="font-display text-xl font-bold text-muted-foreground">Sunday</p>
+        <p className="mt-1 text-xs text-muted-foreground">Not a teaching day, so nothing was marked and nothing is counted.</p>
+      </div>
+      : <>
+        <p className="mt-4 font-display text-4xl font-bold">{status.present}<span className="text-2xl text-muted-foreground"> / {status.eligible}</span></p>
+        <p className="mt-1 text-xs text-muted-foreground">present on this day out of {status.eligible} student{status.eligible === 1 ? '' : 's'} whose course is running</p>
+        <div className="mt-4 grid grid-cols-4 gap-2">
+          {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid={`${testId}-${tile.key}`}>
+            <p className={`font-display text-xl font-bold ${tile.tone}`}>{tile.value}</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
+          </div>)}
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          {status.totalStudents} on the roster{status.eligible < status.totalStudents ? `, ${status.totalStudents - status.eligible} not in a course on this day` : ''}. {status.unmarked > 0 ? `${status.unmarked} still to mark.` : 'Everyone has been marked.'}
+        </p>
+      </>}
+  </div>;
+}
+
+function DayAssessmentCard({ moduleKey, scope }: { moduleKey: Module; scope: 'admin' | 'teacher' }) {
+  const [date, setDate] = useState(todayIso);
+  const [status, setStatus] = useState<DayStatus | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setStatus(null);
+    const url = scope === 'admin'
+      ? `/api/admin/modules/${moduleKey}/day-status?date=${date}`
+      : `/api/teacher/day-status?date=${date}`;
+    fetch(url)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (alive && ok) setStatus(data as DayStatus); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, scope, date]);
+
+  const marked = status?.assessmentMarked ?? 0;
+  const pending = status?.assessmentPending ?? 0;
+
+  return <div className="rounded-xl border border-border bg-card p-5" data-testid="card-assessments">
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><ClipboardCheck size={17} /></span>
+        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Assessments</span>
+      </div>
+      <DatePicker value={date} onChange={setDate} testId="card-assessments-date" />
     </div>
+    <p className="mt-4 font-display text-lg font-bold leading-tight" data-testid="card-assessments-day">Due by {longDate(date)}</p>
+    {status == null ? <div className="mt-4 h-16 animate-pulse rounded bg-muted" />
+      : <p className="mt-4 font-display text-4xl font-bold">{marked}<span className="text-2xl text-muted-foreground"> students clear</span></p>}
+    {status == null ? null : <>
+      <p className="mt-1 text-xs text-muted-foreground">student{marked === 1 ? '' : 's'} clear of every project that fell due by this day</p>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid="card-assessments-marked">
+          <p className="font-display text-xl font-bold text-emerald-600">{marked}</p>
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Clear</p>
+        </div>
+        <div className="rounded-lg bg-muted/60 px-2 py-2 text-center" data-testid="card-assessments-pending">
+          <p className="font-display text-xl font-bold text-destructive">{pending}</p>
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Projects due</p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Projects not due yet are not counted.</p>
+    </>}
   </div>;
 }
 
@@ -770,8 +881,9 @@ function TeacherPage({ user }: { user: CurrentUser }) {
     return () => { alive = false; };
   }, []);
   const total = overview?.totalStudents ?? students.data?.length ?? 0;
+  const moduleKey = (user.module ?? 'ai') as Module;
   return <>
-    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands right now. Fill today's register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
+    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands today, day by day. Fill the register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
     <div className="grid gap-4 lg:grid-cols-3" data-testid="module-desk-summary">
       <div className="rounded-xl border border-accent/40 bg-accent/15 p-5" data-testid="card-total-students">
         <div className="flex items-center justify-between">
@@ -781,10 +893,12 @@ function TeacherPage({ user }: { user: CurrentUser }) {
         <p className="mt-6 font-display text-4xl font-bold">{total}</p>
         <p className="mt-3 text-xs text-muted-foreground">on the {moduleShort[user.module ?? 'ai']} roster</p>
       </div>
-      <ProgressCard label="Attendance" done={overview?.attendanceMarked ?? 0} pending={overview?.attendancePending ?? 0} doneLabel="marked" pendingLabel="not marked yet" icon={CalendarCheck2} testId="card-attendance" />
-      <ProgressCard label="Assessments" done={overview?.assessmentMarked ?? 0} pending={overview?.assessmentPending ?? 0} doneLabel="marks uploaded" pendingLabel="no marks yet" icon={ClipboardCheck} testId="card-assessments" />
+      {/* Both cards answer for the day, not the whole course. Each has its own calendar icon,
+          so the two can be read on different dates if that is what is wanted. */}
+      <DayStatusCard moduleKey={moduleKey} scope="teacher" label="Attendance" icon={CalendarCheck2} testId="card-attendance" />
+      <DayAssessmentCard moduleKey={moduleKey} scope="teacher" />
     </div>
-    <p className="mt-4 text-xs text-muted-foreground">Counts every student this module has recorded at least once. Week-by-week and project-by-project detail is in the <Link href="/teacher/students" className="font-semibold text-primary hover:underline">student list</Link>.</p>
+    <p className="mt-4 text-xs text-muted-foreground">Pick a back date on either card to read that day. Week-by-week and project-by-project detail is in the <Link href="/teacher/students" className="font-semibold text-primary hover:underline">student list</Link>.</p>
   </>;
 }
 
@@ -841,6 +955,72 @@ function shortDate(iso: string): string {
 
 type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean };
 type Mark = 'present' | 'absent' | 'leave';
+
+// A calendar icon that opens a month grid, so any past day can be picked without a native
+// <input type="date"> — that one renders in the browser's own locale and puts the month
+// first, which is not the order this app uses anywhere else. Reused by the module desk,
+// the admin module page and the register itself.
+function DatePicker({ value, onChange, max, testId }: { value: string; onChange: (iso: string) => void; max?: string; testId?: string }) {
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState(() => new Date(`${value}T00:00:00Z`));
+  const limit = max ?? todayIso();
+
+  useEffect(() => { if (open) setView(new Date(`${value}T00:00:00Z`)); }, [open, value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement | null)?.closest('[data-day-picker]')) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', escape); };
+  }, [open]);
+
+  const cells = monthGrid(view);
+  const month = view.getUTCMonth();
+  const move = (delta: number) => setView(new Date(Date.UTC(view.getUTCFullYear(), month + delta, 1)));
+
+  return <div className="relative" data-day-picker>
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      className="rounded-md border border-border bg-card p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+      aria-label="Pick a date"
+      aria-expanded={open}
+      title="Pick a date"
+      data-testid={testId}
+    >
+      <CalendarCheck2 size={16} />
+    </button>
+    {open && <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-card p-3 shadow-lg" role="dialog" aria-label="Pick a date" data-testid={testId ? `${testId}-popover` : undefined}>
+      <div className="mb-2 flex items-center justify-between">
+        <button type="button" onClick={() => move(-1)} className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Previous month"><ChevronLeft size={16} /></button>
+        <p className="font-display text-sm font-bold">{MONTH_LABELS[month]} {view.getUTCFullYear()}</p>
+        <button type="button" onClick={() => move(1)} className="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Next month"><ChevronRight size={16} /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-0.5 text-center">
+        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((label, index) => <span key={index} className="py-1 font-mono-ui text-[9px] uppercase text-muted-foreground">{label}</span>)}
+        {cells.map((cell, index) => {
+          if (!cell) return <span key={index} />;
+          const iso = cell.toISOString().slice(0, 10);
+          const future = iso > limit;
+          const chosen = iso === value;
+          return <button
+            key={index}
+            type="button"
+            disabled={future}
+            onClick={() => { onChange(iso); setOpen(false); }}
+            className={`rounded-md py-1.5 text-xs transition ${chosen ? 'bg-primary font-bold text-primary-foreground' : future ? 'text-muted-foreground/40' : 'text-foreground hover:bg-muted'}`}
+            data-testid={`day-${iso}`}
+          >{cell.getUTCDate()}</button>;
+        })}
+      </div>
+      <button type="button" onClick={() => { onChange(limit); setOpen(false); }} className="mt-2 w-full rounded-md border border-border py-1.5 text-xs font-semibold text-primary transition hover:bg-muted" data-testid={testId ? `${testId}-today` : undefined}>Back to today</button>
+    </div>}
+  </div>;
+}
 
 // Three checkboxes per student: P ticks green, A ticks red, L ticks amber for leave
 // (which still counts as attended). A row with none ticked stays grey and is left exactly
@@ -1025,6 +1205,9 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
         {/* The event sits beside the date, so anyone opening the register for that day reads
             what it was without having to open the event box. */}
         {event && <span className="ml-2 rounded-full border border-amber-400/70 bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800" data-testid="text-register-event-chip">{event.title}</span>}
+        {/* The calendar icon jumps straight to a date; the arrows either side step one day
+            at a time from here. */}
+        <div className="ml-auto"><DatePicker value={date} onChange={(iso) => setOverride(iso === today ? null : iso)} testId="register-date-picker" /></div>
       </div>
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => setOverride(shiftIso(date, -1))} className="rounded-md p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Previous day" data-testid="button-prev-day"><ChevronLeft size={16} /></button>

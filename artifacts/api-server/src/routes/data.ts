@@ -2062,6 +2062,114 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
   return payload;
 }
 
+// ---------------------------------------------------------------- day status
+// The module desk and the admin module page both answer the same question: how did this
+// module do on *this* day. Every counter moves with the date rather than describing the
+// whole course at once, so a back date can be read the same way today is.
+//
+// An event day reports the event instead of counts — nobody was marked on it and it is
+// not in anyone's percentage. Sunday was never a teaching day, so it is equally empty.
+async function buildDayStatus(module: Module, date: Date) {
+  const iso = isoDay(date);
+  const events = await eventDates();
+  const eventTitle = events.get(iso) ?? null;
+  const sunday = (date.getUTCDay() + 6) % 7 > 5;
+  const students = await db
+    .select()
+    .from(studentsTable)
+    .orderBy(asc(studentsTable.fullName));
+  const attendanceRows = await db
+    .select()
+    .from(attendanceTable)
+    .where(eq(attendanceTable.module, module));
+  const assessmentRows = await db
+    .select()
+    .from(assessmentsTable)
+    .where(eq(assessmentsTable.module, module));
+
+  const result = {
+    date: iso,
+    sunday,
+    event: eventTitle == null ? null : { date: iso, title: eventTitle },
+    totalStudents: students.length,
+    // eligible = students whose course is actually running on this date. Someone who has
+    // not joined yet cannot be present, absent or on leave, so they are not counted here —
+    // the roster total above still includes them.
+    eligible: 0,
+    present: 0,
+    absent: 0,
+    leave: 0,
+    unmarked: 0,
+    assessmentMarked: 0,
+    assessmentPending: 0,
+  };
+  if (eventTitle != null || sunday) return result;
+
+  for (const student of students) {
+    const slot = weekAndDayFor(student.dateOfJoining, date);
+    if (slot) {
+      result.eligible += 1;
+      const row = attendanceRows.find((r) => r.studentId === student.id && r.week === slot.week);
+      const onLeave = row ? ((row.leaveDays ?? 0) & dayBit(slot.day)) !== 0 : false;
+      const markedPresent = row ? Boolean(row[slot.day]) : false;
+      // Leave records the day flag as present too, so it needs its own bucket here or it
+      // would be counted as present and nobody would see it.
+      if (onLeave) result.leave += 1;
+      else if (markedPresent) result.present += 1;
+      // A recorded absent and a day nobody touched both leave the day flag false; the
+      // locked bit is the only thing that tells them apart.
+      else if (row && isLocked(row.lockedDays, slot.day)) result.absent += 1;
+      else result.unmarked += 1;
+    }
+
+    // Marks count the projects that have fallen due by this date. Only for students inside
+    // their course: a finished course must not sit at "pending" forever.
+    const inCourse = courseMonths(student.dateOfJoining, events)
+      .some((slice) => iso >= slice.start && iso <= slice.end);
+    if (inCourse) {
+      const due = marksPendingFor(student.dateOfJoining, assessmentRows, module, iso, events);
+      if (due === 0) result.assessmentMarked += 1;
+      else result.assessmentPending += due;
+    }
+  }
+  return result;
+}
+
+router.get(
+  "/teacher/day-status",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const date = parseDayParam(req.query.date);
+    if (!date) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    res.json(await buildDayStatus(req.auth.module, date));
+  },
+);
+
+router.get(
+  "/admin/modules/:module/day-status",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const module = req.params.module as Module;
+    if (!modules.includes(module)) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const date = parseDayParam(req.query.date);
+    if (!date) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    res.json(await buildDayStatus(module, date));
+  },
+);
+
 // ---------------------------------------------------------------- day register
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
