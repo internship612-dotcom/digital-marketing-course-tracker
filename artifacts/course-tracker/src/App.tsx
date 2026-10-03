@@ -1304,90 +1304,6 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   </>;
 }
 
-// Marks now live on the student record, directly under that student's report, so the
-// person reading the report can fill the gap they just spotted.
-// The module is not passed in: every teacher assessment route takes it from the session,
-// so this form could not post to another module even if it tried.
-function MarksUpload({ student, onSaved }: { student: Student; onSaved: () => void }) {
-  // The month the student is actually in, worked out from the admission date, so the
-  // teacher is not uploading this month's marks onto last month's. The project stays
-  // unpicked: marks overwrite silently, so that one choice has to be deliberate.
-  const [month, setMonth] = useState(() => monthForJoining(student.dateOfJoining, todayIso()));
-  // No project is picked for you — marks are final once saved, so the choice is explicit.
-  const [project, setProject] = useState<'' | 1 | 2>('');
-  const [marks, setMarks] = useState('');
-  const [feedback, setFeedback] = useState('');
-  const [projectName, setProjectName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [reloadToken, setReloadToken] = useState(0);
-  const cycle = project === '' ? null : (month - 1) * 2 + project;
-
-  useEffect(() => {
-    if (cycle == null) { setMarks(''); setFeedback(''); setProjectName(''); return; }
-    let alive = true;
-    setLoading(true); setError('');
-    fetch(`/api/teacher/assessments?cycle=${cycle}`)
-      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
-        if (!alive) return;
-        if (!ok) { setError('Could not load this project.'); return; }
-        const record = (data as { studentId: string; marks: number | null; feedback: string | null; projectName: string | null }[]).find((r) => r.studentId === student.id);
-        setMarks(record?.marks == null ? '' : String(record.marks));
-        setFeedback(record?.feedback ?? '');
-        setProjectName(record?.projectName ?? '');
-      })
-      .catch(() => { if (alive) setError('Could not load this project.'); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [cycle, student.id, reloadToken]);
-
-  // Clear the last save message as soon as a different project is chosen.
-  useEffect(() => { setNotice(''); }, [cycle]);
-
-  const save = () => {
-    if (cycle == null) { setError('Choose a project first.'); return; }
-    setSaving(true); setError(''); setNotice('');
-    fetch('/api/teacher/assessments/bulk', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cycle, records: [{ studentId: student.id, marks: marks === '' ? null : Number(marks), feedback, projectName: projectName.trim() || null }] }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('save failed');
-        setNotice(`Saved — month ${month}, project ${project}.`);
-        // Read it back so the form shows exactly what is stored, rather than emptying.
-        setReloadToken((v) => v + 1);
-        onSaved();
-      })
-      .catch(() => setError('Could not save. Try again.'))
-      .finally(() => setSaving(false));
-  };
-
-  return <section className="rounded-xl border border-border bg-card p-5" data-testid="section-marks-upload">
-    <p className="text-xs font-semibold text-primary">Assessment</p>
-    <h2 className="mt-1 font-display text-2xl font-bold">Mark assessment</h2>
-    <p className="mt-1 text-xs text-muted-foreground">Month 1 is {joinedOn(student.dateOfJoining)}, when this student enrolled · two projects a month</p>
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-assessment-month">{[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}</select></label>
-      <label className="grid gap-1.5 text-sm font-medium">Project<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={project} onChange={(e) => setProject(e.target.value === '' ? '' : Number(e.target.value) as 1 | 2)} data-testid="select-assessment-project"><option value="">Select project</option><option value={1}>Project 1</option><option value={2}>Project 2</option></select></label>
-    </div>
-    {cycle == null ? <p className="mt-4 rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground" data-testid="status-pick-project">Choose a project to enter its marks.</p>
-      : loading ? <div className="mt-4 h-28 animate-pulse rounded-lg bg-muted" /> : <div className="mt-4 grid gap-3">
-      <label className="grid gap-1.5 text-sm font-medium">Project name<Input placeholder="e.g. Landing page audit" value={projectName} onChange={(e) => setProjectName(e.target.value)} data-testid="input-assessment-project-name" /></label>
-      <label className="grid gap-1.5 text-sm font-medium">Marks<Input type="number" min={0} max={100} placeholder="0 – 100" value={marks} onChange={(e) => setMarks(e.target.value)} data-testid="input-assessment-marks" /></label>
-      <label className="grid gap-1.5 text-sm font-medium">Feedback<Textarea rows={3} placeholder="Short feedback" value={feedback} onChange={(e) => setFeedback(e.target.value)} data-testid="input-assessment-feedback" /></label>
-    </div>}
-    {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-marks-error">{error}</p>}
-    {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-marks-success">{notice}</p>}
-    <div className="mt-4 flex justify-end">
-      <Button type="button" size="sm" onClick={save} disabled={saving || loading || cycle == null} data-testid="button-save-assessment">{saving ? 'Saving…' : 'Save marks'}</Button>
-    </div>
-  </section>;
-}
-
 function Avatar({ photo, name, size = 34, testId, placeholderTestId }: { photo?: string | null; name: string; size?: number; testId?: string; placeholderTestId?: string }) {
   return photo
     ? <img src={photo} alt={name} className="shrink-0 rounded-full object-cover" style={{ width: size, height: size }} data-testid={testId} />
@@ -2590,14 +2506,13 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
         {profileNotice && <p className="mt-4 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-profile-success">{profileNotice}</p>}
       </section>
 
-      {/* The report and the marks form are their own panels, stacked, so the left column
-          reads as: who this student is, how their attendance looks, how their marks look. */}
+      {/* The report is the only panel here now. Marks are entered from Mark assessment in
+          the sidebar, one project across the whole roster. */}
       <section className="rounded-xl border border-border bg-card p-5">
         <p className="text-xs font-semibold text-primary">Attendance</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Mark attendance</h2>
         <StudentProgressSection key={reportToken} base={base} moduleFilter={moduleFilter} />
       </section>
-      {scope === 'teacher' && <MarksUpload student={student} onSaved={() => setReportToken((v) => v + 1)} />}
       </div>
 
       {/* self-start so the card is only as tall as its content. It used to stretch to the
@@ -2933,6 +2848,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [month, setMonth] = useState(1);
   const [project, setProject] = useState<'' | 1 | 2>('');
   const [rows, setRows] = useState<Record<string, { marks: string; feedback: string }>>({});
+  // Which rows are open for editing. Nothing is editable by default — a saved row stays
+  // read-only until its own Edit is pressed, so a stray keystroke cannot rewrite marks.
+  const [editing, setEditing] = useState<Record<string, boolean>>({});
+  const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState('');
@@ -2949,6 +2868,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       const next: Record<string, { marks: string; feedback: string }> = {};
       for (const record of data) next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
       setRows(next);
+      setEditing({}); setSaved({});
     } catch { setError('Could not load this project.'); }
     finally { setLoading(false); }
   }, []);
@@ -2957,7 +2877,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     setNotice('');
     // No project is picked for the teacher: marks overwrite silently, so that choice has to
     // be deliberate before a single row is editable.
-    if (cycle == null) { setRows({}); return; }
+    if (cycle == null) { setRows({}); setEditing({}); setSaved({}); return; }
     void load(cycle);
   }, [cycle, load]);
 
@@ -2977,7 +2897,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
         body: JSON.stringify({ cycle, records: [{ studentId, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback }] }),
       });
       if (!res.ok) { setError('Could not save those marks. Try again.'); return; }
-      setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
+      // Close the row again so it reads as a finished entry, and offer Edit on it.
+      setEditing((v) => ({ ...v, [studentId]: false }));
+      setSaved((v) => ({ ...v, [studentId]: true }));
+      setNotice(`Saved for ${studentId} — month ${month}, project ${project}. Edit the row if anything needs changing.`);
     } catch { setError('Could not save those marks. Try again.'); }
     finally { setSaving(''); }
   };
@@ -2986,7 +2909,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark assessment"
-      detail="Every project on your module roster in one place. Pick the month and project, then type marks against each student. A blank marks box saves as 'not marked'."
+      detail="Every project on your module roster in one place. Pick the month and project, then add or edit marks against each student. A saved row stays locked until you press Edit on it."
       action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link>}
     />
 
@@ -3009,7 +2932,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
           <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
         </div>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1. Press Edit on a saved row to change it; Cancel discards your changes and keeps what is stored.</p>
     </section>
 
     {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to start. Nothing is editable until you do, because saving overwrites whatever is already stored.</p>}
@@ -3030,12 +2953,17 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                   <th className="py-2 pr-3 font-semibold">Name</th>
                   <th className="py-2 pr-3 font-semibold">Marks</th>
                   <th className="py-2 pr-3 font-semibold">Feedback</th>
-                  <th className="py-2 font-semibold">Save</th>
+                  <th className="py-2 font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((student, index) => {
                   const row = draft(student.id);
+                  const open = editing[student.id] === true;
+                  const isSaved = saved[student.id] === true;
+                  const hasMarks = row.marks.trim() !== '';
+                  const setCell = (patch: Partial<{ marks: string; feedback: string }>) =>
+                    setRows((v) => ({ ...v, [student.id]: { ...row, ...patch } }));
                   return <tr key={student.id} className="border-b border-border/60">
                     <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
                     <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
@@ -3043,13 +2971,29 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                       <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
                     </td>
                     <td className="py-2 pr-3">
-                      <Input className="h-9 w-24" type="number" min={0} max={100} placeholder="0 – 100" value={row.marks} onChange={(e) => setRows((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-marks-${student.id}`} />
+                      <Input className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} readOnly={!open} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
                     </td>
                     <td className="py-2 pr-3">
-                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setRows((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-feedback-${student.id}`} />
+                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} readOnly={!open} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                     </td>
                     <td className="py-2">
-                      <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : 'Save'}</Button>
+                      {open
+                        ? <span className="flex items-center gap-2">
+                            <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : 'Save'}</Button>
+                            <Button type="button" size="sm" variant="ghost" onClick={() => {
+                              // Cancel throws the keystrokes away and reloads what is stored.
+                              setEditing((v) => ({ ...v, [student.id]: false }));
+                              setSaved((v) => ({ ...v, [student.id]: false }));
+                              if (cycle != null) void load(cycle);
+                            }} disabled={saving === student.id} data-testid={`button-cancel-marks-${student.id}`}>Cancel</Button>
+                          </span>
+                        : <span className="flex items-center gap-2">
+                            <Button type="button" size="sm" variant={hasMarks ? 'outline' : 'default'} onClick={() => {
+                              setEditing((v) => ({ ...v, [student.id]: true }));
+                              setSaved((v) => ({ ...v, [student.id]: false }));
+                            }} data-testid={`button-edit-marks-${student.id}`}>{hasMarks ? 'Edit' : 'Add marks'}</Button>
+                            {isSaved && <span className="text-[11px] font-medium text-emerald-700">Saved</span>}
+                          </span>}
                     </td>
                   </tr>;
                 })}
