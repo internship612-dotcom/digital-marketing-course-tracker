@@ -224,9 +224,11 @@ Data (`routes/data.ts`, all role-scoped):
 - `GET   /admin/modules/:module/attendance`
 - `POST  /admin/modules/:module/attendance`
 - `GET   /admin/modules/:module/attendance/daily`, `POST .../daily`
-- `GET   /admin/modules/:module/attendance/summary` — returns `{ totalStudents, marked,
-  studentsMarked, studentsPending, pending, assessmentMarked, projects[{cycle,marked}] }`
-  (used by the admin status labels)
+- `GET   /admin/modules/:module/attendance/summary?month=YYYY-MM` — calendar-month summary of
+  the students whose course covers that month: `{ month, months, totalStudents, marked,
+  studentsMarked, studentsPending, pending, assessmentMarked, projects[{project,marked}] }`.
+  Counts only students enrolled in the picked month (a month in which no one is enrolled
+  reports zero). `months` feeds the picker. (Used by the admin status labels.)
 - `GET   /admin/modules/:module/activity`
 - `GET   /admin/modules/:module/assessments`, `POST .../assessments`
 - `GET   /student/attendance`, `GET /student/assessments`
@@ -451,7 +453,8 @@ falls back to the Supabase admin, so no role can land in another's workspace.
 of truth, used by the student portal, the record screen and the admin module report. The course is
 six months from the admission date, sliced by calendar month, so a mid-month admission gives a
 short first slice and a short last one (10 Jun 2026 → 9 Dec 2026 = 7 slices, 18 … 8 days).
-`/admin/modules/:module/attendance/summary` counts each student against **their own** month N.
+`/admin/modules/:module/attendance/summary` counts each student against the slice of **their own**
+course that falls in the picked calendar month.
 
 **Module desk** (`TeacherPage`) replaced its register tabs with three cards — total students, and a
 `ProgressCard` each for attendance and assessments — fed by `/teacher/overview`. Deliberately

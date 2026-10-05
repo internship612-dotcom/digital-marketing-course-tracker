@@ -1654,9 +1654,11 @@ router.post(
   },
 );
 
-// Month N means "month N of that student's own course", so every student is counted
-// against their own admission-anchored calendar month — the same slices the student
-// and the module owner see on the record screen.
+// The picker is a calendar month ("2026-09"). Counts are taken from the students whose
+// course actually covers that calendar month, not the roster as a whole — enrollment is
+// per student, so a month where ten students joined lists ten, a later month where five
+// more joined lists fifteen. A student's slices are calendar-aligned by construction, so
+// the slice whose start falls in the picked month IS their enrollment record for it.
 router.get(
   "/admin/modules/:module/attendance/summary",
   requireRole("admin"),
@@ -1666,8 +1668,10 @@ router.get(
       res.status(400).json({ error: "Invalid module." });
       return;
     }
-    const rawMonth = Number(req.query.month ?? 1);
-    const month = Number.isInteger(rawMonth) && rawMonth >= 1 ? rawMonth : 1;
+    const rawMonth = typeof req.query.month === "string" ? req.query.month : "";
+    const monthKey = /^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth)
+      ? rawMonth
+      : isoDay(new Date()).slice(0, 7);
 
     const students = await db
       .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
@@ -1680,14 +1684,39 @@ router.get(
     for (const row of attendanceRows) {
       byStudent.set(row.studentId, [...(byStudent.get(row.studentId) ?? []), row]);
     }
+    const assessments = await db
+      .select()
+      .from(assessmentsTable)
+      .where(eq(assessmentsTable.module, module));
+
+    const events = await eventDates();
+
+    // The month picker is offered every month in which at least one student's course
+    // ran. Empty months between two covered ones still show a zero — skipping them
+    // would make the next month look adjacent.
+    const monthKeys = new Set<string>();
+    for (const student of students) {
+      for (const slice of courseMonths(student.dateOfJoining, events)) {
+        if (slice.start) monthKeys.add(slice.start.slice(0, 7));
+      }
+    }
+    const months = [...monthKeys].sort();
+    const currentKey = isoDay(new Date()).slice(0, 7);
+    if (months.length > 0 && currentKey >= months[0] && currentKey <= months[months.length - 1]) {
+      monthKeys.add(currentKey);
+    }
+    const orderedMonths = [...monthKeys].sort();
 
     let studentsMarked = 0;
     let presentDays = 0;
     let possibleDays = 0;
-    const events = await eventDates();
+    let projectOneMarked = 0;
+    let projectTwoMarked = 0;
     for (const student of students) {
-      const slice = courseMonths(student.dateOfJoining, events).find((s) => s.month === month);
-      if (!slice) continue;
+      const slice = courseMonths(student.dateOfJoining, events).find(
+        (s) => s.start && s.start.slice(0, 7) === monthKey,
+      );
+      if (!slice) continue; // not enrolled during this calendar month
       possibleDays += slice.days.length;
       const presentOn = presentDatesByModule(
         student.dateOfJoining,
@@ -1696,35 +1725,42 @@ router.get(
       const present = slice.days.filter((day) => presentOn.get(day)?.has(module)).length;
       presentDays += present;
       if (present > 0) studentsMarked += 1;
+
+      // Project four-and-two never line up across students: cycle numbers are relative
+      // to each joining date, so for this calendar month each student has their own
+      // pair. What stays common is the project slot — project 1 of *their* month.
+      const cycle1 = (slice.month - 1) * 2 + 1;
+      const cycle2 = (slice.month - 1) * 2 + 2;
+      const own = assessments.filter((a) => a.studentId === student.id);
+      if (own.find((a) => a.cycle === cycle1 && a.marks != null)) projectOneMarked += 1;
+      if (own.find((a) => a.cycle === cycle2 && a.marks != null)) projectTwoMarked += 1;
     }
 
-    const totalStudents = students.length;
-    const cycles = [1, 2].map((i) => (month - 1) * 2 + i);
-    const projects = await Promise.all(
-      cycles.map(async (cycle) => {
-        const [row] = await db
-          .select({ value: count() })
-          .from(assessmentsTable)
-          .where(
-            and(
-              eq(assessmentsTable.module, module),
-              eq(assessmentsTable.cycle, cycle),
-              isNotNull(assessmentsTable.marks),
-            ),
-          );
-        return { cycle, marked: Number(row.value) };
-      }),
+    const totalStudents = students.reduce(
+      (sum, student) =>
+        sum +
+        (courseMonths(student.dateOfJoining, events).some(
+          (s) => s.start && s.start.slice(0, 7) === monthKey,
+        )
+          ? 1
+          : 0),
+      0,
     );
 
     res.json({
+      month: monthKey,
+      months: orderedMonths,
       totalStudents,
       studentsMarked,
       studentsPending: Math.max(0, totalStudents - studentsMarked),
       marked: presentDays,
       expected: possibleDays,
       pending: Math.max(0, possibleDays - presentDays),
-      assessmentMarked: projects.reduce((sum, project) => sum + project.marked, 0),
-      projects,
+      assessmentMarked: projectOneMarked + projectTwoMarked,
+      projects: [
+        { project: 1, marked: projectOneMarked },
+        { project: 2, marked: projectTwoMarked },
+      ],
     });
   },
 );

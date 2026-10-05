@@ -379,16 +379,16 @@ function AdminModuleReportPage() {
   const params = useParams<{ module: string }>();
   const moduleKey = params.module as Module;
   const meta = adminModules.find((m) => m.key === moduleKey);
-  const [month, setMonth] = useState(1);
-  const [summary, setSummary] = useState<{ totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { cycle: number; marked: number }[] } | null>(null);
+  const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
     let alive = true;
-    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${month}`)
+    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (alive && data) setSummary(data); })
       .catch(() => undefined);
     return () => { alive = false; };
-  }, [moduleKey, month]);
+  }, [moduleKey, monthKey]);
   if (!meta) return <><PageHeader kicker="Admin / module reports" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
@@ -398,9 +398,9 @@ function AdminModuleReportPage() {
     return { ...p, index: i + 1, status };
   });
   return <>
-    <PageHeader kicker={`Admin / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and the month's projects." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-report-month">{[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}</select></label>} />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled in this module" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Project entries" value={summary?.assessmentMarked ?? '—'} detail="marks entered this month" icon={ClipboardCheck} /></div>
-    <section className="mt-8 rounded-xl border border-border bg-card p-5"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">This month</p><h2 className="mt-1 font-display text-2xl font-bold">Projects status</h2><p className="mt-2 text-sm text-muted-foreground">Whether each of the month's two projects has been submitted by the module owner.</p></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{summary === null || !summary ? [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />) : projectsMeta.map((p) => <div key={p.cycle} className="rounded-xl border border-border p-5" data-testid={`project-${p.index}`}><div className="flex items-center justify-between"><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Project {p.index}</p><span className={`rounded-full px-2.5 py-1 font-mono-ui text-[10px] ${p.status === 'Submitted' ? 'bg-accent/20 text-primary' : p.status === 'Partial' ? 'bg-muted text-foreground' : 'bg-destructive/10 text-destructive'}`}>{p.status}</span></div><h3 className="mt-2 font-display text-xl font-bold">Cycle {p.cycle}</h3><p className="mt-1 text-sm text-muted-foreground">{p.marked} of {total} students submitted</p></div>)}</div></section>
+    <PageHeader kicker={`Admin / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and the month's projects." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Project entries" value={summary?.assessmentMarked ?? '—'} detail="marks entered this month" icon={ClipboardCheck} /></div>
+    <section className="mt-8 rounded-xl border border-border bg-card p-5"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">This month</p><h2 className="mt-1 font-display text-2xl font-bold">Projects status</h2><p className="mt-2 text-sm text-muted-foreground">Whether each of the month's two projects has been submitted by the module owner.</p></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{summary === null || !summary ? [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />) : projectsMeta.map((p) => <div key={p.project} className="rounded-xl border border-border p-5" data-testid={`project-${p.index}`}><div className="flex items-center justify-between"><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Project {p.index}</p><span className={`rounded-full px-2.5 py-1 font-mono-ui text-[10px] ${p.status === 'Submitted' ? 'bg-accent/20 text-primary' : p.status === 'Partial' ? 'bg-muted text-foreground' : 'bg-destructive/10 text-destructive'}`}>{p.status}</span></div><h3 className="mt-2 font-display text-xl font-bold">{monthNameFromKey(monthKey)} · project {p.project}</h3><p className="mt-1 text-sm text-muted-foreground">{p.marked} of {total} students submitted</p></div>)}</div></section>
   </>;
 }
 
@@ -689,17 +689,17 @@ function ModuleDetailPage() {
 }
 
 function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
-  const [month, setMonth] = useState(1);
-  const [summary, setSummary] = useState<{ studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { cycle: number; marked: number }[] } | null>(null);
+  const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
+  const [summary, setSummary] = useState<{ months: string[]; studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
     let alive = true;
     setSummary(null);
-    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${month}`)
+    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (alive && data) setSummary(data); })
       .catch(() => undefined);
     return () => { alive = false; };
-  }, [moduleKey, month]);
+  }, [moduleKey, monthKey]);
 
   // "How many students are still missing" is the question this section answers, so
   // say it in students — not a bare Updated/Pending badge.
@@ -735,7 +735,7 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
         <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a given day, and how many projects were due by it.</p>
       </div>
-      <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-status-month">{[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}</select></label>
+      <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
     {/* Attendance is counted for one day at a time, so it reads the day the module owner is
         looking at rather than the whole month. */}
@@ -743,7 +743,7 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
       <DayStatusCard moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
     </div>
     <div className="mt-4">
-      <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${((p.cycle - 1) % 2) + 1}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
+      <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
     </div>
   </section>;
 }
@@ -1544,6 +1544,21 @@ function monthRange(entry: ReportMonth): string {
   return `${label(entry.start)} – ${label(entry.end)}`;
 }
 
+// Months are named by their calendar month in the report. Each student's slices already
+// line up with real calendar months — that is item 12's rule — so "Month N" can simply be
+// the name of the month that slice covers. The slices themselves do not change, only
+// how they are labelled.
+function calendarMonthName(start: string | null, fallback: string): string {
+  if (!start) return fallback;
+  const d = new Date(`${start}T00:00:00Z`);
+  return `${MONTH_LABELS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+function monthNameFromKey(monthKey: string): string {
+  const d = new Date(`${monthKey}-01T00:00:00Z`);
+  return `${MONTH_LABELS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
 // moduleFilter narrows the whole report to one module, so a module owner sees their
 // own attendance and their own project marks instead of all three modules at once.
 function MonthlyProgress({ report, compact = false, moduleFilter }: { report: StudentReport; compact?: boolean; moduleFilter?: Module | null }) {
@@ -1571,11 +1586,11 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         <div>
           <p className="text-xs font-semibold text-primary">Attendance{scopeLabel ? ` · ${scopeLabel}` : ''}</p>
           <h2 className={`mt-1 font-display font-bold ${compact ? 'text-xl' : 'text-2xl'}`}>Monthly report</h2>
-          {range && <p className="mt-1 text-xs text-muted-foreground">Month {selected.month} · {range}{report.joinedOn ? ` · admitted ${report.joinedOn}` : ''}</p>}
+          {range && <p className="mt-1 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} · {range}{report.joinedOn ? ` · admitted ${report.joinedOn}` : ''}</p>}
         </div>
         <label className="grid gap-1.5 text-sm font-medium">Month
           <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-report-month">
-            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}{m.recorded ? '' : ' — no records'}</option>)}
+            {report.months.map((m) => <option key={m.month} value={m.month}>{calendarMonthName(m.start, `Month ${m.month}`)}{m.recorded ? '' : ' — no records'}</option>)}
           </select>
         </label>
       </div>
@@ -1605,7 +1620,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
           <span className="text-xs text-muted-foreground">{item.present} present · {item.absent} absent · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span></span>
         </div>)}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Month {selected.month} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month you joined in, so month 1 covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
+      <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month of enrolment, so the first covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
       {/* Name each event day, so a shorter denominator is never a mystery. */}
       {eventCount > 0 && <ul className="mt-2 flex flex-wrap gap-2" data-testid="list-month-events">
         {selected.events?.map((ev) => <li key={ev.date} className="rounded-full border border-amber-400/70 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800">{shortDate(ev.date)} · {ev.title}</li>)}
@@ -1616,12 +1631,12 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-xs font-semibold text-primary">Assessments{scopeLabel ? ` · ${scopeLabel}` : ''}</p>
-          <h2 className={`mt-1 font-display font-bold ${compact ? 'text-xl' : 'text-2xl'}`}>Project marks — month {selected.month}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{scopeLabel ? `${scopeLabel} runs two projects a month.` : 'Each module runs two projects a month.'}{range ? ` Month ${selected.month} is ${range}.` : ''}</p>
+          <h2 className={`mt-1 font-display font-bold ${compact ? 'text-xl' : 'text-2xl'}`}>Project marks — {calendarMonthName(selected.start, `Month ${selected.month}`)}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{scopeLabel ? `${scopeLabel} runs two projects a month.` : 'Each module runs two projects a month.'}{range ? ` ${calendarMonthName(selected.start, `Month ${selected.month}`)} is ${range}.` : ''}</p>
         </div>
         <label className="grid gap-1.5 text-sm font-medium">Month
           <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
-            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
+            {report.months.map((m) => <option key={m.month} value={m.month}>{calendarMonthName(m.start, `Month ${m.month}`)}</option>)}
           </select>
         </label>
       </div>
