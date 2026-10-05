@@ -690,7 +690,7 @@ function ModuleDetailPage() {
 
 function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ months: string[]; studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { project: number; marked: number }[] } | null>(null);
+  const [summary, setSummary] = useState<{ months: string[]; month: string; marked: number; expected: number; pending: number; studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
     let alive = true;
     setSummary(null);
@@ -733,14 +733,30 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a given day, and how many projects were due by it.</p>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How this module did in the picked calendar month, plus the day-by-day status on a chosen date.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
-    {/* Attendance is counted for one day at a time, so it reads the day the module owner is
-        looking at rather than the whole month. */}
-    <div className="mt-5">
-      <DayStatusCard moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
+    {/* Month-level attendance first, then the day-wise card with its own date picker. */}
+    <div className="mt-5 grid gap-4">
+      <div className="rounded-xl border border-border p-5" data-testid="status-attendance">
+        <div className="flex items-center justify-between">
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><CalendarCheck2 size={17} /></span>
+          <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Attendance</span>
+        </div>
+        {summary == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
+          <p className="mt-5 font-display text-3xl font-bold">{summary.marked}<span className="text-xl text-muted-foreground"> of {summary.expected}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">records</span></p>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${summary.expected > 0 ? Math.min(100, Math.round((summary.marked / summary.expected) * 100)) : 0}%` }} /></div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {summary.marked} marked</span>
+            <span className={`inline-flex items-center gap-1.5 font-semibold ${summary.pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {summary.pending} pending</span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">Attendance records captured in {monthNameFromKey(summary.month ?? monthKey)} — change the month to re-read this block.</p>
+        </>}
+      </div>
+      {/* Day-wise view keeps its own date — separate from the month on, but always
+          available. */}
+      <DayStatusCard moduleKey={moduleKey} scope="admin" label="Day status" icon={CalendarCheck2} testId="status-day" />
     </div>
     <div className="mt-4">
       <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
