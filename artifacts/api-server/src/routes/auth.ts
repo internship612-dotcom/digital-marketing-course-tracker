@@ -177,6 +177,15 @@ router.post("/auth/register", async (req, res): Promise<void> => {
 });
 
 router.post("/auth/register-admin", async (req, res): Promise<void> => {
+  // Open self-registration of an admin row is a takeover vector in production:
+  // anyone could mint a full admin session, and local login then honours it. In
+  // production an existing signed-in admin must be the one creating the row.
+  // Dev/test keeps the endpoint open because that is where the first admin
+  // account gets created.
+  if (process.env.NODE_ENV === "production" && req.auth?.role !== "admin") {
+    res.status(403).json({ error: "Admin accounts can only be created by a signed-in admin." });
+    return;
+  }
   const parsed = RegisterAdminBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Please complete all admin registration fields correctly." });
