@@ -1648,7 +1648,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         </div>
         <label className="grid gap-1.5 text-sm font-medium">Month
           <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
-            {report.months.map((m) => <option key={m.month} value={m.month}>{calendarMonthName(m.start, `Month ${m.month}`)}</option>)}
+            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
           </select>
         </label>
       </div>
