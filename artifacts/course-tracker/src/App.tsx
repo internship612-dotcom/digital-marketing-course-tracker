@@ -1752,7 +1752,7 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
   onSave?: (next: { title: string; body: string; image: string | null }) => void;
   onCancel?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openDialog, setOpenDialog] = useState(false);
   const [title, setTitle] = useState(notice.title);
   const [body, setBody] = useState(notice.body);
   const [image, setImage] = useState<string | null>(notice.image ?? null);
@@ -1763,15 +1763,16 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
     if (editing) { setTitle(notice.title); setBody(notice.body); setImage(notice.image ?? null); }
   }, [editing, notice.title, notice.body, notice.image]);
 
-  const expanded = open || !!editing;
+  const expanded = !!editing;
 
-  // The whole row opens the notice on click. Clicks on a real button of their own
-  // (the chevron, publish/edit/delete, upload) still do their own job.
+  // The whole card (and its arrow) opens the notice in a centered dialog on the same
+  // screen. Clicks on a real button of their own (publish/edit/delete, upload) still
+  // do their own job.
   const toggleFromArticle = (e: React.MouseEvent<HTMLElement>) => {
     if (editing) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, a, input, select, textarea, label')) return;
-    setOpen((v) => !v);
+    setOpenDialog((v) => !v);
   };
 
   const pickImage = (file: File | null) => {
@@ -1781,7 +1782,7 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
 
   return <article className={`rounded-xl border border-border bg-card ${!editing ? 'cursor-pointer' : ''}`} onClick={toggleFromArticle} data-testid={`notice-${notice.id}`}>
     <div className="flex items-start gap-2 p-4">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={expanded} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setOpenDialog((v) => !v); }} aria-expanded={expanded || openDialog} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
         <ChevronDown size={18} className={`mt-0.5 shrink-0 text-primary transition-transform ${expanded ? 'rotate-180' : ''}`} />
         <span className="min-w-0">
           <span className="block font-display text-lg font-bold leading-snug">{notice.title}</span>
@@ -1820,10 +1821,26 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
             <Button type="button" size="sm" onClick={() => onSave?.({ title, body, image })} disabled={busy} data-testid={`button-save-edit-${notice.id}`}>{busy ? 'Saving…' : 'Save changes'}</Button>
           </div>
         </div>
-      : expanded && <div className="border-t border-border px-4 py-4 pl-11" data-testid={`notice-body-${notice.id}`}>
-          <p className="whitespace-pre-wrap text-sm text-muted-foreground">{notice.body}</p>
-          {notice.image && <img src={notice.image} alt="Announcement" className="mt-3 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-image-${notice.id}`} />}
-        </div>}
+      : null}
+    {openDialog && !editing && (
+      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-primary/40 p-4 backdrop-blur-sm sm:p-8" role="dialog" aria-modal="true" data-testid={`notice-dialog-${notice.id}`} onClick={() => setOpenDialog(false)}>
+        <div className="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-start justify-between gap-4">
+            <h3 className="font-display text-2xl font-bold leading-snug" data-testid={`notice-dialog-title-${notice.id}`}>{notice.title}</h3>
+            <button type="button" onClick={() => setOpenDialog(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close" data-testid={`button-close-notice-x-${notice.id}`}><X size={17} /></button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {notice.published ? `Published ${noticeDate(notice.publishedAt)}` : `Draft · written ${noticeDate(notice.createdAt)}`}
+            {notice.authorName ? ` · ${notice.authorName}` : ''}
+          </p>
+          <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground" data-testid={`notice-dialog-body-${notice.id}`}>{notice.body}</p>
+          {notice.image && <img src={notice.image} alt="Announcement" className="mt-4 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-dialog-image-${notice.id}`} />}
+          <div className="mt-6 flex justify-end">
+            <Button type="button" variant="outline" size="sm" onClick={() => setOpenDialog(false)} data-testid={`button-close-notice-${notice.id}`}>Close</Button>
+          </div>
+        </div>
+      </div>
+    )}
   </article>;
 }
 
