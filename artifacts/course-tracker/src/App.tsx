@@ -17,7 +17,6 @@ import {
   useListTeacherStudents,
   useListTeachers,
   useLogin,
-  useLoginSupabaseAdmin,
   useLogout,
   useUpdateTeacher,
   useUpdateAdminPassword,
@@ -72,9 +71,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { isAdminEmail, supabase } from '@/lib/supabase';
 import { validateStudentEmail } from '@/lib/email-validation';
-import type { Session } from '@supabase/supabase-js';
 
 const queryClient = new QueryClient();
 const modules: Module[] = ['ai', 'dm', 'sm'];
@@ -324,9 +321,7 @@ const nav: NavItem[] = user.role === 'admin'
       setLocation(destination);
     };
     if (user.role === 'admin') {
-      logout.mutate(undefined, {
-        onSettled: () => { void supabase.auth.signOut().finally(() => finish('/admin')); },
-      });
+      logout.mutate(undefined, { onSettled: () => finish('/admin') });
     } else {
       logout.mutate(undefined, { onSettled: () => finish(user.role === 'teacher' ? `/admin/${user.module ?? 'ai'}` : '/') });
     }
@@ -457,7 +452,6 @@ function ModuleDetailPage() {
   const create = useCreateTeacher();
   const update = useUpdateTeacher();
   const remove = useDeleteTeacher();
-  const adminSession = useAdminSession();
 
   const [showForm, setShowForm] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
@@ -480,16 +474,20 @@ function ModuleDetailPage() {
   const refresh = () => { void queryClient.invalidateQueries({ queryKey: getListTeachersQueryKey() }); };
   const closePwdEdit = () => { setPwdEditId(null); setNewPwd(''); setNewPwdShown(false); };
 
-  // Seeing a password, changing one and deleting a login all go through the
-  // admin's own Supabase credentials — `admins.password_hash` is a stale seed hash.
+  // Seeing a password, changing one and deleting a login all require the admin's
+  // own password, confirmed server-side (Supabase, with an admins-hash fallback).
   const verifyAdmin = () => {
-    if (!pending || !confirmPwd || !adminSession?.email) return;
+    if (!pending || !confirmPwd) return;
     const target = pending.teacher;
     const action = pending.type;
     setConfirmBusy(true); setConfirmError('');
-    void supabase.auth.signInWithPassword({ email: adminSession.email, password: confirmPwd })
-      .then(({ data, error: authError }) => {
-        if (authError || !data.user) throw new Error('The admin password is incorrect.');
+    void fetch('/api/admin/account/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: confirmPwd }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('The admin password is incorrect.');
         setError(''); setSuccess('');
         if (action === 'reveal') {
           setRevealedIds((ids) => (ids.includes(target.id) ? ids : [...ids, target.id]));
@@ -2722,27 +2720,36 @@ function PanelShell({ title, subtitle, onClose, testId, children }: { title: str
 }
 
 function AdminSettingsPage() {
-  const admin = useAdminSession();
+  const { data: adminUser } = useCurrentUser();
   const [form, setForm] = useState({ current: '', next: '', confirm: '' });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  // The admin's real credential lives in Supabase (the `admins` row is only a mapping
-  // target), so a reset has to go through Supabase — and be re-verified there first.
+  // The server verifies the current password against Supabase before setting the new
+  // one — same account the admin signs in with, so both sides stay in sync.
   const handlePassword = async (event: FormEvent) => {
     event.preventDefault();
     setNotice(''); setError('');
-    if (!admin?.email) { setError('We could not read your admin email. Sign in again.'); return; }
     if (form.next !== form.confirm) { setError('The new passwords do not match.'); return; }
     if (form.next.length < 8) { setError('Use at least 8 characters for the new password.'); return; }
     setBusy(true);
-    const { error: verifyError } = await supabase.auth.signInWithPassword({ email: admin.email, password: form.current });
-    if (verifyError) { setBusy(false); setError('The current password is incorrect.'); return; }
-    const { error: updateError } = await supabase.auth.updateUser({ password: form.next });
-    setBusy(false);
-    if (updateError) { setError(updateError.message || 'We could not update the password. Try again.'); return; }
-    setForm({ current: '', next: '', confirm: '' });
-    setNotice('Admin password updated. Use it the next time you sign in.');
+    try {
+      const res = await fetch('/api/admin/account/password', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: form.current, newPassword: form.next }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? 'We could not update the password. Try again.');
+      }
+      setForm({ current: '', next: '', confirm: '' });
+      setNotice('Admin password updated. Use it the next time you sign in.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'We could not update the password. Try again.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return <>
@@ -2751,7 +2758,7 @@ function AdminSettingsPage() {
       <section className="max-w-xl rounded-xl border border-border bg-card p-5">
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Account security</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Reset admin password</h2>
-        <p className="mt-2 text-sm text-muted-foreground">This changes the password you sign in with{admin?.email ? ` (${admin.email})` : ''}. Enter the current one to confirm it is you.</p>
+        <p className="mt-2 text-sm text-muted-foreground">This changes the password you sign in with{adminUser?.email ? ` (${adminUser.email})` : ''}. Enter the current one to confirm it is you.</p>
         <form onSubmit={handlePassword} className="mt-5 grid gap-3">
           <PasswordField label="Current password" value={form.current} onChange={(e) => setForm((v) => ({ ...v, current: e.target.value }))} autoComplete="current-password" required data-testid="input-admin-current-password" toggleTestId="button-toggle-current-pwd" />
           <PasswordField label="New password" value={form.next} onChange={(e) => setForm((v) => ({ ...v, next: e.target.value }))} minLength={8} autoComplete="new-password" required data-testid="input-admin-new-password" toggleTestId="button-toggle-new-pwd" />
@@ -2766,23 +2773,6 @@ function AdminSettingsPage() {
   </>;
 }
 
-function useAdminSession(): CurrentUser | null {
-  const [admin, setAdmin] = useState<CurrentUser | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const resolve = (session: Session | null) => {
-      const u = session?.user;
-      const isAdmin = !!u && (isAdminEmail(u.email) || u.user_metadata?.role === 'admin');
-      if (!alive) return;
-      setAdmin(isAdmin ? { role: 'admin', displayName: String(u?.user_metadata?.display_name ?? 'Administrator'), email: u?.email ?? undefined, module: null, studentId: null } : null);
-    };
-    void supabase.auth.getSession().then(({ data }) => resolve(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => resolve(session));
-    return () => { alive = false; sub.subscription.unsubscribe(); };
-  }, []);
-  return admin;
-}
-
 function randomPassword(length = 10) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
   const values = crypto.getRandomValues(new Uint32Array(length));
@@ -2791,7 +2781,6 @@ function randomPassword(length = 10) {
 
 function Home() {
   const { data: user, isLoading } = useCurrentUser();
-  const admin = useAdminSession();
   const login = useLogin();
   const [, setLocation] = useLocation();
   const [identifier, setIdentifier] = useState('');
@@ -2812,24 +2801,34 @@ function Home() {
 
 function AdminLoginPage() {
   const [, setLocation] = useLocation();
-  const admin = useAdminSession();
+  const { data: localAdmin } = useCurrentUser();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ email: '', password: '' });
 
-  useEffect(() => { if (admin) setLocation('/admin/dashboard'); }, [admin, setLocation]);
+  useEffect(() => { if (localAdmin?.role === 'admin') setLocation('/admin/dashboard'); }, [localAdmin, setLocation]);
 
   const handleSignIn = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     setLoading(true);
-    const { data, error: authError } = await supabase.auth.signInWithPassword({ email: form.email.trim(), password: form.password });
-    setLoading(false);
-    if (authError || !data.user) { setError('Invalid credentials. Please try again.'); return; }
-    const u = data.user;
-    if (!isAdminEmail(u.email) && u.user_metadata?.role !== 'admin') {
-      setError('This account is not an administrator.');
-      void supabase.auth.signOut();
+    try {
+      const res = await fetch('/api/auth/admin/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: form.email.trim(), password: form.password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? 'Invalid credentials. Please try again.');
+      }
+      const me = await res.json();
+      queryClient.setQueryData(currentUserQueryKey('admin'), me);
+      setLocation('/admin/dashboard');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid credentials. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -2883,37 +2882,10 @@ function StudentAuthPage() {
 
 function useAdminBackendSession(enabled: boolean) {
   const { data: user, isLoading } = useCurrentUser();
-  const admin = useAdminSession();
-  const exchange = useLoginSupabaseAdmin();
-  const [supaReady, setSupaReady] = useState(false);
-  const [ready, setReady] = useState(false);
-  const attempted = useRef(false);
-
-  useEffect(() => {
-    let alive = true;
-    void supabase.auth.getSession().then(() => { if (alive) setSupaReady(true); });
-    const { data: sub } = supabase.auth.onAuthStateChange(() => { if (alive) setSupaReady(true); });
-    return () => { alive = false; sub.subscription.unsubscribe(); };
-  }, []);
-
-  useEffect(() => {
-    if (!enabled) return;
-    if (user?.role === 'admin') { attempted.current = true; setReady(true); return; }
-    if (attempted.current) return;
-    if (isLoading || !supaReady) return;
-    if (!admin) { attempted.current = true; setReady(true); return; }
-    attempted.current = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      const token = data.session?.access_token;
-      if (!token) { setReady(true); return; }
-      exchange.mutate({ data: { token } }, {
-        onSuccess: (adminUser) => { queryClient.setQueryData(currentUserQueryKey('admin'), adminUser); setReady(true); },
-        onError: () => { void supabase.auth.signOut().finally(() => setReady(true)); },
-      });
-    });
-  }, [enabled, user, admin, isLoading, supaReady, exchange]);
-
-  return { admin: user?.role === 'admin' ? user : undefined, ready: user?.role === 'admin' ? true : ready };
+  // The exchange endpoint is gone: admin login already goes through the server, so
+  // the local admin session is the only source of truth. Ready means the current-user
+  // query finished resolving, so Protected does not redirect on first paint.
+  return { admin: user?.role === 'admin' ? user : undefined, ready: !enabled || !isLoading };
 }
 
 function Protected({ role, children }: { role: Role; children: ReactNode }) {
@@ -2936,7 +2908,11 @@ function Protected({ role, children }: { role: Role; children: ReactNode }) {
 }
 
 function Router() {
-  return <ErrorBoundary resetKey={useLocation()[0]}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/:panel"><ModulePanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  const [pathname] = useLocation();
+  // A route change resets the scroll: staying where you were (say, halfway down a
+  // long student list) would make the opened detail screen start in the middle.
+  useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/:panel"><ModulePanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {

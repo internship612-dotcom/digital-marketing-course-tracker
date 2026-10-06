@@ -29,6 +29,8 @@ import {
   resolveSupabaseUserEmail,
   verifyPassword,
   ADMIN_SUPABASE_EMAIL,
+  supabasePasswordGrant,
+  supabaseUpdatePassword,
 } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -280,6 +282,46 @@ router.post("/auth/admin/supabase", async (req, res): Promise<void> => {
   res.json(LoginResponse.parse(publicUser(context)));
 });
 
+// Local proxy for admin sign-in. The browser sends the email/password, this server
+// checks Supabase itself and, on success, issues a normal session cookie — so no
+// Supabase URL or key ever shows up in the browser's network tab.
+router.post("/auth/admin/local", async (req, res): Promise<void> => {
+  const email = typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const grant = email && password ? await supabasePasswordGrant(email, password) : null;
+  if (!grant || email !== ADMIN_SUPABASE_EMAIL) {
+    res.status(401).json({ error: "Invalid credentials." });
+    return;
+  }
+  await ensureDefaultAdmin();
+  let [admin] = await db
+    .select()
+    .from(adminsTable)
+    .where(eq(adminsTable.username, email))
+    .limit(1);
+  if (!admin) {
+    [admin] = await db
+      .select()
+      .from(adminsTable)
+      .where(eq(adminsTable.username, "admin"))
+      .limit(1);
+  }
+  if (!admin) {
+    res.status(500).json({ error: "No admin account is configured." });
+    return;
+  }
+  const context = {
+    role: "admin" as const,
+    userId: String(admin.id),
+    displayName: "Administrator",
+    email,
+    module: admin.module,
+    studentId: null,
+  };
+  await createSession(res, context);
+  res.json(LoginResponse.parse(publicUser(context)));
+});
+
 router.patch(
   "/admin/account/password",
   requireRole("admin"),
@@ -294,9 +336,27 @@ router.patch(
       .from(adminsTable)
       .where(eq(adminsTable.id, Number(req.auth.userId)))
       .limit(1);
-    if (!admin || !(await verifyPassword(parsed.data.currentPassword, admin.passwordHash))) {
-      res.status(400).json({ error: "The current password is incorrect." });
+    if (!admin) {
+      res.status(404).json({ error: "Admin account not found." });
       return;
+    }
+    // Verify via Supabase first — that is what the user actually signs in with. Fall
+    // back to the local hash only when Supabase is unreachable.
+    const email = req.auth.email ?? ADMIN_SUPABASE_EMAIL;
+    const grant = await supabasePasswordGrant(email, parsed.data.currentPassword);
+    if (!grant) {
+      if (!(await verifyPassword(parsed.data.currentPassword, admin.passwordHash))) {
+        res.status(400).json({ error: "The current password is incorrect." });
+        return;
+      }
+      // Supabase unreachable but the local password still matches: let the change
+      // through locally, and the admins hash below stays the single source.
+    } else {
+      const updated = await supabaseUpdatePassword(grant.accessToken, parsed.data.newPassword);
+      if (!updated) {
+        res.status(502).json({ error: "We could not reach the identity service to update that password." });
+        return;
+      }
     }
     await db
       .update(adminsTable)
@@ -317,6 +377,13 @@ router.post(
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     if (!password) {
       res.status(400).json({ error: "Enter your password to continue." });
+      return;
+    }
+    // Admin credential lives in Supabase; verify via a sign-in grant. Falls back to
+    // the local stored hash only when Supabase is unreachable.
+    const email = req.auth.email ?? ADMIN_SUPABASE_EMAIL;
+    if (await supabasePasswordGrant(email, password)) {
+      res.sendStatus(204);
       return;
     }
     const [admin] = await db

@@ -43,6 +43,55 @@ export async function resolveSupabaseUserEmail(
   return user.email ? normalizeEmail(user.email) : null;
 }
 
+// Returns an access token when Supabase accepts the email/password, else null. The
+// browser never talks to Supabase directly — every admin auth step is proxied here
+// so the network log only ever shows first-party requests.
+export async function supabasePasswordGrant(
+  email: string,
+  password: string,
+): Promise<{ accessToken: string } | null> {
+  try {
+    const response = await fetch(
+      `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+      {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+      },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { access_token?: string };
+    return typeof data.access_token === "string"
+      ? { accessToken: data.access_token }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function supabaseUpdatePassword(
+  accessToken: string,
+  newPassword: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ password: newPassword }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export type AuthContext = {
   role: Role;
   userId: string;
