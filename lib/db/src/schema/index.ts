@@ -157,6 +157,9 @@ export const announcementsTable = pgTable("announcements", {
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // Optional image attached to the notice (data URL, same trade-off as students.photo).
+  // Null when the notice is text only.
+  image: text("image"),
 });
 
 // The course PDFs students read: one current file per (module, kind), which is what

@@ -2516,16 +2516,30 @@ function announcementView(record: typeof announcementsTable.$inferSelect) {
     publishedAt: record.publishedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    image: record.image ?? null,
   };
 }
 
-function announcementInput(body: unknown): { title: string; body: string } | null {
-  const raw = (body ?? {}) as { title?: unknown; body?: unknown };
+// Announcements can carry one image (poster/notice). The client sends a data URL
+// (img/photo's FileReader result) or null to clear it. A nil or empty string means
+// "no image". Stored on the row, so keep it reasonably small — 2 MB of base64 max.
+const MAX_IMAGE_BYTES = 2_800_000;
+function normalizeImage(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined; // caller leaves the column alone
+  if (value === null || value === '') return null; // clear it
+  if (typeof value !== 'string') return undefined; // garbage: leave alone rather than clobber
+  if (value.length > MAX_IMAGE_BYTES) return undefined;
+  return value;
+}
+
+function announcementInput(body: unknown): { title: string; body: string; image?: string | null } | null {
+  const raw = (body ?? {}) as { title?: unknown; body?: unknown; image?: unknown };
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   const text = typeof raw.body === "string" ? raw.body.trim() : "";
   if (!title || !text) return null;
   if (title.length > 200 || text.length > 5000) return null;
-  return { title, body: text };
+  const image = normalizeImage(raw.image);
+  return { title, body: text, ...(image === undefined ? {} : { image }) };
 }
 
 // Everything this module has written, drafts included.
@@ -2569,6 +2583,7 @@ router.post(
         authorName: req.auth.displayName ?? null,
         createdBy: Number(req.auth.userId),
         publishedAt: publish ? new Date() : null,
+        image: input.image ?? null,
       })
       .returning();
     res.status(201).json(announcementView(record));
@@ -2589,7 +2604,7 @@ router.patch(
       res.status(400).json({ error: "Invalid notice." });
       return;
     }
-    const raw = (req.body ?? {}) as { publish?: unknown; title?: unknown; body?: unknown };
+    const raw = (req.body ?? {}) as { publish?: unknown; title?: unknown; body?: unknown; image?: unknown };
     const patch: Partial<typeof announcementsTable.$inferInsert> = { updatedAt: new Date() };
     if (raw.title !== undefined || raw.body !== undefined) {
       const input = announcementInput(req.body);
@@ -2599,6 +2614,10 @@ router.patch(
       }
       patch.title = input.title;
       patch.body = input.body;
+      if (input.image !== undefined) patch.image = input.image;
+    }
+    if (raw.image !== undefined && !(raw.title !== undefined || raw.body !== undefined)) {
+      patch.image = normalizeImage(raw.image) ?? null;
     }
     if (typeof raw.publish === "boolean") {
       patch.publishedAt = raw.publish ? new Date() : null;
@@ -2692,6 +2711,7 @@ router.post(
         authorName: req.auth?.displayName ?? null,
         createdBy: null,
         publishedAt: publish ? new Date() : null,
+        image: input.image ?? null,
       })
       .returning();
     res.status(201).json(announcementView(record));
@@ -2709,7 +2729,7 @@ router.patch(
       res.status(400).json({ error: "Invalid notice." });
       return;
     }
-    const raw = (req.body ?? {}) as { publish?: unknown; title?: unknown; body?: unknown };
+    const raw = (req.body ?? {}) as { publish?: unknown; title?: unknown; body?: unknown; image?: unknown };
     const patch: Partial<typeof announcementsTable.$inferInsert> = { updatedAt: new Date() };
     if (raw.title !== undefined || raw.body !== undefined) {
       const input = announcementInput(req.body);
@@ -2719,6 +2739,10 @@ router.patch(
       }
       patch.title = input.title;
       patch.body = input.body;
+      if (input.image !== undefined) patch.image = input.image;
+    }
+    if (raw.image !== undefined && !(raw.title !== undefined || raw.body !== undefined)) {
+      patch.image = normalizeImage(raw.image) ?? null;
     }
     if (typeof raw.publish === "boolean") {
       patch.publishedAt = raw.publish ? new Date() : null;

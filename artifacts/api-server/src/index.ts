@@ -46,8 +46,23 @@ async function ensureCalendarEventsTable(): Promise<void> {
   }
 }
 
+// The notice image column: one image per announcement, base64 data URL. Same pattern as
+// attendance.leave_days above — the hosted DB never runs migrations by hand.
+async function ensureAnnouncementsImageColumn(): Promise<void> {
+  try {
+    await db.execute(
+      sql.raw(
+        "ALTER TABLE announcements ADD COLUMN IF NOT EXISTS image text",
+      ),
+    );
+  } catch (err) {
+    logger.warn({ err }, "Could not ensure announcements.image column");
+  }
+}
+
 ensureCalendarEventsTable()
   .then(ensureAttendanceLeaveColumn)
+  .then(ensureAnnouncementsImageColumn)
   .catch((err) => logger.warn({ err }, "Schema checks failed"))
   .finally(() => {
     app.listen(port, (err) => {

@@ -44,6 +44,7 @@ import {
   EyeOff,
   FileText,
   GraduationCap,
+  Image as ImageIcon,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -1702,7 +1703,36 @@ type Announcement = {
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  image: string | null;
 };
+
+// One image per notice — upload or paste on the compose form. Rendered inside the
+// notice when it is opened. Sized small on purpose: it rides in the same JSON
+// response as the rest of the announcements list.
+function readImageAsDataUrl(file: File, onDone: (dataUrl: string) => void, onError: (message: string) => void) {
+  if (file.size > 2_500_000) { onError('That image is over 2.5 MB — keep it a smaller one, like a phone poster.'); return; }
+  const reader = new FileReader();
+  reader.onerror = () => onError('We could not read that file. Try another image file.');
+  reader.onload = () => onDone(reader.result as string);
+  reader.readAsDataURL(file);
+}
+
+function announcementImageFile(event: React.DragEvent<HTMLElement> | React.ClipboardEvent<HTMLElement> | React.ChangeEvent<HTMLInputElement>): File | null {
+  if ('clipboardData' in event) {
+    for (const item of event.clipboardData?.items ?? []) {
+      if (item.type.startsWith('image/')) return item.getAsFile();
+    }
+    return null;
+  }
+  if ('dataTransfer' in event) {
+    for (const file of event.dataTransfer.files ?? []) {
+      if (file.type.startsWith('image/')) return file;
+    }
+    return null;
+  }
+  const files = event.target.files;
+  return files && files[0] && files[0].type.startsWith('image/') ? files[0] : files?.[0] ?? null;
+}
 
 function noticeDate(iso: string | null): string {
   if (!iso) return '';
@@ -1719,22 +1749,37 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
   children?: ReactNode;
   editing?: boolean;
   busy?: boolean;
-  onSave?: (next: { title: string; body: string }) => void;
+  onSave?: (next: { title: string; body: string; image: string | null }) => void;
   onCancel?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(notice.title);
   const [body, setBody] = useState(notice.body);
+  const [image, setImage] = useState<string | null>(notice.image ?? null);
 
   // Reopening the editor must start from what is stored, not from a half-typed
   // draft the staff member abandoned last time.
   useEffect(() => {
-    if (editing) { setTitle(notice.title); setBody(notice.body); }
-  }, [editing, notice.title, notice.body]);
+    if (editing) { setTitle(notice.title); setBody(notice.body); setImage(notice.image ?? null); }
+  }, [editing, notice.title, notice.body, notice.image]);
 
   const expanded = open || !!editing;
 
-  return <article className="rounded-xl border border-border bg-card" data-testid={`notice-${notice.id}`}>
+  // The whole row opens the notice on click. Clicks on a real button of their own
+  // (the chevron, publish/edit/delete, upload) still do their own job.
+  const toggleFromArticle = (e: React.MouseEvent<HTMLElement>) => {
+    if (editing) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, select, textarea, label')) return;
+    setOpen((v) => !v);
+  };
+
+  const pickImage = (file: File | null) => {
+    if (!file) return;
+    readImageAsDataUrl(file, (dataUrl) => setImage(dataUrl), () => {});
+  };
+
+  return <article className={`rounded-xl border border-border bg-card ${!editing ? 'cursor-pointer' : ''}`} onClick={toggleFromArticle} data-testid={`notice-${notice.id}`}>
     <div className="flex items-start gap-2 p-4">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={expanded} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
         <ChevronDown size={18} className={`mt-0.5 shrink-0 text-primary transition-transform ${expanded ? 'rotate-180' : ''}`} />
@@ -1753,14 +1798,32 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
       ? <div className="border-t border-border p-4" data-testid={`notice-edit-${notice.id}`}>
           <div className="grid gap-3">
             <label className="grid gap-1.5 text-sm font-medium">Title<Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid={`input-edit-title-${notice.id}`} /></label>
-            <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} data-testid={`input-edit-body-${notice.id}`} /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
+              const file = announcementImageFile(e);
+              if (file) { e.preventDefault(); setImage(null); readImageAsDataUrl(file, setImage, () => {}); }
+            }} data-testid={`input-edit-body-${notice.id}`} /></label>
+            <div className="grid gap-1.5">
+              <span className="text-sm font-medium">Image (optional)</span>
+              {image && <img src={image} alt="Notice attachment" className="max-h-48 rounded-lg border border-border object-contain" data-testid={`preview-edit-image-${notice.id}`} />}
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted" data-testid={`button-upload-image-edit-${notice.id}`}>
+                  <ImageIcon size={14} /> {image ? 'Replace image' : 'Upload image'}
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => pickImage(e.target.files?.[0] ?? null)} />
+                </label>
+                {image && <button type="button" onClick={() => setImage(null)} className="rounded-md px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-destructive" data-testid={`button-clear-image-edit-${notice.id}`}>Remove image</button>}
+                <span className="text-[11px] text-muted-foreground">Paste a picture into the message box to attach it.</span>
+              </div>
+            </div>
           </div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={busy} data-testid={`button-cancel-edit-${notice.id}`}>Cancel</Button>
-            <Button type="button" size="sm" onClick={() => onSave?.({ title, body })} disabled={busy} data-testid={`button-save-edit-${notice.id}`}>{busy ? 'Saving…' : 'Save changes'}</Button>
+            <Button type="button" size="sm" onClick={() => onSave?.({ title, body, image })} disabled={busy} data-testid={`button-save-edit-${notice.id}`}>{busy ? 'Saving…' : 'Save changes'}</Button>
           </div>
         </div>
-      : expanded && <p className="whitespace-pre-wrap border-t border-border px-4 py-4 pl-11 text-sm text-muted-foreground" data-testid={`notice-body-${notice.id}`}>{notice.body}</p>}
+      : expanded && <div className="border-t border-border px-4 py-4 pl-11" data-testid={`notice-body-${notice.id}`}>
+          <p className="whitespace-pre-wrap text-sm text-muted-foreground">{notice.body}</p>
+          {notice.image && <img src={notice.image} alt="Announcement" className="mt-3 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-image-${notice.id}`} />}
+        </div>}
   </article>;
 }
 
@@ -1801,6 +1864,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [image, setImage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1823,12 +1887,12 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
     fetch(base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(isAdmin ? { title, body, publish, module } : { title, body, publish }),
+      body: JSON.stringify(isAdmin ? { title, body, publish, module, image } : { title, body, publish, image }),
     })
       .then((res) => { if (!res.ok) throw new Error('save failed'); })
       .then(() => {
         setNotice(publish ? 'Published — students can read it now.' : 'Saved as a draft. Students cannot see it yet.');
-        setTitle(''); setBody(''); refresh();
+        setTitle(''); setBody(''); setImage(null); refresh();
       })
       .catch(() => setError('We could not save that notice. Try again.'))
       .finally(() => setBusy(false));
@@ -1853,13 +1917,13 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       .catch(() => setError('We could not delete that notice. Try again.'));
   };
 
-  const saveEdit = (id: number, next: { title: string; body: string }) => {
+  const saveEdit = (id: number, next: { title: string; body: string; image: string | null }) => {
     if (!next.title.trim() || !next.body.trim()) { setError('Enter a title and a message.'); return; }
     setBusy(true); setError(''); setNotice('');
     fetch(`${base}/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: next.title, body: next.body }),
+      body: JSON.stringify({ title: next.title, body: next.body, image: next.image }),
     })
       .then((res) => { if (!res.ok) throw new Error('update failed'); setNotice('Notice updated.'); setEditingId(null); refresh(); })
       .catch(() => setError('We could not save that change. Try again.'))
@@ -1886,7 +1950,25 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       <div className="mt-5 grid gap-3">
         {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{(Object.keys(moduleNames) as Module[]).map((key) => <option key={key} value={key}>{moduleNames[key]}</option>)}</select></label>}
         <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="e.g. Class timings changed for next week" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} data-testid="input-notice-body" /></label>
+        <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
+          const file = announcementImageFile(e);
+          if (file) { e.preventDefault(); setImage(null); readImageAsDataUrl(file, setImage, setError); }
+        }} data-testid="input-notice-body" /></label>
+        <div className="grid gap-1.5">
+          <span className="text-sm font-medium">Image (optional)</span>
+          {image && <img src={image} alt="Notice attachment" className="max-h-48 rounded-lg border border-border object-contain" data-testid="preview-notice-image" />}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted" data-testid="button-upload-image-notice">
+              <ImageIcon size={14} /> {image ? 'Replace image' : 'Upload image'}
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                if (file) readImageAsDataUrl(file, setImage, setError);
+              }} />
+            </label>
+            {image && <button type="button" onClick={() => setImage(null)} className="rounded-md px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-destructive" data-testid="button-clear-image-notice">Remove image</button>}
+            <span className="text-[11px] text-muted-foreground">Or paste a picture into the message box to attach it.</span>
+          </div>
+        </div>
       </div>
       {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-notice-error">{error}</p>}
       {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-notice-success">{notice}</p>}
