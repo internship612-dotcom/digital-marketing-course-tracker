@@ -305,8 +305,8 @@ const nav: NavItem[] = user.role === 'admin'
     ? [
         { href: `/admin/${user.module ?? 'ai'}`, label: 'Module desk', icon: ClipboardCheck },
         { href: '/teacher/add-student', label: 'Add student', icon: Users, children: [{ href: '/teacher/students', label: 'Student list', icon: UserCheck }] },
-        { href: '/teacher/attendance', label: 'Mark attendance', icon: CalendarCheck2 },
-        { href: '/teacher/assessment', label: 'Mark assessment', icon: ClipboardCheck },
+        { href: '/teacher/attendance', label: 'Mark Attendance', icon: CalendarCheck2 },
+        { href: '/teacher/assessment', label: 'Mark Assessment', icon: ClipboardCheck },
         { href: '/teacher/announcements', label: 'Announcements', icon: Megaphone },
         { href: '/teacher/documents', label: 'Course files', icon: FileText },
       ]
@@ -880,7 +880,7 @@ function TeacherPage({ user }: { user: CurrentUser }) {
   const total = overview?.totalStudents ?? students.data?.length ?? 0;
   const moduleKey = (user.module ?? 'ai') as Module;
   return <>
-    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title={`Keep ${user.module ? moduleShort[user.module] : 'your'} current.`} detail="Where this module stands today, day by day. Fill the register from Mark attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
+    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title="Keep Your Module Updated." detail="Where this module stands today, day by day. Fill the register from Mark Attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
     <div className="grid gap-4 lg:grid-cols-2" data-testid="module-desk-summary">
       {/* Just the number, but stretched to the same height as the card beside it — the two
           sit side by side and one being shorter read as a mistake. */}
@@ -1186,7 +1186,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   return <>
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
-      title="Mark attendance"
+      title="Mark Attendance"
       detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
       action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
     />
@@ -2533,11 +2533,11 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
         {profileNotice && <p className="mt-4 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-profile-success">{profileNotice}</p>}
       </section>
 
-      {/* The report is the only panel here now. Marks are entered from Mark assessment in
+      {/* The report is the only panel here now. Marks are entered from Mark Assessment in
           the sidebar, one project across the whole roster. */}
       <section className="rounded-xl border border-border bg-card p-5">
         <p className="text-xs font-semibold text-primary">Attendance</p>
-        <h2 className="mt-1 font-display text-2xl font-bold">Mark attendance</h2>
+        <h2 className="mt-1 font-display text-2xl font-bold">Mark Attendance</h2>
         <StudentProgressSection key={reportToken} base={base} moduleFilter={moduleFilter} />
       </section>
       </div>
@@ -2933,7 +2933,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   return <>
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
-      title="Mark assessment"
+      title="Mark Assessment"
       detail="Every project on your module roster in one place. Pick the month and project, then type marks and feedback against each student and press Save."
       action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link>}
     />
