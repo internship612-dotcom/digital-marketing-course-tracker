@@ -2282,6 +2282,10 @@ router.get(
           // On leave records the day flag as present too; this bit tells them apart.
           leave: slot && row ? ((row.leaveDays ?? 0) & dayBit(slot.day)) !== 0 : false,
           recorded: Boolean(row),
+          // Whether THIS day has actually been saved for the student — the lock bit is
+          // what distinguishes "explicitly absent" from "the week row exists but
+          // nobody touched today yet".
+          markedToday: slot && row ? Boolean(row[slot.day]) || isLocked(row.lockedDays, slot.day) : false,
         };
       }),
     );

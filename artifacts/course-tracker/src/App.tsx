@@ -955,7 +955,7 @@ function shortDate(iso: string): string {
   return `${date.getUTCDate()} ${MONTH_LABELS[date.getUTCMonth()]}`;
 }
 
-type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean };
+type RegisterRow = Student & { week: number | null; eligible: boolean; present: boolean; leave: boolean; recorded: boolean; markedToday?: boolean };
 type Mark = 'present' | 'absent' | 'leave';
 
 // A month grid behind a calendar icon, so any past day can be picked without a native
@@ -1136,9 +1136,11 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
         const list = data as RegisterRow[];
         setRows(list);
         // Saved rows come back showing what was recorded; the rest start grey. Every
-        // row stays tickable, so a saved day can be changed and saved again.
+        // row stays tickable, so a saved day can be changed and saved again. Only the
+        // rows where THIS day was actually saved get a chip — otherwise a student whose
+        // week row merely exists from another day's entry would show 'absent'.
         setMarks(Object.fromEntries(list
-          .filter((r) => r.eligible && r.recorded)
+          .filter((r) => r.eligible && r.recorded && r.markedToday)
           .map((r) => [r.id, r.leave ? 'leave' : r.present ? 'present' : 'absent'] as const)));
       })
       .catch(() => { if (alive) { setError('Could not open the register for this date.'); setRows([]); } });
