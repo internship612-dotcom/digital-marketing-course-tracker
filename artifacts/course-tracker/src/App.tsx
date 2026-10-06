@@ -1785,10 +1785,11 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpenDialog((v) => !v); }} aria-expanded={expanded || openDialog} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
         <ChevronDown size={18} className={`mt-0.5 shrink-0 text-primary transition-transform ${expanded ? 'rotate-180' : ''}`} />
         <span className="min-w-0">
-          <span className="block font-display text-lg font-bold leading-snug">{notice.title}</span>
+          <span className="block font-display text-lg font-bold leading-snug">{notice.title || 'Untitled notice'}</span>
           <span className="mt-0.5 block text-xs text-muted-foreground">
             {notice.published ? `Published ${noticeDate(notice.publishedAt)}` : `Draft · written ${noticeDate(notice.createdAt)}`}
             {notice.authorName ? ` · ${notice.authorName}` : ''}
+            {notice.image ? ' · Image attached' : ''}
           </span>
         </span>
       </button>
@@ -1826,14 +1827,14 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
       <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-primary/40 p-4 backdrop-blur-sm sm:p-8" role="dialog" aria-modal="true" data-testid={`notice-dialog-${notice.id}`} onClick={() => setOpenDialog(false)}>
         <div className="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-start justify-between gap-4">
-            <h3 className="font-display text-2xl font-bold leading-snug" data-testid={`notice-dialog-title-${notice.id}`}>{notice.title}</h3>
+            <h3 className="font-display text-2xl font-bold leading-snug" data-testid={`notice-dialog-title-${notice.id}`}>{notice.title || 'Notice'}</h3>
             <button type="button" onClick={() => setOpenDialog(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close" data-testid={`button-close-notice-x-${notice.id}`}><X size={17} /></button>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {notice.published ? `Published ${noticeDate(notice.publishedAt)}` : `Draft · written ${noticeDate(notice.createdAt)}`}
             {notice.authorName ? ` · ${notice.authorName}` : ''}
           </p>
-          <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground" data-testid={`notice-dialog-body-${notice.id}`}>{notice.body}</p>
+          {notice.body && <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground" data-testid={`notice-dialog-body-${notice.id}`}>{notice.body}</p>}
           {notice.image && <img src={notice.image} alt="Announcement" className="mt-4 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-dialog-image-${notice.id}`} />}
           <div className="mt-6 flex justify-end">
             <Button type="button" variant="outline" size="sm" onClick={() => setOpenDialog(false)} data-testid={`button-close-notice-${notice.id}`}>Close</Button>
@@ -1899,7 +1900,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const refresh = () => setReloadToken((v) => v + 1);
 
   const create = (publish: boolean) => {
-    if (!title.trim() || !body.trim()) { setError('Enter a title and a message.'); return; }
+    if (!title.trim() && !body.trim() && !image) { setError('Enter a title, a message, or attach an image.'); return; }
     setBusy(true); setError(''); setNotice('');
     fetch(base, {
       method: 'POST',
@@ -1935,7 +1936,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   };
 
   const saveEdit = (id: number, next: { title: string; body: string; image: string | null }) => {
-    if (!next.title.trim() || !next.body.trim()) { setError('Enter a title and a message.'); return; }
+    if (!next.title.trim() && !next.body.trim() && !next.image) { setError('Enter a title, a message, or attach an image.'); return; }
     setBusy(true); setError(''); setNotice('');
     fetch(`${base}/${id}`, {
       method: 'PATCH',

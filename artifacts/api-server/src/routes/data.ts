@@ -2536,9 +2536,10 @@ function announcementInput(body: unknown): { title: string; body: string; image?
   const raw = (body ?? {}) as { title?: unknown; body?: unknown; image?: unknown };
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   const text = typeof raw.body === "string" ? raw.body.trim() : "";
-  if (!title || !text) return null;
-  if (title.length > 200 || text.length > 5000) return null;
   const image = normalizeImage(raw.image);
+  // Any one of the three is enough: a poster-only notice has no title or message.
+  if (!title && !text && image == null) return null;
+  if (title.length > 200 || text.length > 5000) return null;
   return { title, body: text, ...(image === undefined ? {} : { image }) };
 }
 
