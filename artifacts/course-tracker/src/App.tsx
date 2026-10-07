@@ -42,6 +42,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  GitBranch,
   GraduationCap,
   Image as ImageIcon,
   KeyRound,
@@ -488,63 +489,100 @@ function AdminModulesPage() {
       .finally(() => setBusy(false));
   };
 
+  const totalModules = branches?.reduce((count, branch) => count + branch.modules.length, 0) ?? 0;
+
   return <>
-    <PageHeader kicker="Admin / branches" title="Branches & modules." detail="Every branch holds its own modules. Create a branch, add the modules it runs, then open a module to manage its logins, report and course files." />
+    <PageHeader kicker="Admin / branches" title="Branches & modules." detail="Every branch holds its own modules. Branches and modules are managed from the side panel — open a module for its desk, report and course files." />
 
     {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-success">{notice}</p>}
 
-    <section className="mb-8 rounded-xl border border-border bg-card p-5">
-      <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">New branch</p>
-      <form onSubmit={createBranch} className="mt-3 flex flex-wrap items-end gap-3">
-        <label className="grid gap-1.5 text-sm font-medium">Branch name
-          <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. Zedking" className="w-64" data-testid="input-branch-name" />
-        </label>
-        <Button type="submit" disabled={busy || !branchName.trim()} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
-      </form>
-    </section>
+    <div className="grid items-start gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className="overflow-hidden rounded-xl border border-border bg-card lg:sticky lg:top-24" data-testid="panel-branch-operations">
+        <div className="flex items-center justify-between bg-sidebar px-4 py-3.5 text-sidebar-foreground">
+          <span className="flex items-center gap-2 font-mono-ui text-[10px] uppercase tracking-[0.22em]"><GitBranch size={13} /> Branch operations</span>
+          <span className="rounded-full bg-sidebar-accent px-2.5 py-0.5 font-mono-ui text-[10px] tracking-wider text-sidebar-foreground/80">{branches?.length ?? '—'}</span>
+        </div>
 
-    {branches == null
-      ? <div className="grid gap-4">{[1, 2].map((i) => <div key={i} className="h-40 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <div className="grid gap-6">
-          {branches.map((branch) => (
-            <section key={branch.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-${branch.id}`}>
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div>
-                  <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch</p>
-                  <h2 className="mt-1 font-display text-2xl font-bold">{branch.name}</h2>
+        <div className="grid gap-5 p-4">
+          <div>
+            <p className="flex items-center gap-2 font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">New branch<span className="h-px flex-1 bg-border/70" /></p>
+            <form onSubmit={createBranch} className="mt-3 grid gap-2.5">
+              <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. Zedking" data-testid="input-branch-name" />
+              <Button type="submit" disabled={busy || !branchName.trim()} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
+            </form>
+          </div>
+
+          <div className="border-t border-border/70 pt-4">
+            <p className="flex items-center gap-2 font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Add module<span className="h-px flex-1 bg-border/70" /></p>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">Pick the branch the module belongs to.</p>
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {(branches ?? []).map((branch) => (
+                <button
+                  key={branch.id}
+                  type="button"
+                  onClick={() => { setNewModuleFor(branch.id); setModuleName(''); setError(''); }}
+                  className={`rounded-md px-2.5 py-1.5 font-mono-ui text-[10px] uppercase tracking-wider transition ${newModuleFor === branch.id ? 'bg-primary text-primary-foreground' : 'border border-border bg-muted/60 text-muted-foreground hover:border-accent/60 hover:text-primary'}`}
+                  data-testid={`button-add-module-${branch.id}`}
+                >{branch.name}</button>
+              ))}
+              {branches != null && branches.length === 0 && <p className="text-xs text-muted-foreground">Create a branch first.</p>}
+            </div>
+            {newModuleFor !== null && (
+              <form onSubmit={(e) => createModule(e, newModuleFor)} className="mt-3 grid gap-2.5 rounded-lg border border-border/70 bg-muted/40 p-3">
+                <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Search Engine Optimization" autoFocus data-testid={`input-module-name-${newModuleFor}`} />
+                <div className="flex items-center gap-3">
+                  <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid={`button-save-module-${newModuleFor}`}>Add module</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setNewModuleFor(null); setModuleName(''); }}>Cancel</button>
                 </div>
-                <span className="rounded-full bg-muted px-3 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</span>
+              </form>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border/70 bg-muted/40 px-4 py-3 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span>{branches?.length ?? '–'} branch{branches?.length === 1 ? '' : 'es'}</span>
+          <span className="h-3 w-px bg-border" />
+          <span>{totalModules} module{totalModules === 1 ? '' : 's'}</span>
+        </div>
+      </aside>
+
+      <div className="grid gap-5 md:grid-cols-2">
+        {branches == null
+          ? [1, 2].map((i) => <div key={i} className="h-56 animate-pulse rounded-xl bg-muted" />)
+          : branches.map((branch, index) => (
+            <section key={branch.id} className="relative overflow-hidden rounded-xl border border-border bg-card" data-testid={`card-branch-${branch.id}`}>
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-accent via-primary/30 to-transparent" />
+              <div className="flex items-start justify-between gap-3 px-5 pt-5">
+                <div className="flex items-start gap-3">
+                  <span className="mt-1.5 font-mono-ui text-[11px] tracking-widest text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
+                  <div>
+                    <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch</p>
+                    <h2 className="mt-0.5 font-display text-2xl font-bold leading-tight">{branch.name}</h2>
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-full border border-border bg-muted/60 px-2.5 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</span>
               </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <ul className="mt-4 divide-y divide-border/70 border-t border-border/70">
                 {branch.modules.map((mod) => (
-                  <Link key={mod.id} href={`/admin/module/${mod.id}`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-module-${mod.id}`}>
-                    <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
-                    <h3 className="mt-2 font-display text-lg font-bold leading-tight">{mod.name}</h3>
-                    <span className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary">Open module <ArrowRight size={13} /></span>
-                  </Link>
+                  <li key={mod.id}>
+                    <Link href={`/admin/module/${mod.id}`} className="group flex items-center gap-3 px-5 py-3.5 transition hover:bg-muted/50" data-testid={`card-module-${mod.id}`}>
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted font-mono-ui text-[10px] font-bold uppercase text-primary transition group-hover:bg-accent/20">{mod.id.slice(0, 2)}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">{mod.name}</span>
+                        <span className="block font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{mod.id}</span>
+                      </span>
+                      <ArrowRight size={15} className="shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+                    </Link>
+                  </li>
                 ))}
-                {branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">No modules yet — add the first one below.</p>}
-              </div>
-              <div className="mt-4 border-t border-border/70 pt-4">
-                {newModuleFor === branch.id ? (
-                  <form onSubmit={(e) => createModule(e, branch.id)} className="flex flex-wrap items-end gap-3">
-                    <label className="grid gap-1.5 text-sm font-medium">Module name
-                      <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Search Engine Optimization" className="w-64" autoFocus data-testid={`input-module-name-${branch.id}`} />
-                    </label>
-                    <Button type="submit" disabled={busy || !moduleName.trim()} data-testid={`button-save-module-${branch.id}`}>Add module</Button>
-                    <button type="button" className="text-sm font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setNewModuleFor(null); setModuleName(''); }}>Cancel</button>
-                  </form>
-                ) : (
-                  <button type="button" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline" onClick={() => { setNewModuleFor(branch.id); setModuleName(''); setError(''); }} data-testid={`button-add-module-${branch.id}`}>
-                    <Plus size={15} /> Add module
-                  </button>
-                )}
-              </div>
+                {branch.modules.length === 0 && <li className="px-5 py-7 text-center text-sm text-muted-foreground">No modules yet — add the first one from the panel.</li>}
+              </ul>
             </section>
           ))}
-          {branches.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create the first one above.</p>}
-        </div>}
+        {branches != null && branches.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-2">No branches yet — create the first one from the panel.</p>}
+      </div>
+    </div>
   </>;
 }
 
