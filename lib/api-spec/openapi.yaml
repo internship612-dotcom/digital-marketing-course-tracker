@@ -561,8 +561,8 @@ components:
         error:
           type: string
     Module:
+      # Modules are admin-defined rows in the modules catalog — not a fixed enum.
       type: string
-      enum: [ai, dm, sm]
     Role:
       type: string
       enum: [admin, teacher, student]
@@ -663,6 +663,9 @@ components:
         guardianContact:
           type: string
           nullable: true
+        branchId:
+          type: integer
+          nullable: true
     StudentPasswordInput:
       type: object
       required: [password]
@@ -700,6 +703,9 @@ components:
           nullable: true
         guardianContact:
           type: string
+          nullable: true
+        branchId:
+          type: integer
           nullable: true
     StudentUpdateInput:
       type: object

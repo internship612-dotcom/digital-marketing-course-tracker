@@ -46,6 +46,102 @@ async function ensureCalendarEventsTable(): Promise<void> {
   }
 }
 
+// Institute = branches → modules. The `module` text columns that used to hold an
+// enum now hold free keys; the live DB still has the old enum type, so rewrite it
+// to text and (re)seed the branches/modules catalog. Idempotent: every statement
+// returns cleanly on a second boot.
+async function ensureBranchStructure(): Promise<void> {
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS branches (
+        id serial PRIMARY KEY,
+        name text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `));
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS modules (
+        id text PRIMARY KEY,
+        branch_id integer NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `));
+    // Cast the module columns off the old enum type. Each ALTER is guarded on the
+    // column actually existing — one missing column must not abort the whole boot
+    // migration (and with it the branch/module seed below).
+    if (await typeExists("module")) {
+      for (const table of ["admins", "teachers", "students", "attendance", "assessments", "announcements", "course_documents"]) {
+        if (!(await columnExists(table, "module"))) continue;
+        await db.execute(sql.raw(`ALTER TABLE ${table} ALTER COLUMN module DROP DEFAULT, ALTER COLUMN module SET DATA TYPE text USING module::text`));
+      }
+      await db.execute(sql.raw("DROP TYPE module"));
+    }
+    // Enum columns were rewritten to text but lost their 'ai'/'dm'/'sm'
+    // defaults in the cast; give admins back its old default.
+    if (await columnExists("admins", "module")) {
+      await db.execute(sql.raw("ALTER TABLE admins ALTER COLUMN module SET DEFAULT 'ai'"));
+    }
+
+    await db.execute(sql.raw(`
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS branch_id integer REFERENCES branches(id) ON DELETE SET NULL
+    `));
+
+    const zed = await sqlQueryBranchId("Zedking");
+    await db.execute(sql.raw(`
+      INSERT INTO branches (name)
+      VALUES ('Zedking')
+      ON CONFLICT (name) DO NOTHING
+    `));
+    const zedkingId = zed ?? (await sqlQueryBranchId("Zedking")) ?? 1;
+
+    await db.execute(sql.raw(`
+      INSERT INTO modules (id, branch_id, name)
+      VALUES
+        ('ai', ${zedkingId}, 'Artificial Intelligence'),
+        ('dm', ${zedkingId}, 'Digital Marketing'),
+        ('sm', ${zedkingId}, 'Social Media')
+      ON CONFLICT (id) DO NOTHING
+    `));
+    await db.execute(sql.raw(`UPDATE students SET branch_id = ${zedkingId} WHERE branch_id IS NULL`));
+  } catch (err) {
+    logger.warn({ err }, "Could not ensure branches/modules structure");
+  }
+}
+
+async function typeExists(typeName: string): Promise<boolean> {
+  try {
+    const rows = await db.execute(sql.raw(`SELECT 1 FROM pg_type WHERE typname = '${typeName}'`));
+    const list = (rows as unknown as { rows: unknown[] }).rows ?? (rows as unknown as unknown[]);
+    return list.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function columnExists(table: string, column: string): Promise<boolean> {
+  try {
+    const rows = await db.execute(sql.raw(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = '${table}' AND column_name = '${column}'`,
+    ));
+    const list = (rows as unknown as { rows: unknown[] }).rows ?? (rows as unknown as unknown[]);
+    return list.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function sqlQueryBranchId(name: string): Promise<number | null> {
+  try {
+    const rows = await db.execute(sql.raw(`SELECT id FROM branches WHERE name = '${name}' LIMIT 1`));
+    const first = (rows as unknown as { rows: { id: number }[] }).rows?.[0]
+      ?? (rows as unknown as { id: number }[])[0];
+    return first?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // The notice image column: one image per announcement, base64 data URL. Same pattern as
 // attendance.leave_days above — the hosted DB never runs migrations by hand.
 async function ensureAnnouncementsImageColumn(): Promise<void> {
@@ -63,6 +159,7 @@ async function ensureAnnouncementsImageColumn(): Promise<void> {
 ensureCalendarEventsTable()
   .then(ensureAttendanceLeaveColumn)
   .then(ensureAnnouncementsImageColumn)
+  .then(ensureBranchStructure)
   .catch((err) => logger.warn({ err }, "Schema checks failed"))
   .finally(() => {
     app.listen(port, (err) => {

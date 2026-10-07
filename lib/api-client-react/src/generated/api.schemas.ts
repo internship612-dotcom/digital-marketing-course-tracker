@@ -13,14 +13,7 @@ export interface Error {
   error: string;
 }
 
-export type Module = typeof Module[keyof typeof Module];
-
-
-export const Module = {
-  ai: 'ai',
-  dm: 'dm',
-  sm: 'sm',
-} as const;
+export type Module = string;
 
 export type Role = typeof Role[keyof typeof Role];
 
@@ -90,6 +83,7 @@ export interface StudentRegistrationInput {
   confirmPassword: string;
   address?: string | null;
   guardianContact?: string | null;
+  branchId?: number | null;
 }
 
 export interface StudentPasswordInput {
@@ -112,6 +106,7 @@ export interface StudentCreateInput {
   password: string;
   address?: string | null;
   guardianContact?: string | null;
+  branchId?: number | null;
 }
 
 export interface StudentUpdateInput {

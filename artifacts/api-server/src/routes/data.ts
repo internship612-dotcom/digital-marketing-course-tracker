@@ -19,9 +19,11 @@ import {
   announcementsTable,
   assessmentsTable,
   attendanceTable,
+  branchesTable,
   calendarEventsTable,
   courseDocumentsTable,
   db,
+  modulesCatalog,
   sessionsTable,
   studentsTable,
   teachersTable,
@@ -74,8 +76,49 @@ import {
 const router: IRouter = Router();
 const DEFAULT_WEEKS = 12;
 const DEFAULT_CYCLES = 6;
-const modules = ["ai", "dm", "sm"] as const;
-type Module = (typeof modules)[number];
+// A module is an admin-defined row in the modules catalog, scoped by branch. Historical
+// student/teacher/attendance rows still carry the old 'ai'/'dm'/'sm' text keys — those were
+// the seed rows inserted at migration time, so "text key" and "module" are the same thing.
+type Module = string;
+
+// Source of truth for the module id set at request time: the catalog, not a hardcoded list.
+async function validModuleIds(): Promise<string[]> {
+  try {
+    const rows = await db.select({ id: modulesCatalog.id }).from(modulesCatalog);
+    return rows.map((row) => row.id);
+  } catch {
+    return ["ai", "dm", "sm"];
+  }
+}
+
+async function isValidModule(id: string): Promise<boolean> {
+  return (await validModuleIds()).includes(id);
+}
+
+// Modules a given student can see: only those inside their own branch. Students that
+// predate the branch column read as the seed Zedking branch (migration backfilled it),
+// so "null branchId" is treated as Zedking.
+async function studentModuleKeys(studentId: string): Promise<string[]> {
+  const [row] = await db
+    .select({ branchId: studentsTable.branchId })
+    .from(studentsTable)
+    .where(eq(studentsTable.id, studentId))
+    .limit(1);
+  const branchId = row?.branchId ?? null;
+  if (branchId == null) {
+    const rows = await db
+      .select({ id: modulesCatalog.id })
+      .from(modulesCatalog)
+      .innerJoin(branchesTable, eq(modulesCatalog.branchId, branchesTable.id))
+      .where(eq(branchesTable.name, "Zedking"));
+    return rows.map((r) => r.id);
+  }
+  const rows = await db
+    .select({ id: modulesCatalog.id })
+    .from(modulesCatalog)
+    .where(eq(modulesCatalog.branchId, branchId));
+  return rows.map((r) => r.id);
+}
 
 function moduleLabel(module: Module): string {
   return module === "ai"
@@ -388,6 +431,18 @@ router.post(
       .from(studentsTable)
       .orderBy(desc(studentsTable.registrationDate))
       .limit(1);
+    const branchId = data.branchId ?? null;
+    if (branchId != null) {
+      const [branch] = await db
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(eq(branchesTable.id, branchId))
+        .limit(1);
+      if (!branch) {
+        res.status(400).json({ error: "Selected branch not found." });
+        return;
+      }
+    }
     const [student] = await db
       .insert(studentsTable)
       .values({
@@ -402,6 +457,7 @@ router.post(
         guardianContact: optionalText(data.guardianContact),
         passwordHash: await hashPassword(data.password),
         plainPassword: data.password,
+        branchId,
       })
       .returning();
     res.status(201).json(CreateStudentResponse.parse(studentView(student)));
@@ -417,7 +473,7 @@ router.get(
   "/admin/students/status",
   requireRole("admin"),
   async (_req, res): Promise<void> => {
-    res.json(await buildStatus(modules));
+    res.json(await buildStatus(await validModuleIds()));
   },
 );
 
@@ -589,6 +645,18 @@ router.post(
       .from(studentsTable)
       .orderBy(desc(studentsTable.registrationDate))
       .limit(1);
+    const branchId = data.branchId ?? null;
+    if (branchId != null) {
+      const [branch] = await db
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(eq(branchesTable.id, branchId))
+        .limit(1);
+      if (!branch) {
+        res.status(400).json({ error: "Selected branch not found." });
+        return;
+      }
+    }
     const [student] = await db
       .insert(studentsTable)
       .values({
@@ -603,6 +671,7 @@ router.post(
         guardianContact: optionalText(data.guardianContact),
         passwordHash: await hashPassword(data.password),
         plainPassword: data.password,
+        branchId,
       })
       .returning();
     res.status(201).json(CreateStudentResponse.parse(studentView(student)));
@@ -918,7 +987,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1080,10 +1149,11 @@ async function buildStudentReport(studentId: string) {
   const events = await eventDates();
   const slices = courseMonths(joinedOn, events);
   const presentOn = presentDatesByModule(joinedOn, attendanceRows);
+  const moduleKeys = await studentModuleKeys(studentId);
 
   const months = slices.map((slice) => {
     const total = slice.days.length;
-    const perModule = modules.map((module) => {
+  const perModule = moduleKeys.map((module) => {
       const present = slice.days.filter((day) => presentOn.get(day)?.has(module)).length;
       return {
         module,
@@ -1503,7 +1573,7 @@ router.post(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1561,7 +1631,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1589,7 +1659,7 @@ router.post(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1664,7 +1734,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1770,7 +1840,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1799,7 +1869,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1834,7 +1904,7 @@ router.post(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -1903,7 +1973,7 @@ router.get(
       .from(attendanceTable)
       .where(eq(attendanceTable.studentId, req.auth.studentId))
       .orderBy(asc(attendanceTable.week));
-    const summary = modules.map((module) => {
+    const summary = (await studentModuleKeys(req.auth.studentId)).map((module) => {
       const moduleRows = rows.filter((row) => row.module === module);
       const present = moduleRows.filter((row) => row.status === "present").length;
       return {
@@ -1946,7 +2016,7 @@ router.get(
       .where(eq(assessmentsTable.studentId, req.auth.studentId))
       .orderBy(asc(assessmentsTable.cycle));
     const report = Object.fromEntries(
-      modules.map((module) => [
+      (await studentModuleKeys(req.auth.studentId)).map((module) => [
         module,
         Array.from(
           { length: Math.max(DEFAULT_CYCLES, ...rows.map((row) => row.cycle)) },
@@ -2193,7 +2263,7 @@ router.get(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
-    if (!modules.includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Choose a valid module." });
       return;
     }
@@ -2505,6 +2575,101 @@ router.delete(
   },
 );
 
+// ---------------------------------------------------------------- branches & modules
+// Branches have admin-created modules. The public/catalog variant drives the student
+// registration branch picker; the admin one is used by the dashboard.
+router.get(
+  "/catalog/branches",
+  async (_req, res): Promise<void> => {
+    const branches = await db.select().from(branchesTable).orderBy(asc(branchesTable.name));
+    const modules = await db.select().from(modulesCatalog).orderBy(asc(modulesCatalog.name));
+    res.json(branches.map((branch) => ({
+      id: branch.id,
+      name: branch.name,
+      modules: modules.filter((m) => m.branchId === branch.id).map((m) => ({ id: m.id, name: m.name })),
+    })));
+  },
+);
+
+router.get(
+  "/admin/branches",
+  requireRole("admin"),
+  async (_req, res): Promise<void> => {
+    const branches = await db.select().from(branchesTable).orderBy(asc(branchesTable.name));
+    const modules = await db.select().from(modulesCatalog).orderBy(asc(modulesCatalog.name));
+    res.json(branches.map((branch) => ({
+      id: branch.id,
+      name: branch.name,
+      modules: modules.filter((m) => m.branchId === branch.id),
+    })));
+  },
+);
+
+router.post(
+  "/admin/branches",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const name = typeof (req.body as { name?: unknown })?.name === "string"
+      ? (req.body as { name: string }).name.trim()
+      : "";
+    if (!name) {
+      res.status(400).json({ error: "Enter a branch name." });
+      return;
+    }
+    const [branch] = await db
+      .insert(branchesTable)
+      .values({ name })
+      .onConflictDoNothing()
+      .returning();
+    if (!branch) {
+      res.status(409).json({ error: "A branch with that name already exists." });
+      return;
+    }
+    res.status(201).json(branch);
+  },
+);
+
+router.post(
+  "/admin/modules",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const body = req.body as { branchId?: unknown; name?: unknown };
+    const branchId = typeof body.branchId === "number" ? body.branchId : Number(body.branchId);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!Number.isInteger(branchId) || !name) {
+      res.status(400).json({ error: "Enter a branch and a module name." });
+      return;
+    }
+    const [branch] = await db
+      .select({ id: branchesTable.id })
+      .from(branchesTable)
+      .where(eq(branchesTable.id, branchId))
+      .limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    // Build a stable id from the name, and fall back to a numeric suffix on collision.
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    let candidate = slug || 'module';
+    let n = 2;
+    for (;;) {
+      const [exists] = await db
+        .select({ id: modulesCatalog.id })
+        .from(modulesCatalog)
+        .where(eq(modulesCatalog.id, candidate))
+        .limit(1);
+      if (!exists) break;
+      candidate = `${slug || 'module'}-${n++}`;
+    }
+    const [mod] = await db
+      .insert(modulesCatalog)
+      .values({ id: candidate, branchId, name })
+      .returning();
+    res.status(201).json(mod);
+  },
+);
+
 // ---------------------------------------------------------------- announcements
 // A module owner writes notices for students. Drafts stay on their own desk; only a
 // published notice reaches the student portal, and unpublishing takes it back down.
@@ -2697,7 +2862,7 @@ router.post(
   requireRole("admin"),
   async (req, res): Promise<void> => {
     const module = (req.body as { module?: unknown })?.module as Module;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Choose a valid module." });
       return;
     }
@@ -2786,17 +2951,22 @@ router.delete(
   },
 );
 
-// Students read every published notice, from all three modules, newest first.
-router.get(
+  // Students read published notices for the modules inside THEIR branch only.
+  router.get(
   "/student/announcements",
   requireRole("student"),
-  async (_req, res): Promise<void> => {
+  async (req, res): Promise<void> => {
+    if (!req.auth?.studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const moduleKeys = await studentModuleKeys(req.auth.studentId);
     const rows = await db
       .select()
       .from(announcementsTable)
       .where(isNotNull(announcementsTable.publishedAt))
       .orderBy(desc(announcementsTable.publishedAt));
-    res.json(rows.map(announcementView));
+    res.json(rows.filter((row) => moduleKeys.includes(row.module)).map(announcementView));
   },
 );
 
@@ -2898,11 +3068,12 @@ async function saveDocument(
   return record;
 }
 
-// Metadata only — the bytes would bloat every list response.
+// Metadata only — the bytes would bloat every list response. Admin sees every module;
+// a student only sees the modules inside their branch.
 router.get(
   ["/admin/documents", "/student/documents"],
   requireRole("admin", "student"),
-  async (_req, res): Promise<void> => {
+  async (req, res): Promise<void> => {
     const rows = await db
       .select({
         module: courseDocumentsTable.module,
@@ -2914,6 +3085,11 @@ router.get(
         updatedAt: courseDocumentsTable.updatedAt,
       })
       .from(courseDocumentsTable);
+    if (req.auth?.role === "student" && req.auth.studentId) {
+      const moduleKeys = await studentModuleKeys(req.auth.studentId);
+      res.json(rows.filter((row) => moduleKeys.includes(row.module)).map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() })));
+      return;
+    }
     res.json(rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() })));
   },
 );
@@ -2954,7 +3130,7 @@ router.get(
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
     const kind = req.params.kind as DocumentKind;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }
@@ -2995,8 +3171,8 @@ router.post(
   async (req, res): Promise<void> => {
     const module = (req.body as { module?: unknown })?.module as Module;
     const kind = (req.body as { kind?: unknown })?.kind as DocumentKind;
-    if (!(modules as readonly string[]).includes(module)) {
-      res.status(400).json({ error: "Choose a valid module." });
+    if (!(await isValidModule(module))) {
+      res.status(400).json({ error: "Invalid module." });
       return;
     }
     if (!(documentKinds as readonly string[]).includes(kind)) {
@@ -3052,7 +3228,7 @@ router.delete(
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
     const kind = req.params.kind as DocumentKind;
-    if (!(modules as readonly string[]).includes(module)) {
+    if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
     }

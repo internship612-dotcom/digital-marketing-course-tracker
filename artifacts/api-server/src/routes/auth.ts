@@ -3,6 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import {
   db,
   adminsTable,
+  branchesTable,
   studentsTable,
   teachersTable,
 } from "@workspace/db";
@@ -57,7 +58,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
         userId: string;
         displayName: string;
         email: string | null;
-        module: "ai" | "dm" | "sm" | null;
+        module: string | null;
         studentId: string | null;
         passwordHash: string;
       }
@@ -153,6 +154,18 @@ router.post("/auth/register", async (req, res): Promise<void> => {
     .orderBy(desc(studentsTable.registrationDate))
     .limit(1);
   const id = nextStudentId(lastStudent?.id);
+  const branchId = data.branchId ?? null;
+  if (branchId != null) {
+    const [branch] = await db
+      .select({ id: branchesTable.id })
+      .from(branchesTable)
+      .where(eq(branchesTable.id, branchId))
+      .limit(1);
+    if (!branch) {
+      res.status(400).json({ error: "Selected branch not found." });
+      return;
+    }
+  }
   const [student] = await db
     .insert(studentsTable)
     .values({
@@ -164,6 +177,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
       contactNumber: data.contactNumber.trim(),
       email,
       passwordHash: await hashPassword(data.password),
+      branchId,
     })
     .returning();
   const context = {

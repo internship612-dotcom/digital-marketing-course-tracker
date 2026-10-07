@@ -23,4 +23,5 @@ export interface StudentRegistrationInput {
   confirmPassword: string;
   address?: string | null;
   guardianContact?: string | null;
+  branchId?: number | null;
 }

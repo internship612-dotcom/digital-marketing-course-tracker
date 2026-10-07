@@ -97,7 +97,7 @@ export type AuthContext = {
   userId: string;
   displayName: string;
   email: string | null;
-  module: "ai" | "dm" | "sm" | null;
+  module: string | null;
   studentId: string | null;
 };
 

@@ -23,7 +23,7 @@ export const GetCurrentUserResponse = zod.object({
   "role": zod.enum(['admin', 'teacher', 'student']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
-  "module": zod.union([zod.enum(['ai', 'dm', 'sm']),zod.null()]).optional(),
+  "module": zod.union([zod.string(),zod.null()]).optional(),
   "studentId": zod.string().nullish()
 })
 
@@ -45,7 +45,7 @@ export const LoginResponse = zod.object({
   "role": zod.enum(['admin', 'teacher', 'student']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
-  "module": zod.union([zod.enum(['ai', 'dm', 'sm']),zod.null()]).optional(),
+  "module": zod.union([zod.string(),zod.null()]).optional(),
   "studentId": zod.string().nullish()
 })
 
@@ -77,14 +77,15 @@ export const RegisterStudentBody = zod.object({
   "password": zod.string().min(registerStudentBodyPasswordMin),
   "confirmPassword": zod.string().min(registerStudentBodyConfirmPasswordMin),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 export const RegisterStudentResponse = zod.object({
   "role": zod.enum(['admin', 'teacher', 'student']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
-  "module": zod.union([zod.enum(['ai', 'dm', 'sm']),zod.null()]).optional(),
+  "module": zod.union([zod.string(),zod.null()]).optional(),
   "studentId": zod.string().nullish()
 })
 
@@ -105,7 +106,7 @@ export const registerAdminBodyConfirmPasswordMin = 6;
 export const RegisterAdminBody = zod.object({
   "username": zod.string().min(registerAdminBodyUsernameMin),
   "displayName": zod.string().min(registerAdminBodyDisplayNameMin),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "password": zod.string().min(registerAdminBodyPasswordMin),
   "confirmPassword": zod.string().min(registerAdminBodyConfirmPasswordMin)
 })
@@ -114,7 +115,7 @@ export const RegisterAdminResponse = zod.object({
   "role": zod.enum(['admin', 'teacher', 'student']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
-  "module": zod.union([zod.enum(['ai', 'dm', 'sm']),zod.null()]).optional(),
+  "module": zod.union([zod.string(),zod.null()]).optional(),
   "studentId": zod.string().nullish()
 })
 
@@ -139,7 +140,7 @@ export const LoginSupabaseAdminResponse = zod.object({
   "role": zod.enum(['admin', 'teacher', 'student']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
-  "module": zod.union([zod.enum(['ai', 'dm', 'sm']),zod.null()]).optional(),
+  "module": zod.union([zod.string(),zod.null()]).optional(),
   "studentId": zod.string().nullish()
 })
 
@@ -178,7 +179,7 @@ export const GetAdminSummaryResponse = zod.object({
 export const ListTeachersResponseItem = zod.object({
   "id": zod.number().int(),
   "username": zod.string(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "displayName": zod.string(),
   "plainPassword": zod.string().nullish().describe('Usable owner password, kept so the admin can see it again on the panel logins page')
 })
@@ -199,14 +200,14 @@ export const createTeacherBodyDisplayNameMin = 2;
 export const CreateTeacherBody = zod.object({
   "username": zod.string().min(createTeacherBodyUsernameMin),
   "password": zod.string().min(createTeacherBodyPasswordMin),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "displayName": zod.string().min(createTeacherBodyDisplayNameMin)
 })
 
 export const CreateTeacherResponse = zod.object({
   "id": zod.number().int(),
   "username": zod.string(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "displayName": zod.string(),
   "plainPassword": zod.string().nullish().describe('Usable owner password, kept so the admin can see it again on the panel logins page')
 })
@@ -230,14 +231,14 @@ export const updateTeacherBodyDisplayNameMin = 2;
 export const UpdateTeacherBody = zod.object({
   "username": zod.string().min(updateTeacherBodyUsernameMin).optional(),
   "password": zod.string().min(updateTeacherBodyPasswordMin).optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']).optional(),
+  "module": zod.string().optional(),
   "displayName": zod.string().min(updateTeacherBodyDisplayNameMin).optional()
 })
 
 export const UpdateTeacherResponse = zod.object({
   "id": zod.number().int(),
   "username": zod.string(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "displayName": zod.string(),
   "plainPassword": zod.string().nullish().describe('Usable owner password, kept so the admin can see it again on the panel logins page')
 })
@@ -301,7 +302,8 @@ export const CreateStudentBody = zod.object({
   "email": zod.string().email(),
   "password": zod.string().min(createStudentBodyPasswordMin),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 export const CreateStudentResponse = zod.object({
@@ -411,7 +413,7 @@ export const UpdateStudentPasswordResponse = zod.void()
 export const ListAllAttendanceResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "week": zod.number().int(),
   "status": zod.enum(['present', 'absent']),
   "recordedBy": zod.string().nullish()
@@ -425,7 +427,7 @@ export const ListAllAttendanceResponse = zod.array(ListAllAttendanceResponseItem
 export const ListAllAssessmentsResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),
@@ -473,7 +475,7 @@ export const GetTeacherAttendanceQueryParams = zod.object({
 export const GetTeacherAttendanceResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "week": zod.number().int(),
   "status": zod.enum(['present', 'absent']),
   "recordedBy": zod.string().nullish()
@@ -499,7 +501,7 @@ export const SaveTeacherAttendanceBody = zod.object({
 export const SaveTeacherAttendanceResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "week": zod.number().int(),
   "status": zod.enum(['present', 'absent']),
   "recordedBy": zod.string().nullish()
@@ -521,7 +523,7 @@ export const GetTeacherAssessmentsQueryParams = zod.object({
 export const GetTeacherAssessmentsResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),
@@ -554,7 +556,7 @@ export const SaveTeacherAssessmentsBody = zod.object({
 export const SaveTeacherAssessmentsResponseItem = zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),
@@ -569,7 +571,7 @@ export const SaveTeacherAssessmentsResponse = zod.array(SaveTeacherAssessmentsRe
  */
 export const GetStudentAttendanceReportResponse = zod.object({
   "summary": zod.array(zod.object({
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "present": zod.number().int(),
   "recorded": zod.number().int(),
   "percentage": zod.number().int()
@@ -590,7 +592,7 @@ export const GetStudentAssessmentReportResponse = zod.object({
   "ai": zod.array(zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),
@@ -600,7 +602,7 @@ export const GetStudentAssessmentReportResponse = zod.object({
   "dm": zod.array(zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),
@@ -610,7 +612,7 @@ export const GetStudentAssessmentReportResponse = zod.object({
   "sm": zod.array(zod.object({
   "studentId": zod.string(),
   "studentName": zod.string().optional(),
-  "module": zod.enum(['ai', 'dm', 'sm']),
+  "module": zod.string(),
   "cycle": zod.number().int(),
   "marks": zod.number().int().nullish(),
   "feedback": zod.string().nullish(),

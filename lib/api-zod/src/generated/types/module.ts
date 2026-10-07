@@ -6,11 +6,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type Module = typeof Module[keyof typeof Module];
-
-
-export const Module = {
-  ai: 'ai',
-  dm: 'dm',
-  sm: 'sm',
-} as const;
+export type Module = string;

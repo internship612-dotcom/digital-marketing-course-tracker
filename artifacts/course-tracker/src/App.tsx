@@ -84,14 +84,27 @@ function workspaceRole(pathname: string): Role | null {
   const path = (base && pathname.startsWith(base) ? pathname.slice(base.length) : pathname) || '/';
   if (path.startsWith('/student')) return 'student';
   if (path.startsWith('/teacher')) return 'teacher';
-  // Module panels sit at /<module> and /admin/<module>; the rest of /admin is the admin desk.
-  if (modules.some((m) => path === `/${m}` || path === `/admin/${m}`)) return 'teacher';
-  if (path === '/admin' || path.startsWith('/admin/')) return 'admin';
+  if (path === '/admin' || path.startsWith('/admin/')) {
+    // Under /admin, only the fixed admin routes belong to the admin desk; everything
+    // else (a module panel key like /admin/ai or /admin/seo) is a module owner route.
+    const segment = path.split('/')[2] ?? '';
+    if (segment === '' || KNOWN_ADMIN_SEGMENTS.has(segment)) return 'admin';
+    return 'teacher';
+  }
+  // Module panels also sit at /<module> on the student/entry path? No — but keep the
+  // original check for standalone module keys.
+  if (modules.some((m) => path === `/${m}`)) return 'teacher';
   // The entry page carries the student sign-in form, so resolve it as the student
   // workspace — otherwise /auth/me falls back to whichever session happens to exist.
   if (path === '/') return 'student';
   return null;
 }
+
+// Fixed admin routes under /admin. Anything else under /admin is a module panel key.
+const KNOWN_ADMIN_SEGMENTS = new Set([
+  'dashboard', 'module', 'settings', 'panel-logins', 'students',
+  'announcements', 'documents', 'branch', 'login',
+]);
 
 setRoleHintGetter(() => (typeof window === 'undefined' ? null : workspaceRole(window.location.pathname)));
 
@@ -117,6 +130,78 @@ const adminModules: { key: Module; number: number; name: string; tagline: string
   { key: 'dm', number: 2, name: 'Digital Marketing', tagline: 'Campaigns, reach, and conversions measured in one calm view.' },
   { key: 'sm', number: 3, name: 'Social Media', tagline: 'Presence, engagement, and community growth at a glance.' },
 ];
+
+// Branches and their modules are defined by the admin panel, not hard-coded. The
+// catalog is loaded once for the whole app; while it is loading (or if the call
+// fails) the static three-module default above keeps every screen working.
+type BranchSummary = { id: number; name: string; modules: { id: string; name: string }[] };
+
+const catalogTaglines: Record<string, string> = {
+  ai: 'Automation, forecasting, and AI-driven insight across your portfolio.',
+  dm: 'Campaigns, reach, and conversions measured in one calm view.',
+  sm: 'Presence, engagement, and community growth at a glance.',
+};
+
+let branchCatalog: BranchSummary[] | null = null;
+let branchCatalogPromise: Promise<void> | null = null;
+const branchCatalogListeners = new Set<() => void>();
+
+function loadBranchCatalog(): Promise<void> {
+  if (branchCatalogPromise) return branchCatalogPromise;
+  branchCatalogPromise = fetch('/api/catalog/branches')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (Array.isArray(data)) {
+        branchCatalog = data as BranchSummary[];
+        // Keep the flat name maps in step so labels resolve for new modules too.
+        for (const branch of branchCatalog) {
+          for (const mod of branch.modules) {
+            if (!moduleNames[mod.id]) moduleNames[mod.id] = mod.name;
+            if (!moduleShort[mod.id]) moduleShort[mod.id] = mod.id.toUpperCase().slice(0, 6);
+          }
+        }
+        branchCatalogListeners.forEach((fn) => fn());
+      }
+    })
+    .catch(() => undefined);
+  return branchCatalogPromise;
+}
+
+function refreshBranchCatalog(): Promise<void> {
+  branchCatalogPromise = null;
+  return loadBranchCatalog();
+}
+
+function useBranches(): BranchSummary[] | null {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const listener = () => { if (alive) bump((v) => v + 1); };
+    branchCatalogListeners.add(listener);
+    void loadBranchCatalog();
+    return () => { alive = false; branchCatalogListeners.delete(listener); };
+  }, []);
+  return branchCatalog;
+}
+
+function useCatalogModules(): typeof adminModules {
+  const branches = useBranches();
+  if (!branches) return adminModules;
+  const metas: typeof adminModules = [];
+  let number = 0;
+  for (const branch of branches) {
+    for (const mod of branch.modules) {
+      number += 1;
+      metas.push({
+        key: mod.id,
+        number,
+        name: mod.name,
+        tagline: catalogTaglines[mod.id] ?? `Part of the ${branch.name} branch.`,
+      });
+    }
+  }
+  return metas.length ? metas : adminModules;
+}
 
 // The course PDFs students read. They live in the database, not in the repo, because
 // staff replace them from the portal: the file is uploaded once and every module desk,
@@ -356,25 +441,118 @@ function StatCard({ label, value, detail, icon: Icon, accent = false }: { label:
 }
 
 function AdminModulesPage() {
+  const branches = useBranches();
+  const [branchName, setBranchName] = useState('');
+  const [newModuleFor, setNewModuleFor] = useState<number | null>(null);
+  const [moduleName, setModuleName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const createBranch = (event: FormEvent) => {
+    event.preventDefault();
+    if (!branchName.trim()) return;
+    const name = branchName.trim();
+    setBusy(true); setError(''); setNotice('');
+    fetch('/api/admin/branches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
+        return refreshBranchCatalog().then(() => setNotice(`Branch "${name}" created.`));
+      })
+      .then(() => setBranchName(''))
+      .catch((err: Error) => setError(err.message === 'create failed' ? 'We could not create that branch. Try again.' : err.message))
+      .finally(() => setBusy(false));
+  };
+
+  const createModule = (event: FormEvent, branchId: number) => {
+    event.preventDefault();
+    if (!moduleName.trim()) return;
+    setBusy(true); setError(''); setNotice('');
+    fetch('/api/admin/modules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchId, name: moduleName.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
+        return refreshBranchCatalog().then(() => setNotice(`Module "${moduleName.trim()}" added.`));
+      })
+      .then(() => { setModuleName(''); setNewModuleFor(null); })
+      .catch((err: Error) => setError(err.message === 'create failed' ? 'We could not add that module. Try again.' : err.message))
+      .finally(() => setBusy(false));
+  };
+
   return <>
-    <PageHeader kicker="Admin / module reports" title="Pick a module." detail="Open a live report for any module — cohort size, register coverage, and the month's projects. Attendance and marks are uploaded from each module's panel desk." />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {adminModules.map((m) => (
-        <Link key={m.key} href={`/admin/module/${m.key}`} className="group flex flex-col rounded-xl border border-border bg-card p-6 transition hover:border-accent/60 hover:shadow-sm" data-testid={`card-module-${m.key}`}>
-          <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {m.number}</span>
-          <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{m.name}</h2>
-          <p className="mt-3 text-sm leading-6 text-muted-foreground">{m.tagline}</p>
-          <span className="mt-6 inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-3 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary"><span className="h-1.5 w-1.5 rounded-full bg-accent" />{moduleShort[m.key]} report</span>
-        </Link>
-      ))}
-    </div>
+    <PageHeader kicker="Admin / branches" title="Branches & modules." detail="Every branch holds its own modules. Create a branch, add the modules it runs, then open a module to manage its logins, report and course files." />
+
+    {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
+    {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-success">{notice}</p>}
+
+    <section className="mb-8 rounded-xl border border-border bg-card p-5">
+      <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">New branch</p>
+      <form onSubmit={createBranch} className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="grid gap-1.5 text-sm font-medium">Branch name
+          <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. Zedking" className="w-64" data-testid="input-branch-name" />
+        </label>
+        <Button type="submit" disabled={busy || !branchName.trim()} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
+      </form>
+    </section>
+
+    {branches == null
+      ? <div className="grid gap-4">{[1, 2].map((i) => <div key={i} className="h-40 animate-pulse rounded-xl bg-muted" />)}</div>
+      : <div className="grid gap-6">
+          {branches.map((branch) => (
+            <section key={branch.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-${branch.id}`}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch</p>
+                  <h2 className="mt-1 font-display text-2xl font-bold">{branch.name}</h2>
+                </div>
+                <span className="rounded-full bg-muted px-3 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</span>
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {branch.modules.map((mod) => (
+                  <Link key={mod.id} href={`/admin/module/${mod.id}`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-module-${mod.id}`}>
+                    <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
+                    <h3 className="mt-2 font-display text-lg font-bold leading-tight">{mod.name}</h3>
+                    <span className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary">Open module <ArrowRight size={13} /></span>
+                  </Link>
+                ))}
+                {branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">No modules yet — add the first one below.</p>}
+              </div>
+              <div className="mt-4 border-t border-border/70 pt-4">
+                {newModuleFor === branch.id ? (
+                  <form onSubmit={(e) => createModule(e, branch.id)} className="flex flex-wrap items-end gap-3">
+                    <label className="grid gap-1.5 text-sm font-medium">Module name
+                      <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Search Engine Optimization" className="w-64" autoFocus data-testid={`input-module-name-${branch.id}`} />
+                    </label>
+                    <Button type="submit" disabled={busy || !moduleName.trim()} data-testid={`button-save-module-${branch.id}`}>Add module</Button>
+                    <button type="button" className="text-sm font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setNewModuleFor(null); setModuleName(''); }}>Cancel</button>
+                  </form>
+                ) : (
+                  <button type="button" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline" onClick={() => { setNewModuleFor(branch.id); setModuleName(''); setError(''); }} data-testid={`button-add-module-${branch.id}`}>
+                    <Plus size={15} /> Add module
+                  </button>
+                )}
+              </div>
+            </section>
+          ))}
+          {branches.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create the first one above.</p>}
+        </div>}
   </>;
 }
 
 function AdminModuleReportPage() {
   const params = useParams<{ module: string }>();
   const moduleKey = params.module as Module;
-  const meta = adminModules.find((m) => m.key === moduleKey);
+  const catalog = useCatalogModules();
+  const meta = catalog.find((m) => m.key === moduleKey);
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
   const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
@@ -429,10 +607,11 @@ function OwnerLoginCard({ m, owners }: { m: (typeof adminModules)[number]; owner
 
 function AdminPanelLoginsPage() {
   const teachers = useListTeachers();
+  const catalog = useCatalogModules();
   const ownersFor = (module: Module) => (teachers.data ?? []).filter((t) => t.module === module);
   return <>
     <PageHeader kicker="Admin / panel access" title="Create panel logins yourself." detail="Logins are created from each module's own page. A module can hold several, and each owner can only open their own module desk." />
-    <div className="grid gap-4 lg:grid-cols-3">{adminModules.map((m) => <OwnerLoginCard key={m.key} m={m} owners={ownersFor(m.key)} />)}</div>
+    <div className="grid gap-4 lg:grid-cols-3">{catalog.map((m) => <OwnerLoginCard key={m.key} m={m} owners={ownersFor(m.key)} />)}</div>
   </>;
 }
 
@@ -447,7 +626,8 @@ function apiErrorMessage(err: unknown, fallback: string): string {
 function ModuleDetailPage() {
   const params = useParams<{ module: string }>();
   const moduleKey = params.module as Module;
-  const meta = adminModules.find((m) => m.key === moduleKey);
+  const catalog = useCatalogModules();
+  const meta = catalog.find((m) => m.key === moduleKey);
   const teachers = useListTeachers();
   const create = useCreateTeacher();
   const update = useUpdateTeacher();
@@ -1848,13 +2028,15 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
 // One section per module. The student portal and the admin desk pass all three; a
 // module desk passes only its own, so an AI teacher never sees an empty "Social
 // Media" heading for notices that are not theirs to write.
-function NoticesByModule({ notices, emptyDetail, modules: visible = adminModules, actions, renderRow }: {
+function NoticesByModule({ notices, emptyDetail, modules: visibleProp, actions, renderRow }: {
   notices: Announcement[];
   emptyDetail: string;
   modules?: typeof adminModules;
   actions?: (notice: Announcement) => ReactNode;
   renderRow?: (notice: Announcement) => ReactNode;
 }) {
+  const catalog = useCatalogModules();
+  const visible = visibleProp ?? catalog;
   return <div className="grid gap-6">{visible.map((meta) => {
     const items = notices.filter((n) => n.module === meta.key);
     return <section key={meta.key} data-testid={`notice-group-${meta.key}`}>
@@ -1952,7 +2134,8 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const drafts = (notices ?? []).filter((n) => !n.published);
   // The teacher API already scopes to their module; this stops the UI drawing empty
   // headings for the two modules they can neither read nor write.
-  const visibleModules = isAdmin ? adminModules : adminModules.filter((m) => m.key === (user.module ?? 'ai'));
+  const catalog = useCatalogModules();
+  const visibleModules = isAdmin ? catalog : catalog.filter((m) => m.key === (user.module ?? 'ai'));
 
   return <>
     <PageHeader
@@ -1966,7 +2149,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       <p className="text-xs font-semibold text-primary">New notice</p>
       <h2 className="mt-1 font-display text-2xl font-bold">Write an announcement</h2>
       <div className="mt-5 grid gap-3">
-        {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{(Object.keys(moduleNames) as Module[]).map((key) => <option key={key} value={key}>{moduleNames[key]}</option>)}</select></label>}
+        {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{catalog.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
         <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="e.g. Class timings changed for next week" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
         <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
           const file = announcementImageFile(e);
@@ -2128,12 +2311,13 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
 // the submission rules will be filled in later.
 function StudentProjectPage() {
   const { docs, failed } = useCourseDocuments('student');
+  const catalog = useCatalogModules();
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
   return <>
     <PageHeader kicker="Student / project" title="Project" detail="The project plan and the guidelines for each module. Open one to read it in full." />
     {failed ? <ErrorState />
       : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <div className="grid gap-4">{adminModules.map((meta) => (
+      : <div className="grid gap-4">{catalog.map((meta) => (
           <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-docs-${meta.key}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
             <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
@@ -2148,12 +2332,13 @@ function StudentProjectPage() {
 
 function StudentModulesPage() {
   const { docs, failed } = useCourseDocuments('student');
+  const catalog = useCatalogModules();
   const find = (module: Module) => docs?.find((d) => d.module === module && d.kind === 'syllabus');
   return <>
     <PageHeader kicker="Student / module information" title="Module information" detail="What each of your three modules covers. Open a syllabus to read it in full." />
     {failed ? <ErrorState />
       : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-40 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <div className="grid gap-4">{adminModules.map((meta) => (
+      : <div className="grid gap-4">{catalog.map((meta) => (
           <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`module-info-${meta.key}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
             <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
@@ -2250,9 +2435,10 @@ function DocumentSlot({ scope, module, kind, doc, onChanged, onError, onNotice }
 // Admin manages all three modules; a module desk only ever sees its own.
 function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin' | 'teacher' }) {
   const { docs, failed, refresh } = useCourseDocuments(scope);
+  const catalog = useCatalogModules();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const visible = scope === 'admin' ? adminModules : adminModules.filter((m) => m.key === (user.module ?? 'ai'));
+  const visible = scope === 'admin' ? catalog : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
 
   return <>
@@ -2298,7 +2484,7 @@ function StudentPage({ user }: { user: CurrentUser }) {
   </>;
 }
 
-type NewStudentInput = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; email: string; password: string; address: string | null; guardianContact: string | null };
+type NewStudentInput = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; email: string; password: string; address: string | null; guardianContact: string | null; branchId?: number | null };
 
 type StudentProfileForm = { fullName: string; fathersName: string; course: string; dateOfJoining: string; contactNumber: string; guardianContact: string; email: string; address: string };
 
@@ -2308,11 +2494,13 @@ function JoiningDateField({ value, onChange }: { value: string; onChange: (iso: 
   </label>;
 }
 
-function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate }: { kicker: string; total: number; creating: boolean; photoBase: string; onCreate: (data: NewStudentInput) => Promise<Student> }) {
+function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate, showBranch = true }: { kicker: string; total: number; creating: boolean; photoBase: string; onCreate: (data: NewStudentInput) => Promise<Student>; showBranch?: boolean }) {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const branches = useBranches();
   const emptyForm = { fullName: '', fathersName: '', course: 'Digital Marketing with AI', dateOfJoining: '', contactNumber: '', guardianContact: '', address: '', email: '', password: '', confirmPassword: '' };
   const [form, setForm] = useState(emptyForm);
+  const [branchId, setBranchId] = useState<string>('');
   // The photo is held here and attached straight after the record exists, because the
   // student only gets an id once the create has gone through.
   const [photo, setPhoto] = useState<string | null>(null);
@@ -2348,7 +2536,7 @@ function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate }: { ki
     const email = form.email.trim().toLowerCase();
     const password = form.password.trim();
     if (!password) { setError('Enter a password for this student.'); return; }
-    onCreate({ fullName: form.fullName.trim(), fathersName: form.fathersName.trim(), course: form.course, dateOfJoining: form.dateOfJoining, contactNumber: form.contactNumber.trim(), email, password, address: form.address.trim() || null, guardianContact: form.guardianContact.trim() || null })
+    onCreate({ fullName: form.fullName.trim(), fathersName: form.fathersName.trim(), course: form.course, dateOfJoining: form.dateOfJoining, contactNumber: form.contactNumber.trim(), email, password, address: form.address.trim() || null, guardianContact: form.guardianContact.trim() || null, branchId: branchId ? Number(branchId) : null })
       .then((student) => {
         if (!photo) return student;
         // A failed photo must not read as a failed enrolment — the record is already saved.
@@ -2377,7 +2565,7 @@ function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate }: { ki
         </div>
       </div>
       {photoError && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-new-student-photo-error">{photoError}</p>}
-      <form onSubmit={handleEnroll} className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><div className="xl:col-span-1"><Field label="Full name" value={form.fullName} onChange={updateForm('fullName')} minLength={2} required data-testid="input-student-full-name" /></div><div className="xl:col-span-1"><Field label="Father&apos;s name" value={form.fathersName} onChange={updateForm('fathersName')} minLength={2} required data-testid="input-student-fathers-name" /></div><label className="grid gap-1.5 text-sm font-medium">Course<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={form.course} onChange={updateForm('course')} data-testid="select-student-course"><option>Digital Marketing with AI</option></select></label><JoiningDateField value={form.dateOfJoining} onChange={(iso) => setForm((v) => ({ ...v, dateOfJoining: iso }))} /><Field label="Contact number" value={form.contactNumber} onChange={updateForm('contactNumber')} minLength={6} maxLength={12} required data-testid="input-student-contact" /><Field label="Parent / guardian contact" value={form.guardianContact} onChange={updateForm('guardianContact')} maxLength={12} placeholder="Optional" data-testid="input-student-guardian-contact" /><Field label="Email address" type="email" value={form.email} onChange={updateForm('email')} required data-testid="input-student-email" /><div className="sm:col-span-2 xl:col-span-3"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Optional — house, street, city, pin code" value={form.address} onChange={(ev) => setForm((v) => ({ ...v, address: ev.target.value }))} data-testid="input-student-address" /></label></div><PasswordField label="Password" value={form.password} onChange={updateForm('password')} minLength={6} required data-testid="input-student-password" toggleTestId="button-toggle-enrol-pwd" /><PasswordField label="Confirm password" value={form.confirmPassword} onChange={updateForm('confirmPassword')} minLength={6} required data-testid="input-student-confirm-password" toggleTestId="button-toggle-enrol-confirm-pwd" /><div className="flex items-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => { const next = randomPassword(); setForm((v) => ({ ...v, password: next, confirmPassword: next })); }} className="h-9" data-testid="button-generate-password"><KeyRound size={14} /> Generate</Button></div><div className="flex items-end sm:col-span-2 xl:col-span-3"><Button type="submit" disabled={creating} data-testid="button-save-student">{creating ? 'Enrolling…' : <><Plus size={15} /> Enroll student</>}</Button></div></form>{error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-enroll-error">{error}</p>}{notice && <p className="mt-3 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-enroll-success">{notice}</p>}</section></>;
+      <form onSubmit={handleEnroll} className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><div className="xl:col-span-1"><Field label="Full name" value={form.fullName} onChange={updateForm('fullName')} minLength={2} required data-testid="input-student-full-name" /></div><div className="xl:col-span-1"><Field label="Father&apos;s name" value={form.fathersName} onChange={updateForm('fathersName')} minLength={2} required data-testid="input-student-fathers-name" /></div><label className="grid gap-1.5 text-sm font-medium">Course<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={form.course} onChange={updateForm('course')} data-testid="select-student-course"><option>Digital Marketing with AI</option></select></label>{showBranch && branches && branches.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branchId} onChange={(e) => setBranchId(e.target.value)} data-testid="select-student-branch"><option value="">— select branch —</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}<JoiningDateField value={form.dateOfJoining} onChange={(iso) => setForm((v) => ({ ...v, dateOfJoining: iso }))} /><Field label="Contact number" value={form.contactNumber} onChange={updateForm('contactNumber')} minLength={6} maxLength={12} required data-testid="input-student-contact" /><Field label="Parent / guardian contact" value={form.guardianContact} onChange={updateForm('guardianContact')} maxLength={12} placeholder="Optional" data-testid="input-student-guardian-contact" /><Field label="Email address" type="email" value={form.email} onChange={updateForm('email')} required data-testid="input-student-email" /><div className="sm:col-span-2 xl:col-span-3"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Optional — house, street, city, pin code" value={form.address} onChange={(ev) => setForm((v) => ({ ...v, address: ev.target.value }))} data-testid="input-student-address" /></label></div><PasswordField label="Password" value={form.password} onChange={updateForm('password')} minLength={6} required data-testid="input-student-password" toggleTestId="button-toggle-enrol-pwd" /><PasswordField label="Confirm password" value={form.confirmPassword} onChange={updateForm('confirmPassword')} minLength={6} required data-testid="input-student-confirm-password" toggleTestId="button-toggle-enrol-confirm-pwd" /><div className="flex items-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => { const next = randomPassword(); setForm((v) => ({ ...v, password: next, confirmPassword: next })); }} className="h-9" data-testid="button-generate-password"><KeyRound size={14} /> Generate</Button></div><div className="flex items-end sm:col-span-2 xl:col-span-3"><Button type="submit" disabled={creating} data-testid="button-save-student">{creating ? 'Enrolling…' : <><Plus size={15} /> Enroll student</>}</Button></div></form>{error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-enroll-error">{error}</p>}{notice && <p className="mt-3 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-enroll-success">{notice}</p>}</section></>;
 }
 
 function AdminStudentsPage() {
@@ -3164,8 +3352,9 @@ function ModulePanel({ panel }: { panel: Module }) {
 function ModulePanelRoute() {
   const params = useParams<{ panel: string }>();
   const raw = (params.panel ?? '').toLowerCase();
-  const valid = (modules as readonly string[]).includes(raw);
-  if (!valid) return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Panel not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
+  const catalog = useCatalogModules();
+  const valid = catalog.some((m) => m.key === raw) || (modules as readonly string[]).includes(raw);
+  if (!valid) return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Panel not found</h1><Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
   return <ModulePanel panel={raw as Module} />;
 }
 

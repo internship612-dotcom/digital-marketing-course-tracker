@@ -61,3 +61,7 @@ lib/db/drizzle/
 .vercel
 .env*
 !.env.example
+
+# Local API server logs (redirect targets of the dev start script)
+artifacts/api-server/runtime.log
+artifacts/api-server/runtime.err

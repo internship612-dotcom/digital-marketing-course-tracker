@@ -10,8 +10,30 @@ import {
   primaryKey,
 } from "drizzle-orm/pg-core";
 
-export const moduleEnum = pgEnum("module", ["ai", "dm", "sm"]);
+// Module keys are now admin-defined text; the catalog below says which module
+// belongs to which branch. The "ai" | "dm" | "sm" values from the old enum are
+// retained just as keys in the catalog — existing rows remain valid.
 export const roleEnum = pgEnum("role", ["admin", "teacher", "student"]);
+
+// One institute, several branches. A branch owns a set of modules; every
+// branch's modules are admin-defined rows in `modulesCatalog`.
+export const branchesTable = pgTable("branches", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Each row is a module an admin created for a branch. The existing three
+// modules keep their old short ids ("ai", "dm", "sm") so every historical
+// attendance/marks row still joins to the same module name.
+export const modulesCatalog = pgTable("modules", {
+  id: text("id").primaryKey(),
+  branchId: integer("branch_id")
+    .notNull()
+    .references(() => branchesTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 export const attendanceStatusEnum = pgEnum("attendance_status", [
   "present",
   "absent",
@@ -28,7 +50,7 @@ export const adminsTable = pgTable("admins", {
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull().default("Administrator"),
-  module: moduleEnum("module").notNull().default("ai").unique(),
+  module: text("module").notNull().default("ai").unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -38,7 +60,7 @@ export const teachersTable = pgTable("teachers", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  module: moduleEnum("module").notNull(),
+  module: text("module").notNull(),
   displayName: text("display_name").notNull(),
   plainPassword: text("plain_password"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -65,6 +87,9 @@ export const studentsTable = pgTable("students", {
   registrationDate: timestamp("registration_date", { withTimezone: true })
     .defaultNow()
     .notNull(),
+  // Which branch the student enrolled in. Existing rows are backfilled to the
+  // "Zedking" branch by the bootstrap migration at server start.
+  branchId: integer("branch_id").references(() => branchesTable.id, { onDelete: "set null" }),
 });
 
 export const attendanceTable = pgTable(
@@ -73,7 +98,7 @@ export const attendanceTable = pgTable(
     studentId: text("student_id")
       .notNull()
       .references(() => studentsTable.id, { onDelete: "cascade" }),
-    module: moduleEnum("module").notNull(),
+    module: text("module").notNull(),
     week: integer("week").notNull(),
     status: attendanceStatusEnum("status").notNull(),
     mon: boolean("mon").notNull().default(false),
@@ -111,7 +136,7 @@ export const assessmentsTable = pgTable(
     studentId: text("student_id")
       .notNull()
       .references(() => studentsTable.id, { onDelete: "cascade" }),
-    module: moduleEnum("module").notNull(),
+    module: text("module").notNull(),
     cycle: integer("cycle").notNull(),
     marks: integer("marks"),
     feedback: text("feedback"),
@@ -147,7 +172,7 @@ export const sessionsTable = pgTable(
 // teacher reference so a notice still reads correctly after that login is removed.
 export const announcementsTable = pgTable("announcements", {
   id: serial("id").primaryKey(),
-  module: moduleEnum("module").notNull(),
+  module: text("module").notNull(),
   title: text("title").notNull(),
   body: text("body").notNull(),
   authorName: text("author_name"),
@@ -174,7 +199,7 @@ export const announcementsTable = pgTable("announcements", {
 export const courseDocumentsTable = pgTable(
   "course_documents",
   {
-    module: moduleEnum("module").notNull(),
+    module: text("module").notNull(),
     kind: documentKindEnum("kind").notNull(),
     fileName: text("file_name").notNull(),
     contentType: text("content_type").notNull(),
