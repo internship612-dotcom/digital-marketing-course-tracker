@@ -747,6 +747,50 @@ days to 13, percentage unchanged at 100% because nobody was marked), that an eve
 course changes nothing, that an event on a Sunday is a no-op, and that every slice stays
 contiguous with no duplicate days. 24 assertions, all passing.
 
+### 14. Branches and modules are admin-defined
+
+The hardcoded `ai | dm | sm` module trio became an admin-managed catalog: an institute runs one
+or more **branches**, and each branch holds its own **modules**.
+
+**Tables** (`branches`, `modules`, created by `ensureBranchStructure()` in `index.ts` at boot,
+chained after the other `ensure*` calls): `branches(id, name unique)` and
+`modules(id text PK, branch_id FK cascade, name)`. `students.branch_id` (nullable,
+`ON DELETE SET NULL`) sits beside the existing `module` key, so old rows keep working and default
+to the seeded branch. The old `module` **enum type** is rewritten to plain `text` column-by-column
+— each `ALTER` is guarded by a `columnExists` check (and the whole block by `typeExists`), because
+a single missing column inside one `DO $$` block aborted the entire boot migration *including the
+seed*, which is why an early build came up with an empty catalog.
+
+**Seed.** On every boot: branch `Zedking` plus modules `ai`, `dm`, `sm` under it
+(`ON CONFLICT DO NOTHING`), then `UPDATE students SET branch_id = Zedking WHERE NULL`. So a fresh
+production DB self-provides the same three modules the app has always used — **module ids stay
+`ai/dm/sm`**, not slugs. Admin-created modules get slug ids (`digital-marketing` → `-2` suffix on
+collision), but do not rename the seeded three: all existing attendance/marks rows key on them.
+
+**API** (in `routes/data.ts`, before the announcements block):
+- `GET /catalog/branches` — public `{ id, name, modules[{id,name}] }`, feeds the SPA's catalog.
+- `GET|POST /admin/branches` (400 empty name, 409 duplicate), `POST /admin/modules`
+  (400 empty/404 missing branch, slugified id).
+- `branchId` is accepted (and FK-checked) on `POST /admin/students`, `POST /teacher/students`
+  and `POST /auth/register`; it is an integer in openapi's `StudentCreateInput` /
+  `StudentRegistrationInput`, so **run the api-spec codegen after editing openapi.yaml**.
+
+**Frontend** (`App.tsx`): `loadBranchCatalog()` caches `{ branches, modules }` with
+`useBranches()` / `useCatalogModules()` hooks — the latter falls back to the static `adminModules`
+array until the catalog lands, so no screen blanks during load. Every former `adminModules.map/
+find/filter` site now reads the catalog (module report, panel logins, module detail, notices,
+documents, project pages). `AdminModulesPage` is now a **branch dashboard**: create a branch, add
+modules per branch, module cards link to `/admin/module/:key`. `StudentEnrolForm` gained a Branch
+`<select>` (`showBranch` prop; the teacher's add-student page omits it — teacher module comes from
+the session). `workspaceRole()` only treats `/admin/<segment>` as the admin desk when the segment
+is in `KNOWN_ADMIN_SEGMENTS` (dashboard, module, settings, panel-logins, students, announcements,
+documents, branch, login); anything else under `/admin/` is a module-owner route.
+
+**Deployed** as commit `5e01dbe` on `origin/main` (GitHub → the Replit autoscale target in
+`.replit`, which runs `pnpm run build` + `pnpm --filter @workspace/api-server run start`). Local
+verification: catalog/login/admin branches all 200 on the API serving the built SPA at :5000, and
+`SELECT id FROM modules` shows exactly `ai, dm, sm`.
+
 ## Gotchas / decisions
 
 - **`/admin/students/status` must be declared before `/admin/students/:id`.** Express matches in
