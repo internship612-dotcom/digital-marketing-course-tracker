@@ -498,6 +498,11 @@ function AdminBranchesPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [editError, setEditError] = useState('');
   const [editBusy, setEditBusy] = useState(false);
+  const [changingPwdId, setChangingPwdId] = useState<number | null>(null);
+  const [resettingId, setResettingId] = useState<number | null>(null);
+  const [newPwd, setNewPwd] = useState('');
+  const [newPwdShown, setNewPwdShown] = useState(false);
+  const [revealedPasswords, setRevealedPasswords] = useState<number[]>([]);
   const [branchName, setBranchName] = useState('');
   const [branchUserId, setBranchUserId] = useState('');
   const [branchPassword, setBranchPassword] = useState('');
@@ -564,6 +569,42 @@ function AdminBranchesPage() {
       })
       .catch((err: Error) => setEditError(err.message))
       .finally(() => setEditBusy(false));
+  };
+
+  const saveNewPassword = (branchId: number) => {
+    if (!newPwd.trim()) return;
+    setRevealedPasswords([]);
+    fetch(`/api/admin/branches/${branchId}/credential`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: newPwd }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error ?? 'update failed');
+        setChangingPwdId(null);
+        setNotice(`Password updated for branch.`);
+        void refreshBranchCatalog().then(() => loadAdminBranches());
+      })
+      .catch((err: Error) => setError(err.message));
+  };
+
+  const resetBranchPassword = (branchId: number) => {
+    const password = randomPassword();
+    setRevealedPasswords([]);
+    fetch(`/api/admin/branches/${branchId}/credential`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error ?? 'reset failed');
+        setResettingId(null);
+        setNotice(`New random password set: ${password}`);
+        void refreshBranchCatalog().then(() => loadAdminBranches());
+      })
+      .catch((err: Error) => setError(err.message));
   };
 
   return <>
@@ -634,7 +675,34 @@ function AdminBranchesPage() {
                 </div>
               </div>
             )}
-            <AdminBranchLoginCard branch={branch} onChanged={loadAdminBranches} />
+            <div className="mt-4 border-t border-border/70 pt-4 space-y-2">
+              <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Desk password</p>
+              <p className="text-xs text-muted-foreground">
+                Password: <b className="text-foreground" data-testid={`text-branch-password-${branch.id}`}>{revealedPasswords.includes(branch.id) ? (branch.plainPassword ?? '—') : '••••••••'}</b>{' '}
+                <button type="button" onClick={() => setRevealedPasswords((ids) => ids.includes(branch.id) ? ids.filter((id) => id !== branch.id) : [...ids, branch.id])} className="rounded p-1 align-middle text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-${branch.id}`}>{revealedPasswords.includes(branch.id) ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => { setChangingPwdId(branch.id); setNewPwd(''); setNewPwdShown(false); setEditError(''); }} data-testid={`button-branch-password-change-${branch.id}`}>Change</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setResettingId(resettingId === branch.id ? null : branch.id)} data-testid={`button-branch-password-reset-${branch.id}`}>Reset to random</Button>
+              </div>
+              {changingPwdId === branch.id && (
+                <form onSubmit={(e) => { e.preventDefault(); saveNewPassword(branch.id); }} className="flex flex-wrap items-center gap-2" data-testid={`form-branch-password-${branch.id}`}>
+                  <input type={newPwdShown ? 'text' : 'password'} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} placeholder="New password" data-testid={`input-new-branch-password-${branch.id}`} className="rounded-md border border-input bg-card px-3 py-1.5 text-sm" />
+                  <button type="button" onClick={() => setNewPwdShown((v) => !v)} className="rounded p-1 text-muted-foreground">{newPwdShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  <Button type="submit" size="sm" disabled={!newPwd.trim()} data-testid={`button-save-branch-password-${branch.id}`}>Save</Button>
+                  <button type="button" onClick={() => setChangingPwdId(null)}>Cancel</button>
+                </form>
+              )}
+              {resettingId === branch.id && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3" data-testid={`confirm-reset-branch-${branch.id}`}>
+                  <p className="text-xs text-muted-foreground">Generate a new random password for {branch.name}?</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Button type="button" size="sm" variant="destructive" onClick={() => resetBranchPassword(branch.id)} data-testid={`button-confirm-reset-branch-${branch.id}`}>Reset</Button>
+                    <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => setResettingId(null)}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
           </section>
         ))}
       {branches != null && branches.length === 0 && <p className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create your first one above.</p>}
