@@ -20,7 +20,7 @@ export const HealthCheckResponse = zod.object({
  * @summary Get the current signed-in user
  */
 export const GetCurrentUserResponse = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
@@ -36,13 +36,13 @@ export const GetCurrentUserResponse = zod.object({
 
 
 export const LoginBody = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "identifier": zod.string().min(1),
   "password": zod.string().min(1)
 })
 
 export const LoginResponse = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
@@ -82,7 +82,7 @@ export const RegisterStudentBody = zod.object({
 })
 
 export const RegisterStudentResponse = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
@@ -112,7 +112,7 @@ export const RegisterAdminBody = zod.object({
 })
 
 export const RegisterAdminResponse = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
@@ -137,7 +137,7 @@ export const LoginSupabaseAdminBody = zod.object({
 })
 
 export const LoginSupabaseAdminResponse = zod.object({
-  "role": zod.enum(['admin', 'teacher', 'student']),
+  "role": zod.enum(['admin', 'teacher', 'student', 'branch']),
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),

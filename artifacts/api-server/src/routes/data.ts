@@ -2600,6 +2600,8 @@ router.get(
     res.json(branches.map((branch) => ({
       id: branch.id,
       name: branch.name,
+      username: branch.username ?? null,
+      plainPassword: branch.plainPassword ?? null,
       modules: modules.filter((m) => m.branchId === branch.id),
     })));
   },
@@ -2667,6 +2669,183 @@ router.post(
       .values({ id: candidate, branchId, name })
       .returning();
     res.status(201).json(mod);
+  },
+);
+
+// A branch holds exactly one desk login: the admin assigns one userid/password
+// here, and from then on it can only be changed.
+router.post(
+  "/admin/branches/:id/credential",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const body = req.body as { username?: unknown; password?: unknown };
+    const username = typeof body.username === "string" ? body.username.trim() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!username || password.length < 6) {
+      res.status(400).json({ error: "Enter a user ID and a password of at least 6 characters." });
+      return;
+    }
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, branchId))
+      .limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    if (branch.username) {
+      res.status(409).json({ error: "This branch already has a login — change its password instead." });
+      return;
+    }
+    const [dup] = await db
+      .select({ id: branchesTable.id })
+      .from(branchesTable)
+      .where(eq(branchesTable.username, username))
+      .limit(1);
+    if (dup && dup.id !== branchId) {
+      res.status(409).json({ error: "That user ID is already in use." });
+      return;
+    }
+    const [updated] = await db
+      .update(branchesTable)
+      .set({ username, passwordHash: await hashPassword(password), plainPassword: password })
+      .where(eq(branchesTable.id, branchId))
+      .returning();
+    res.status(201).json({ id: updated.id, username: updated.username, password });
+  },
+);
+
+router.patch(
+  "/admin/branches/:id/credential",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const body = req.body as { username?: unknown; password?: unknown };
+    const updates: { username?: string; passwordHash?: string; plainPassword?: string } = {};
+    if (typeof body.username === "string" && body.username.trim()) {
+      const username = body.username.trim();
+      const [dup] = await db
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(eq(branchesTable.username, username))
+        .limit(1);
+      if (dup && dup.id !== branchId) {
+        res.status(409).json({ error: "That user ID is already in use." });
+        return;
+      }
+      updates.username = username;
+    }
+    if (typeof body.password === "string") {
+      if (body.password.length < 6) {
+        res.status(400).json({ error: "Password must be at least 6 characters." });
+        return;
+      }
+      updates.passwordHash = await hashPassword(body.password);
+      updates.plainPassword = body.password;
+    }
+    if (!updates.username && !updates.passwordHash) {
+      res.status(400).json({ error: "Nothing to update." });
+      return;
+    }
+    const [updated] = await db
+      .update(branchesTable)
+      .set(updates)
+      .where(eq(branchesTable.id, branchId))
+      .returning();
+    if (!updated) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    if (!updated.passwordHash) {
+      res.status(400).json({ error: "This branch has no login yet — create one first." });
+      return;
+    }
+    res.json({ id: updated.id, username: updated.username, password: updated.plainPassword });
+  },
+);
+
+// Branch desk APIs. A branch session is scoped to its own students and modules;
+// students and attendance roll up across all of that branch's modules.
+router.get(
+  "/branch/students",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const students = await db
+      .select()
+      .from(studentsTable)
+      .where(eq(studentsTable.branchId, req.auth.branchId))
+      .orderBy(asc(studentsTable.fullName));
+    res.json(students.map(studentView));
+  },
+);
+
+router.get(
+  "/branch/overview",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, req.auth.branchId))
+      .limit(1);
+    const modules = await db
+      .select()
+      .from(modulesCatalog)
+      .where(eq(modulesCatalog.branchId, req.auth.branchId))
+      .orderBy(asc(modulesCatalog.name));
+    const studentRows = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(eq(studentsTable.branchId, req.auth.branchId));
+    const totalStudents = studentRows.length;
+    const perModule: { id: string; name: string; attendanceMarked: number; assessmentMarked: number }[] = [];
+    const attendanceTouched = new Set<string>();
+    const assessmentTouched = new Set<string>();
+    for (const mod of modules) {
+      const attenRows = await db
+        .selectDistinct({ studentId: attendanceTable.studentId })
+        .from(attendanceTable)
+        .where(eq(attendanceTable.module, mod.id));
+      const assessRows = await db
+        .selectDistinct({ studentId: assessmentsTable.studentId })
+        .from(assessmentsTable)
+        .where(and(eq(assessmentsTable.module, mod.id), isNotNull(assessmentsTable.marks)));
+      for (const row of attenRows) attendanceTouched.add(row.studentId);
+      for (const row of assessRows) assessmentTouched.add(row.studentId);
+      perModule.push({
+        id: mod.id,
+        name: mod.name,
+        attendanceMarked: attenRows.length,
+        assessmentMarked: assessRows.length,
+      });
+    }
+    res.json({
+      branchName: branch?.name ?? "Branch",
+      totalStudents,
+      attendanceMarked: attendanceTouched.size,
+      attendancePending: Math.max(0, totalStudents - attendanceTouched.size),
+      assessmentMarked: assessmentTouched.size,
+      assessmentPending: Math.max(0, totalStudents - assessmentTouched.size),
+      modules: perModule,
+    });
   },
 );
 

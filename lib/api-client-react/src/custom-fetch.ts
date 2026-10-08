@@ -6,7 +6,7 @@ export type ErrorType<T = unknown> = ApiError<T>;
 
 export type BodyType<T> = T;
 
-export type RoleHintGetter = () => "admin" | "teacher" | "student" | null;
+export type RoleHintGetter = () => "admin" | "teacher" | "student" | "branch" | null;
 
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
 

@@ -10,6 +10,7 @@ import type { NextFunction, Request, Response } from "express";
 import { and, eq, gt } from "drizzle-orm";
 import {
   adminsTable,
+  branchesTable,
   db,
   sessionsTable,
   studentsTable,
@@ -99,6 +100,7 @@ export type AuthContext = {
   email: string | null;
   module: string | null;
   studentId: string | null;
+  branchId: number | null;
 };
 
 declare global {
@@ -115,9 +117,10 @@ const SESSION_COOKIES: Record<Role, string> = {
   admin: "ct_session_admin",
   teacher: "ct_session_teacher",
   student: "ct_session_student",
+  branch: "ct_session_branch",
 };
 const LEGACY_SESSION_COOKIE = "ct_session";
-const ROLE_ORDER: Role[] = ["admin", "teacher", "student"];
+const ROLE_ORDER: Role[] = ["admin", "teacher", "student", "branch"];
 
 function readCookie(req: Request, name: string): string | null {
   const raw = req.headers.cookie;
@@ -135,11 +138,12 @@ function readCookie(req: Request, name: string): string | null {
 function requestedRole(req: Request): Role | null {
   const header = req.headers["x-ct-role"];
   const hint = Array.isArray(header) ? header[0] : header;
-  if (hint === "admin" || hint === "teacher" || hint === "student") return hint;
+  if (hint === "admin" || hint === "teacher" || hint === "student" || hint === "branch") return hint;
   const path = req.path.startsWith("/api/") ? req.path.slice(4) : req.path;
   if (path.startsWith("/admin")) return "admin";
   if (path.startsWith("/teacher")) return "teacher";
   if (path.startsWith("/student")) return "student";
+  if (path.startsWith("/branch")) return "branch";
   return null;
 }
 
@@ -304,6 +308,25 @@ async function sessionContext(
           email: null,
           module: admin.module,
           studentId: null,
+          branchId: null,
+        }
+      : null;
+  }
+  if (session.role === "branch") {
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, Number(session.userId)))
+      .limit(1);
+    return branch
+      ? {
+          role: "branch",
+          userId: String(branch.id),
+          displayName: branch.name,
+          email: null,
+          module: null,
+          studentId: null,
+          branchId: branch.id,
         }
       : null;
   }
@@ -321,6 +344,7 @@ async function sessionContext(
           email: null,
           module: teacher.module,
           studentId: null,
+          branchId: null,
         }
       : null;
   }
@@ -337,6 +361,7 @@ async function sessionContext(
         email: student.email,
         module: null,
         studentId: student.id,
+        branchId: null,
       }
     : null;
 }

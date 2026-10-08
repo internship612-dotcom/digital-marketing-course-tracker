@@ -87,6 +87,17 @@ async function ensureBranchStructure(): Promise<void> {
       ALTER TABLE students ADD COLUMN IF NOT EXISTS branch_id integer REFERENCES branches(id) ON DELETE SET NULL
     `));
 
+    // Branch login: branches gain a username/password pair, and the sessions
+    // role enum gains a fourth value. ALTER TYPE ADD VALUE needs PG >= 12.
+    try {
+      await db.execute(sql.raw("ALTER TYPE role ADD VALUE IF NOT EXISTS 'branch'"));
+    } catch {
+      logger.warn({}, "Could not extend sessions role enum (already ok?)");
+    }
+    await db.execute(sql.raw("ALTER TABLE branches ADD COLUMN IF NOT EXISTS username text UNIQUE"));
+    await db.execute(sql.raw("ALTER TABLE branches ADD COLUMN IF NOT EXISTS password_hash text"));
+    await db.execute(sql.raw("ALTER TABLE branches ADD COLUMN IF NOT EXISTS plain_password text"));
+
     const zed = await sqlQueryBranchId("Zedking");
     await db.execute(sql.raw(`
       INSERT INTO branches (name)

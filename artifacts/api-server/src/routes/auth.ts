@@ -54,12 +54,13 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   const { role, identifier, password } = parsed.data;
   let context:
     | {
-        role: "admin" | "teacher" | "student";
+        role: "admin" | "teacher" | "student" | "branch";
         userId: string;
         displayName: string;
         email: string | null;
         module: string | null;
         studentId: string | null;
+        branchId: number | null;
         passwordHash: string;
       }
     | undefined;
@@ -78,6 +79,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
         email: null,
         module: null,
         studentId: null,
+        branchId: null,
         passwordHash: admin.passwordHash,
       };
     }
@@ -95,7 +97,26 @@ router.post("/auth/login", async (req, res): Promise<void> => {
         email: null,
         module: teacher.module,
         studentId: null,
+        branchId: null,
         passwordHash: teacher.passwordHash,
+      };
+    }
+  } else if (role === "branch") {
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.username, identifier.trim()))
+      .limit(1);
+    if (branch && branch.passwordHash) {
+      context = {
+        role: "branch",
+        userId: String(branch.id),
+        displayName: branch.name,
+        email: null,
+        module: null,
+        studentId: null,
+        branchId: branch.id,
+        passwordHash: branch.passwordHash,
       };
     }
   } else {
@@ -112,6 +133,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
         email: student.email,
         module: null,
         studentId: student.id,
+        branchId: null,
         passwordHash: student.passwordHash,
       };
     }
@@ -187,6 +209,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
     email: student.email,
     module: null,
     studentId: student.id,
+    branchId: student.branchId ?? null,
   };
   await createSession(res, context);
   res.status(201).json(RegisterStudentResponse.parse(publicUser(context)));
@@ -246,6 +269,7 @@ router.post("/auth/register-admin", async (req, res): Promise<void> => {
     email: null,
     module: admin.module,
     studentId: null,
+    branchId: null,
   };
   await createSession(res, context);
   res.status(201).json(RegisterAdminResponse.parse(publicUser(context)));
@@ -291,6 +315,7 @@ router.post("/auth/admin/supabase", async (req, res): Promise<void> => {
     email: null,
     module: admin.module,
     studentId: null,
+    branchId: null,
   };
   await createSession(res, context);
   res.json(LoginResponse.parse(publicUser(context)));
@@ -331,6 +356,7 @@ router.post("/auth/admin/local", async (req, res): Promise<void> => {
     email,
     module: admin.module,
     studentId: null,
+    branchId: null,
   };
   await createSession(res, context);
   res.json(LoginResponse.parse(publicUser(context)));

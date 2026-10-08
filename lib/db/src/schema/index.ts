@@ -13,7 +13,7 @@ import {
 // Module keys are now admin-defined text; the catalog below says which module
 // belongs to which branch. The "ai" | "dm" | "sm" values from the old enum are
 // retained just as keys in the catalog — existing rows remain valid.
-export const roleEnum = pgEnum("role", ["admin", "teacher", "student"]);
+export const roleEnum = pgEnum("role", ["admin", "teacher", "student", "branch"]);
 
 // One institute, several branches. A branch owns a set of modules; every
 // branch's modules are admin-defined rows in `modulesCatalog`.
@@ -21,6 +21,9 @@ export const branchesTable = pgTable("branches", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  username: text("username").unique(),
+  passwordHash: text("password_hash"),
+  plainPassword: text("plain_password"),
 });
 
 // Each row is a module an admin created for a branch. The existing three
@@ -239,5 +242,5 @@ export const calendarEventsTable = pgTable("calendar_events", {
 });
 
 export type Module = "ai" | "dm" | "sm";
-export type Role = "admin" | "teacher" | "student";
+export type Role = "admin" | "teacher" | "student" | "branch";
 export type DocumentKind = "syllabus" | "project_plan" | "project_guidelines";

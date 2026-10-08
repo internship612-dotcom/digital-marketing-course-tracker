@@ -565,7 +565,7 @@ components:
       type: string
     Role:
       type: string
-      enum: [admin, teacher, student]
+      enum: [admin, teacher, student, branch]
     CurrentUser:
       type: object
       required: [role, displayName]
