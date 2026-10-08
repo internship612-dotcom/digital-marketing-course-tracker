@@ -640,18 +640,18 @@ function AdminBranchesPage() {
       {branches == null
         ? [1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)
         : branches.map((branch, index) => (
-          <section key={branch.id} className="rounded-xl border border-border bg-card p-5 space-y-4" data-testid={`card-branch-${branch.id}`}>
-            <div>
+          <section key={branch.id} className="relative rounded-xl border border-border bg-card p-5 space-y-4" data-testid={`card-branch-${branch.id}`}>
+            <div className="absolute right-3 top-3 flex items-center gap-1">
+              <button type="button" onClick={() => { setEditingId(branch.id); setEditName(branch.name); setEditUsername(branch.username ?? ''); setEditError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit" aria-label="Edit" data-testid={`button-edit-branch-${branch.id}`}><Pencil size={15} /></button>
+              <button type="button" onClick={() => setDeletingId(branch.id)} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete" aria-label="Delete" data-testid={`button-delete-branch-${branch.id}`}><Trash2 size={15} /></button>
+            </div>
+            <div className="pr-20">
               <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{String(index + 1).padStart(2, '0')}</p>
               <div className="mt-1 flex items-center justify-between gap-2">
                 <h2 className="font-display text-2xl font-bold leading-tight truncate">{branch.name}</h2>
                 <Link href={`/admin/branch/${branch.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" data-testid={`link-open-branch-${branch.id}`}>Open <ArrowRight size={12} /></Link>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'} · User ID: {branch.username ?? 'not set'}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant="outline" onClick={() => { setEditingId(branch.id); setEditName(branch.name); setEditUsername(branch.username ?? ''); setEditError(''); }} data-testid={`button-edit-branch-${branch.id}`}><Pencil size={13} /> Edit</Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => setDeletingId(branch.id)} data-testid={`button-delete-branch-${branch.id}`}><Trash2 size={13} /> Delete</Button>
             </div>
             {editingId === branch.id && (
               <form onSubmit={(e) => { e.preventDefault(); saveEditBranch(branch.id); }} className="mt-3 grid gap-3 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-branch-${branch.id}`}>
