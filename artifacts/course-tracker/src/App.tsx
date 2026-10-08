@@ -484,7 +484,20 @@ function AdminModulesPage() {
 }
 
 function AdminBranchesPage() {
-  const branches = useBranches();
+  const [branches, setBranches] = useState<AdminBranch[] | null>(null);
+  const loadAdminBranches = () => {
+    fetch('/api/admin/branches')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (Array.isArray(data)) setBranches(data as AdminBranch[]); })
+      .catch(() => undefined);
+  };
+  useEffect(() => { loadAdminBranches(); }, []);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [editError, setEditError] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
   const [branchName, setBranchName] = useState('');
   const [branchUserId, setBranchUserId] = useState('');
   const [branchPassword, setBranchPassword] = useState('');
@@ -512,10 +525,45 @@ function AdminBranchesPage() {
         if (!ok) throw new Error(data?.error ?? 'create failed');
         setNotice(`Branch "${name}" created${branchUserId.trim() ? ` with desk login "${branchUserId.trim()}"` : ''}.`);
         setBranchName(''); setBranchUserId(''); setBranchPassword('');
-        void refreshBranchCatalog();
+        void refreshBranchCatalog().then(() => loadAdminBranches());
       })
       .catch((err: Error) => setError(err.message === 'create failed' ? 'Could not create that branch.' : err.message))
       .finally(() => setBusy(false));
+  };
+
+  const saveEditBranch = (branchId: number) => {
+    if (!editName.trim()) {
+      setEditError('Enter a name.');
+      return;
+    }
+    setEditBusy(true); setEditError('');
+    fetch(`/api/admin/branches/${branchId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editName.trim(), username: editUsername.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
+        setEditingId(null); setEditError('');
+        setNotice(`Branch updated.`);
+        void refreshBranchCatalog().then(() => loadAdminBranches());
+      })
+      .catch((err: Error) => setEditError(err.message))
+      .finally(() => setEditBusy(false));
+  };
+
+  const confirmDeleteBranch = (branchId: number) => {
+    setEditBusy(true); setEditError('');
+    fetch(`/api/admin/branches/${branchId}`, { method: 'DELETE' })
+      .then((res) => (res.ok ? undefined : res.json().then((data: { error?: string }) => { throw new Error((data as { error?: string })?.error ?? 'delete failed'); })))
+      .then(() => {
+        setDeletingId(null);
+        setNotice('Branch deleted.');
+        void refreshBranchCatalog().then(() => loadAdminBranches());
+      })
+      .catch((err: Error) => setEditError(err.message))
+      .finally(() => setEditBusy(false));
   };
 
   return <>
@@ -548,18 +596,53 @@ function AdminBranchesPage() {
       {branches == null
         ? [1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)
         : branches.map((branch, index) => (
-          <Link key={branch.id} href={`/admin/branch/${branch.id}`} className="group block rounded-xl border border-border bg-card p-5 transition hover:border-accent/60" data-testid={`card-branch-${branch.id}`}>
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{String(index + 1).padStart(2, '0')}</p>
-            <h2 className="mt-1 font-display text-2xl font-bold leading-tight">{branch.name}</h2>
-            <p className="mt-2 text-xs text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</p>
-          </Link>
+          <section key={branch.id} className="rounded-xl border border-border bg-card p-5 space-y-4" data-testid={`card-branch-${branch.id}`}>
+            <div>
+              <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{String(index + 1).padStart(2, '0')}</p>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <h2 className="font-display text-2xl font-bold leading-tight truncate">{branch.name}</h2>
+                <Link href={`/admin/branch/${branch.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" data-testid={`link-open-branch-${branch.id}`}>Open <ArrowRight size={12} /></Link>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'} · User ID: {branch.username ?? 'not set'}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => { setEditingId(branch.id); setEditName(branch.name); setEditUsername(branch.username ?? ''); setEditError(''); }} data-testid={`button-edit-branch-${branch.id}`}><Pencil size={13} /> Edit</Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => setDeletingId(branch.id)} data-testid={`button-delete-branch-${branch.id}`}><Trash2 size={13} /> Delete</Button>
+            </div>
+            {editingId === branch.id && (
+              <form onSubmit={(e) => { e.preventDefault(); saveEditBranch(branch.id); }} className="mt-3 grid gap-3 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-branch-${branch.id}`}>
+                <label className="grid gap-1 text-xs font-medium">Name
+                  <Input value={editName} onChange={(e) => setEditName(e.target.value)} data-testid={`input-branch-name-${branch.id}`} />
+                </label>
+                <label className="grid gap-1 text-xs font-medium">User ID
+                  <Input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} data-testid={`input-branch-username-${branch.id}`} />
+                </label>
+                {editError && <p className="text-xs text-destructive" data-testid={`status-edit-branch-error-${branch.id}`}>{editError}</p>}
+                <div className="flex items-center gap-2">
+                  <Button type="submit" size="sm" disabled={editBusy || !editName.trim()} data-testid={`button-save-branch-edit-${branch.id}`}>Save</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setEditingId(null); setEditError(''); }}>Cancel</button>
+                </div>
+              </form>
+            )}
+            {deletingId === branch.id && (
+              <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3" data-testid={`confirm-delete-branch-${branch.id}`}>
+                <p className="text-sm font-semibold text-destructive">Delete branch?</p>
+                <p className="mt-1 text-xs text-muted-foreground">This removes its login and module links. Students already enrolled are kept, but their branch becomes unassigned.</p>
+                <div className="mt-3 flex items-center gap-2">
+                  <Button type="button" size="sm" variant="destructive" onClick={() => confirmDeleteBranch(branch.id)} data-testid={`button-confirm-delete-${branch.id}`}>Delete</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => setDeletingId(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
+            <AdminBranchLoginCard branch={branch} onChanged={loadAdminBranches} />
+          </section>
         ))}
       {branches != null && branches.length === 0 && <p className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create your first one above.</p>}
     </div>
   </>;
 }
 
-function AdminBranchLoginCard({ branch, onChanged }: { branch: AdminBranch; onChanged: () => void }) {
+function AdminBranchLoginCard({ branch, onChanged }: { branch: BranchSummary; onChanged: () => void }) {
   const [pwdOpen, setPwdOpen] = useState(false);
   const [newPwd, setNewPwd] = useState('');
   const [newPwdShown, setNewPwdShown] = useState(false);

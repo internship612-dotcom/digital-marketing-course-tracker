@@ -2652,6 +2652,61 @@ router.post(
   },
 );
 
+router.patch(
+  "/admin/branches/:id",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const body = req.body as { name?: unknown; username?: unknown };
+    const updates: { name?: string; username?: string } = {};
+    if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
+    if (typeof body.username === "string" && body.username.trim()) updates.username = body.username.trim();
+    if (!updates.name && !updates.username) {
+      res.status(400).json({ error: "Nothing to update." });
+      return;
+    }
+    const [branch] = await db.select().from(branchesTable).where(eq(branchesTable.id, branchId)).limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    if (updates.name) {
+      const [dupName] = await db.select({ id: branchesTable.id }).from(branchesTable).where(and(eq(branchesTable.name, updates.name), ne(branchesTable.id, branchId))).limit(1);
+      if (dupName) {
+        res.status(409).json({ error: "A branch with that name already exists." });
+        return;
+      }
+    }
+    if (updates.username) {
+      const [dupUser] = await db.select({ id: branchesTable.id }).from(branchesTable).where(and(eq(branchesTable.username, updates.username), ne(branchesTable.id, branchId))).limit(1);
+      if (dupUser) {
+        res.status(409).json({ error: "That user ID is already in use." });
+        return;
+      }
+    }
+    const [updated] = await db.update(branchesTable).set(updates).where(eq(branchesTable.id, branchId)).returning();
+    res.json({ id: updated.id, name: updated.name, username: updated.username ?? null });
+  },
+);
+
+router.delete(
+  "/admin/branches/:id",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    await db.delete(branchesTable).where(eq(branchesTable.id, branchId));
+    res.status(204).end();
+  },
+);
+
 router.post(
   "/admin/modules",
   requireRole("admin"),
