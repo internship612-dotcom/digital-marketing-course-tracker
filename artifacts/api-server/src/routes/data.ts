@@ -2611,16 +2611,37 @@ router.post(
   "/admin/branches",
   requireRole("admin"),
   async (req, res): Promise<void> => {
-    const name = typeof (req.body as { name?: unknown })?.name === "string"
-      ? (req.body as { name: string }).name.trim()
-      : "";
+    const body = req.body as { name?: unknown; username?: unknown; password?: unknown };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const username = typeof body.username === "string" && body.username.trim() ? body.username.trim() : null;
+    const password = typeof body.password === "string" ? body.password : null;
     if (!name) {
       res.status(400).json({ error: "Enter a branch name." });
       return;
     }
+    if (username != null && (password == null || password.length < 6)) {
+      res.status(400).json({ error: "Enter a password of at least 6 characters for the branch login." });
+      return;
+    }
+    if (username != null) {
+      const [dup] = await db
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(eq(branchesTable.username, username))
+        .limit(1);
+      if (dup) {
+        res.status(409).json({ error: "That user ID is already in use." });
+        return;
+      }
+    }
     const [branch] = await db
       .insert(branchesTable)
-      .values({ name })
+      .values({
+        name,
+        username: username ?? undefined,
+        passwordHash: username && password ? await hashPassword(password) : undefined,
+        plainPassword: username && password ? password : null,
+      })
       .onConflictDoNothing()
       .returning();
     if (!branch) {

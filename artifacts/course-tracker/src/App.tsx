@@ -418,23 +418,32 @@ const nav: NavItem[] = user.role === 'admin'
     }
   };
   const sidebarBranches = useBranches();
+  const [branchOptionOpen, setBranchOptionOpen] = useState(false);
   const [branchName, setBranchName] = useState('');
+  const [branchUserId, setBranchUserId] = useState('');
+  const [branchPassword, setBranchPassword] = useState('');
+  const [branchPasswordShown, setBranchPasswordShown] = useState(false);
   const [branchBusy, setBranchBusy] = useState(false);
   const [branchErr, setBranchErr] = useState('');
   const createBranchHere = (event: FormEvent) => {
     event.preventDefault();
     const name = branchName.trim();
     if (!name) return;
+    if (branchUserId.trim() && branchPassword.length > 0 && branchPassword.length < 6) {
+      setBranchErr('Password must be at least 6 characters.');
+      return;
+    }
     setBranchBusy(true); setBranchErr('');
     fetch('/api/admin/branches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, username: branchUserId.trim() || undefined, password: branchUserId.trim() ? branchPassword : undefined }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error(data?.error ?? 'create failed');
-        setBranchName('');
+        setBranchName(''); setBranchUserId(''); setBranchPassword('');
+        setBranchOptionOpen(false);
         void refreshBranchCatalog();
       })
       .catch((err: Error) => setBranchErr(err.message === 'create failed' ? 'Could not create that branch.' : err.message))
@@ -452,17 +461,29 @@ const nav: NavItem[] = user.role === 'admin'
         })}</nav></div>
         {user.role === 'admin' && (
           <div className="mt-6 border-t border-sidebar-border pt-4" data-testid="section-sidebar-branches">
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-sidebar-foreground/45">Branches</p>
-            <form onSubmit={createBranchHere} className="mt-2 grid gap-2">
-              <input type="text" value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="New branch name" className="rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-name" />
-              <button type="submit" disabled={branchBusy || !branchName.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-50" data-testid="button-create-branch"><Plus size={13} /> Create branch</button>
-            </form>
-            {branchErr && <p className="mt-2 text-[11px] text-destructive" data-testid="status-branch-create-error">{branchErr}</p>}
-            <div className="mt-3 grid gap-1">
-              {(sidebarBranches ?? []).map((branch) => (
-                <p key={branch.id} className="truncate text-xs text-sidebar-foreground/70" data-testid={`text-sidebar-branch-${branch.id}`}><span className="text-accent">•</span> {branch.name} · {branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</p>
-              ))}
-            </div>
+            <button type="button" onClick={() => setBranchOptionOpen((v) => !v)} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-semibold transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" data-testid="button-branch-option">
+              <GitBranch size={17} />Branches
+              <ChevronDown size={14} className={`ml-auto transition-transform ${branchOptionOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {branchOptionOpen && (
+              <form onSubmit={createBranchHere} className="mt-2 grid gap-2 rounded-lg border border-sidebar-border bg-sidebar-accent/40 p-3" data-testid="form-create-branch">
+                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/60">Create branch</p>
+                <label className="grid gap-1 text-xs font-medium">Branch name
+                  <input type="text" value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. HASC" className="rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-name" />
+                </label>
+                <label className="grid gap-1 text-xs font-medium">User ID
+                  <input type="text" value={branchUserId} onChange={(e) => setBranchUserId(e.target.value)} placeholder="e.g. hasc" autoComplete="off" className="rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-user-id" />
+                </label>
+                <label className="grid gap-1 text-xs font-medium">Password
+                  <span className="flex items-center gap-2">
+                    <input type={branchPasswordShown ? 'text' : 'password'} value={branchPassword} onChange={(e) => setBranchPassword(e.target.value)} placeholder="Min. 6 characters" autoComplete="new-password" className="flex-1 rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-password" />
+                    <button type="button" onClick={() => setBranchPasswordShown((v) => !v)} className="rounded p-1 text-sidebar-foreground/60 hover:text-sidebar-foreground" data-testid="button-toggle-branch-password-sidebar">{branchPasswordShown ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                  </span>
+                </label>
+                {branchErr && <p className="text-[11px] text-destructive" data-testid="status-branch-create-error">{branchErr}</p>}
+                <button type="submit" disabled={branchBusy || !branchName.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-50" data-testid="button-create-branch"><Plus size={13} /> Create branch</button>
+              </form>
+            )}
           </div>
         )}
         <div className="mt-auto rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
@@ -493,60 +514,57 @@ type AdminBranch = {
 };
 
 function AdminModulesPage() {
-  const [branches, setBranches] = useState<AdminBranch[] | null>(null);
-  const [newModuleFor, setNewModuleFor] = useState<number | null>(null);
-  const [moduleName, setModuleName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [pwdOpenFor, setPwdOpenFor] = useState<number | null>(null);
+  const branches = useBranches();
+  return <>
+    <PageHeader kicker="Admin / branches" title="Branches & modules." detail="Each branch runs its own modules. Open a branch to see its modules and reset its desk login." />
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {branches == null
+        ? [1, 2].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-muted" />)
+        : branches.map((branch, index) => (
+          <Link key={branch.id} href={`/admin/branch/${branch.id}`} className="group relative overflow-hidden rounded-xl border border-border bg-card p-5 transition hover:border-accent/60" data-testid={`card-branch-${branch.id}`}>
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-accent via-primary/30 to-transparent" />
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch</p>
+                <h2 className="mt-1 font-display text-2xl font-bold leading-tight">{branch.name}</h2>
+              </div>
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-muted font-mono-ui text-xs font-bold text-primary">{String(index + 1).padStart(2, '0')}</span>
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="rounded-full bg-muted px-3 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</span>
+              <ArrowRight size={16} className="text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+            </div>
+          </Link>
+        ))}
+      {branches != null && branches.length === 0 && <p className="md:col-span-2 xl:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create one from the Branches option in the sidebar.</p>}
+    </div>
+  </>;
+}
+
+function AdminBranchLoginCard({ branch, onChanged }: { branch: AdminBranch; onChanged: () => void }) {
+  const [pwdOpen, setPwdOpen] = useState(false);
   const [newPwd, setNewPwd] = useState('');
   const [newPwdShown, setNewPwdShown] = useState(false);
-  const [credOpenFor, setCredOpenFor] = useState<number | null>(null);
-  const [credUserId, setCredUserId] = useState('');
-  const [credPassword, setCredPassword] = useState('');
-  const [credShow, setCredShow] = useState(false);
-  const [revealed, setRevealed] = useState<number[]>([]);
-  const [pending, setPending] = useState<null | { branch: AdminBranch; action: 'reveal' | 'password' | 'reset' }>(null);
+  const [revealed, setRevealed] = useState(false);
+  const [pendingAction, setPendingAction] = useState<null | 'reveal' | 'password' | 'reset'>(null);
   const [confirmPwd, setConfirmPwd] = useState('');
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState('');
+  const [credUserId, setCredUserId] = useState('');
+  const [credPassword, setCredPassword] = useState('');
+  const [credShow, setCredShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
-  const loadAdminBranches = () => {
-    fetch('/api/admin/branches')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (Array.isArray(data)) setBranches(data as AdminBranch[]); })
-      .catch(() => undefined);
-  };
-  useEffect(() => { loadAdminBranches(); }, []);
-
-  const createModule = (event: FormEvent, branchId: number) => {
-    event.preventDefault();
-    if (!moduleName.trim()) return;
-    setBusy(true); setError(''); setNotice('');
-    fetch('/api/admin/modules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branchId, name: moduleName.trim() }),
-    })
-      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
-        return refreshBranchCatalog().then(() => { setNotice(`Module "${moduleName.trim()}" added.`); loadAdminBranches(); });
-      })
-      .then(() => { setModuleName(''); setNewModuleFor(null); })
-      .catch((err: Error) => setError(err.message === 'create failed' ? 'We could not add that module. Try again.' : err.message))
-      .finally(() => setBusy(false));
-  };
-
-  const saveCredential = (branchId: number) => (event: FormEvent) => {
+  const saveCredential = (event: FormEvent) => {
     event.preventDefault();
     if (!credUserId.trim() || credPassword.length < 6) {
       setError('Enter a user ID and a password of at least 6 characters.');
       return;
     }
     setBusy(true); setError(''); setNotice('');
-    fetch(`/api/admin/branches/${branchId}/credential`, {
+    fetch(`/api/admin/branches/${branch.id}/credential`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: credUserId.trim(), password: credPassword }),
@@ -555,21 +573,21 @@ function AdminModulesPage() {
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
         setNotice(`Desk login created — user ID ${credUserId.trim()}, password ${credPassword}`);
-        setCredOpenFor(null); setCredUserId(''); setCredPassword('');
-        loadAdminBranches();
+        setCredUserId(''); setCredPassword('');
+        onChanged();
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
   };
 
-  const saveNewPassword = (branchId: number) => (event: FormEvent) => {
+  const saveNewPassword = (event: FormEvent) => {
     event.preventDefault();
     if (newPwd.trim().length < 6) {
       setError('Password must be at least 6 characters.');
       return;
     }
     setBusy(true); setError(''); setNotice('');
-    fetch(`/api/admin/branches/${branchId}/credential`, {
+    fetch(`/api/admin/branches/${branch.id}/credential`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: newPwd }),
@@ -578,16 +596,16 @@ function AdminModulesPage() {
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'update failed');
         setNotice('Password updated.');
-        setPwdOpenFor(null); setNewPwd('');
-        loadAdminBranches();
+        setPwdOpen(false); setNewPwd('');
+        onChanged();
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
   };
 
   const verifyAdmin = () => {
-    if (!pending || !confirmPwd) return;
-    const { branch, action } = pending;
+    if (!pendingAction || !confirmPwd) return;
+    const action = pendingAction;
     setConfirmBusy(true); setConfirmError('');
     fetch('/api/admin/account/verify-password', {
       method: 'POST',
@@ -597,9 +615,9 @@ function AdminModulesPage() {
       .then((res) => {
         if (!res.ok) throw new Error('The admin password is incorrect.');
         if (action === 'reveal') {
-          setRevealed((ids) => (ids.includes(branch.id) ? ids : [...ids, branch.id]));
+          setRevealed(true);
         } else if (action === 'password') {
-          setPwdOpenFor(branch.id); setNewPwd(''); setNewPwdShown(false);
+          setPwdOpen(true); setNewPwd(''); setNewPwdShown(false);
         } else {
           const password = randomPassword();
           setBusy(true);
@@ -611,129 +629,158 @@ function AdminModulesPage() {
             .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
             .then(({ ok }) => {
               if (!ok) throw new Error('The reset did not take. Try again.');
-              setNotice(`Password reset for ${branch.name} — user ID ${branch.username ?? ''}, new password ${password}`);
-              loadAdminBranches();
+              setNotice(`Password reset — user ID ${branch.username ?? ''}, new password ${password}`);
+              onChanged();
             })
             .catch((err: Error) => setError(err.message))
             .finally(() => setBusy(false));
         }
-        setPending(null); setConfirmPwd('');
+        setPendingAction(null); setConfirmPwd('');
       })
       .catch((err: Error) => setConfirmError(err.message))
       .finally(() => setConfirmBusy(false));
   };
 
-  const totalModules = branches?.reduce((count, branch) => count + branch.modules.length, 0) ?? 0;
-
   return <>
-    <PageHeader kicker="Admin / branches" title="Branches & modules." detail="Every branch holds its own modules. Branches and modules are managed from the side panel — open a module for its desk, report and course files." />
-
-    {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
-    {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-success">{notice}</p>}
-
-    <div className="grid gap-5 md:grid-cols-2">
-        {branches == null
-          ? [1, 2].map((i) => <div key={i} className="h-56 animate-pulse rounded-xl bg-muted" />)
-          : branches.map((branch, index) => (
-            <section key={branch.id} className="relative overflow-hidden rounded-xl border border-border bg-card" data-testid={`card-branch-${branch.id}`}>
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-accent via-primary/30 to-transparent" />
-              <div className="flex items-start justify-between gap-3 px-5 pt-5">
-                <div className="flex items-start gap-3">
-                  <span className="mt-1.5 font-mono-ui text-[11px] tracking-widest text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
-                  <div>
-                    <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch</p>
-                    <h2 className="mt-0.5 font-display text-2xl font-bold leading-tight">{branch.name}</h2>
-                  </div>
-                </div>
-                <span className="shrink-0 rounded-full border border-border bg-muted/60 px-2.5 py-1 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</span>
+    <section className="mt-6 rounded-xl border border-border bg-card p-5" data-testid={`card-branch-login-${branch.id}`}>
+      <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch desk login</h3>
+      {branch.username ? (
+        <div className="mt-3 grid gap-1.5 text-sm sm:max-w-sm">
+          <p>User ID: <span className="font-bold text-foreground" data-testid={`text-branch-username-${branch.id}`}>{branch.username}</span></p>
+          <p className="flex items-center gap-2">Password:
+            <span className="font-bold text-foreground" data-testid={`text-branch-password-${branch.id}`}>{revealed ? (branch.plainPassword ?? '—') : '••••••••'}</span>
+            <button type="button" onClick={() => { if (revealed) { setRevealed(false); } else { setConfirmPwd(''); setConfirmError(''); setPendingAction('reveal'); } }} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-${branch.id}`}>{revealed ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </p>
+          {pwdOpen ? (
+            <form onSubmit={saveNewPassword} className="mt-2 flex flex-wrap items-center gap-2" data-testid={`form-change-branch-password-${branch.id}`}>
+              <div className="relative flex-1">
+                <Input type={newPwdShown ? 'text' : 'password'} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} placeholder="New password" autoFocus data-testid={`input-new-branch-password-${branch.id}`} />
+                <button type="button" onClick={() => setNewPwdShown((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-new-branch-password-${branch.id}`}>{newPwdShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
               </div>
-              <ul className="mt-4 divide-y divide-border/70 border-t border-border/70">
-                {branch.modules.map((mod) => (
-                  <li key={mod.id}>
-                    <Link href={`/admin/module/${mod.id}`} className="group flex items-center gap-3 px-5 py-3.5 transition hover:bg-muted/50" data-testid={`card-module-${mod.id}`}>
-                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted font-mono-ui text-[10px] font-bold uppercase text-primary transition group-hover:bg-accent/20">{mod.id.slice(0, 2)}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold">{mod.name}</span>
-                        <span className="block font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{mod.id}</span>
-                      </span>
-                      <ArrowRight size={15} className="shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
-                    </Link>
-                  </li>
-                ))}
-                {branch.modules.length === 0 && <li className="px-5 py-7 text-center text-sm text-muted-foreground">No modules yet — add the first one below.</li>}
-              </ul>
-              <div className="border-t border-border/70 px-5 py-3.5">
-                {newModuleFor === branch.id ? (
-                  <form onSubmit={(e) => createModule(e, branch.id)} className="grid gap-2.5">
-                    <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Search Engine Optimization" autoFocus data-testid={`input-module-name-${branch.id}`} />
-                    <div className="flex items-center gap-3">
-                      <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid={`button-save-module-${branch.id}`}>Add module</Button>
-                      <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setNewModuleFor(null); setModuleName(''); }}>Cancel</button>
-                    </div>
-                  </form>
-                ) : (
-                  <button type="button" className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline" onClick={() => { setNewModuleFor(branch.id); setModuleName(''); setError(''); }} data-testid={`button-add-module-${branch.id}`}>
-                    <Plus size={15} /> Add module
-                  </button>
-                )}
-              </div>
-              <div className="border-t border-border/70 bg-muted/40 px-5 py-4">
-                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch desk login</p>
-                {branch.username ? (
-                  <div className="mt-2 grid gap-1.5 text-sm">
-                    <p>User ID: <span className="font-bold text-foreground" data-testid={`text-branch-username-${branch.id}`}>{branch.username}</span></p>
-                    <p className="flex items-center gap-2">Password: <span className="font-bold text-foreground" data-testid={`text-branch-password-${branch.id}`}>{revealed.includes(branch.id) ? (branch.plainPassword ?? '—') : '••••••••'}</span>
-                      <button type="button" onClick={() => { if (revealed.includes(branch.id)) { setRevealed(revealed.filter((id) => id !== branch.id)); } else { setConfirmPwd(''); setConfirmError(''); setPending({ branch, action: 'reveal' }); } }} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-${branch.id}`}>{revealed.includes(branch.id) ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                    </p>
-                    {pwdOpenFor === branch.id ? (
-                      <form onSubmit={saveNewPassword(branch.id)} className="mt-2 flex flex-wrap items-center gap-2">
-                        <div className="relative flex-1">
-                          <Input type={newPwdShown ? 'text' : 'password'} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} placeholder="New password" autoFocus data-testid={`input-new-branch-password-${branch.id}`} />
-                        </div>
-                        <button type="button" onClick={() => setNewPwdShown((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-new-branch-password-${branch.id}`}>{newPwdShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                        <Button type="submit" size="sm" disabled={busy || !newPwd.trim()} data-testid={`button-save-new-branch-password-${branch.id}`}>Save</Button>
-                        <button type="button" onClick={() => { setPwdOpenFor(null); setNewPwd(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
-                      </form>
-                    ) : (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-4">
-                        <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPending({ branch, action: 'password' }); }} data-testid={`button-change-branch-password-${branch.id}`}>Change password</button>
-                        <button type="button" className="text-xs font-semibold text-destructive hover:underline" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPending({ branch, action: 'reset' }); }} data-testid={`button-reset-branch-password-${branch.id}`}>Reset to random</button>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <form onSubmit={saveCredential(branch.id)} className="mt-2 grid gap-2">
-                    <Input value={credUserId} onChange={(e) => setCredUserId(e.target.value)} placeholder="User ID (e.g. zedking)" data-testid={`input-branch-username-${branch.id}`} />
-                    <div className="flex items-center gap-2">
-                      <Input type={credShow ? 'text' : 'password'} value={credPassword} onChange={(e) => setCredPassword(e.target.value)} placeholder="Password" className="flex-1" data-testid={`input-branch-password-${branch.id}`} />
-                      <button type="button" onClick={() => setCredShow((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-input-${branch.id}`}>{credShow ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                    </div>
-                    <Button type="submit" size="sm" disabled={busy || !credUserId.trim() || credPassword.length < 6} data-testid={`button-save-branch-login-${branch.id}`}><Plus size={14} /> Create login</Button>
-                  </form>
-                )}
-                <p className="mt-2.5 text-xs text-muted-foreground">Branch login page: <span className="font-mono font-semibold text-foreground">/{branch.name.toLowerCase().replace(/\s+/g, '-')}</span></p>
-              </div>
-            </section>
-          ))}
-        {branches != null && branches.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-2">No branches yet — create one from the Branches block in the sidebar.</p>}
-      </div>
-    {pending && (
+              <Button type="submit" size="sm" disabled={busy || !newPwd.trim()} data-testid={`button-save-new-branch-password-${branch.id}`}>Save</Button>
+              <button type="button" onClick={() => { setPwdOpen(false); setNewPwd(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+            </form>
+          ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPendingAction('password'); }} data-testid={`button-change-branch-password-${branch.id}`}>Change password</button>
+              <button type="button" className="text-xs font-semibold text-destructive hover:underline" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPendingAction('reset'); }} data-testid={`button-reset-branch-password-${branch.id}`}>Reset to random</button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <form onSubmit={saveCredential} className="mt-3 grid gap-2 sm:max-w-sm" data-testid={`form-branch-credential-${branch.id}`}>
+          <Input value={credUserId} onChange={(e) => setCredUserId(e.target.value)} placeholder="User ID (e.g. hasc)" data-testid={`input-branch-username-${branch.id}`} />
+          <div className="flex items-center gap-2">
+            <Input type={credShow ? 'text' : 'password'} value={credPassword} onChange={(e) => setCredPassword(e.target.value)} placeholder="Password" className="flex-1" data-testid={`input-branch-password-${branch.id}`} />
+            <button type="button" onClick={() => setCredShow((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-input-${branch.id}`}>{credShow ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </div>
+          <Button type="submit" size="sm" disabled={busy || !credUserId.trim() || credPassword.length < 6} data-testid={`button-save-branch-login-${branch.id}`}><Plus size={14} /> Create login</Button>
+        </form>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">Branch login page: <span className="font-mono font-semibold text-foreground">/{branch.name.toLowerCase().replace(/\s+/g, '-')}</span></p>
+      {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid={`status-branch-login-error-${branch.id}`}>{error}</p>}
+      {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid={`status-branch-login-success-${branch.id}`}>{notice}</p>}
+    </section>
+    {pendingAction && (
       <div className="fixed inset-0 z-50 grid place-items-center bg-primary/30 p-4" data-testid="modal-branch-confirm">
         <div className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-lg">
           <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Admin verification</p>
-          <h3 className="mt-1 font-display text-xl font-bold">{pending.action === 'reveal' ? 'See branch password' : pending.action === 'password' ? 'Change branch password' : 'Reset branch password'}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{pending.action === 'reveal' ? `Enter your admin password to see the password for ${pending.branch.name}.` : pending.action === 'password' ? `Enter your admin password to set a new password for ${pending.branch.name}.` : `Enter your admin password to reset the login for ${pending.branch.name}.`}</p>
+          <h3 className="mt-1 font-display text-xl font-bold">{pendingAction === 'reveal' ? 'See branch password' : pendingAction === 'password' ? 'Change branch password' : 'Reset branch password'}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{pendingAction === 'reveal' ? `Enter your admin password to see the password for ${branch.name}.` : pendingAction === 'password' ? `Enter your admin password to set a new password for ${branch.name}.` : `Enter your admin password to reset the login for ${branch.name}.`}</p>
           <form onSubmit={(e) => { e.preventDefault(); verifyAdmin(); }} className="mt-4 grid gap-3">
             <PasswordField label="Admin password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} autoFocus required data-testid="input-branch-admin-confirm-password" toggleTestId="button-toggle-branch-admin-confirm-pwd" />
             {confirmError && <p className="text-xs text-destructive" data-testid="status-branch-admin-confirm-error">{confirmError}</p>}
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPending(null); }} disabled={confirmBusy} data-testid="button-cancel-branch-confirm">Cancel</Button>
-              <Button type="submit" size="sm" disabled={confirmBusy || !confirmPwd} data-testid="button-submit-branch-confirm">{confirmBusy ? 'Verifying…' : pending.action === 'reset' ? 'Reset login' : 'Confirm'}</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPendingAction(null); }} disabled={confirmBusy} data-testid="button-cancel-branch-confirm">Cancel</Button>
+              <Button type="submit" size="sm" disabled={confirmBusy || !confirmPwd} data-testid="button-submit-branch-confirm">{confirmBusy ? 'Verifying…' : pendingAction === 'reset' ? 'Reset login' : 'Confirm'}</Button>
             </div>
           </form>
         </div>
       </div>
     )}
+  </>;
+}
+
+function AdminBranchPage() {
+  const params = useParams<{ id: string }>();
+  const branchId = Number(params.id);
+  const [branches, setBranches] = useState<AdminBranch[] | null>(null);
+  const [moduleName, setModuleName] = useState('');
+  const [addingModule, setAddingModule] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const loadBranches = () => {
+    fetch('/api/admin/branches')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (Array.isArray(data)) setBranches(data as AdminBranch[]); })
+      .catch(() => undefined);
+  };
+  useEffect(() => { loadBranches(); }, []);
+  const branch = branches?.find((b) => b.id === branchId) ?? null;
+
+  const createModule = (event: FormEvent) => {
+    event.preventDefault();
+    if (!moduleName.trim() || !branch) return;
+    setBusy(true); setError(''); setNotice('');
+    fetch('/api/admin/modules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchId: branch.id, name: moduleName.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
+        setNotice(`Module "${moduleName.trim()}" added.`);
+        setModuleName(''); setAddingModule(false);
+        void refreshBranchCatalog().then(loadBranches);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+
+  if (branches != null && !branch) {
+    return <>
+      <PageHeader kicker="Admin / branches" title="Branch not found." detail="That branch does not exist." />
+      <Link href="/admin/dashboard" className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-4 py-2 text-sm font-semibold text-primary hover:bg-muted" data-testid="link-back-to-branches"><ChevronLeft size={14} /> Back to branches</Link>
+    </>;
+  }
+
+  return <>
+    <PageHeader kicker="Admin / branches" title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
+    {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-page-error">{error}</p>}
+    {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-page-success">{notice}</p>}
+    <section className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-modules-${branch?.id ?? 'loading'}`}>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Modules</h3>
+        <button type="button" onClick={() => { setAddingModule((v) => !v); setModuleName(''); setError(''); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline" data-testid="button-branch-add-module-toggle"><Plus size={13} /> Add module</button>
+      </div>
+      {addingModule && (
+        <form onSubmit={createModule} className="mt-4 flex flex-wrap items-end gap-3" data-testid="form-add-module">
+          <label className="grid gap-1.5 text-sm font-medium">Module name
+            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Artificial Intelligence" autoFocus className="w-64" data-testid="input-module-name" />
+          </label>
+          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">Add module</Button>
+          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+        </form>
+      )}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {(branch?.modules ?? []).map((mod) => (
+          <Link key={mod.id} href={`/admin/dashboard/${mod.id}`} className="group flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 transition hover:border-accent/60 hover:bg-accent/10" data-testid={`card-branch-module-${mod.id}`}>
+            <span className="grid h-8 w-8 place-items-center rounded-md bg-background font-mono-ui text-[10px] font-bold uppercase text-primary">{mod.id.slice(0, 2)}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold">{mod.name}</span>
+              <span className="block font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{mod.id}</span>
+            </span>
+            <ArrowRight size={15} className="shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+          </Link>
+        ))}
+        {branch != null && branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">No modules yet — add the first one above.</p>}
+        {branches == null && [1, 2].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}
+      </div>
+    </section>
+    {branch && <AdminBranchLoginCard branch={branch} onChanged={loadBranches} />}
   </>;
 }
 
@@ -3403,7 +3450,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
