@@ -105,7 +105,7 @@ function workspaceRole(pathname: string): Role | null {
 // Fixed admin routes under /admin. Anything else under /admin is a module panel key.
 const KNOWN_ADMIN_SEGMENTS = new Set([
   'dashboard', 'module', 'settings', 'panel-logins', 'students',
-  'announcements', 'documents', 'branch', 'login',
+  'announcements', 'documents', 'branch', 'branches', 'login',
 ]);
 
 setRoleHintGetter(() => (typeof window === 'undefined' ? null : workspaceRole(window.location.pathname)));
@@ -379,9 +379,10 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
   const logout = useLogout();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openItem, setOpenItem] = useState('');
-const nav: NavItem[] = user.role === 'admin'
+    const nav: NavItem[] = user.role === 'admin'
   ? [
       { href: '/admin/dashboard', label: 'Admin dashboard', icon: LayoutDashboard },
+      { href: '/admin/branches', label: 'Branches', icon: GitBranch },
       { href: '/admin/students', label: 'Add student', icon: Users, children: [{ href: '/admin/students/enrolled', label: 'Student list', icon: UserCheck }] },
       { href: '/admin/announcements', label: 'Announcements', icon: Megaphone },
       { href: '/admin/documents', label: 'Course files', icon: FileText },
@@ -417,38 +418,6 @@ const nav: NavItem[] = user.role === 'admin'
       logout.mutate(undefined, { onSettled: () => finish(user.role === 'teacher' ? `/admin/${user.module ?? 'ai'}` : '/') });
     }
   };
-  const sidebarBranches = useBranches();
-  const [branchOptionOpen, setBranchOptionOpen] = useState(false);
-  const [branchName, setBranchName] = useState('');
-  const [branchUserId, setBranchUserId] = useState('');
-  const [branchPassword, setBranchPassword] = useState('');
-  const [branchPasswordShown, setBranchPasswordShown] = useState(false);
-  const [branchBusy, setBranchBusy] = useState(false);
-  const [branchErr, setBranchErr] = useState('');
-  const createBranchHere = (event: FormEvent) => {
-    event.preventDefault();
-    const name = branchName.trim();
-    if (!name) return;
-    if (branchUserId.trim() && branchPassword.length > 0 && branchPassword.length < 6) {
-      setBranchErr('Password must be at least 6 characters.');
-      return;
-    }
-    setBranchBusy(true); setBranchErr('');
-    fetch('/api/admin/branches', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, username: branchUserId.trim() || undefined, password: branchUserId.trim() ? branchPassword : undefined }),
-    })
-      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok) throw new Error(data?.error ?? 'create failed');
-        setBranchName(''); setBranchUserId(''); setBranchPassword('');
-        setBranchOptionOpen(false);
-        void refreshBranchCatalog();
-      })
-      .catch((err: Error) => setBranchErr(err.message === 'create failed' ? 'Could not create that branch.' : err.message))
-      .finally(() => setBranchBusy(false));
-  };
   return <div className="app-noise min-h-[100dvh] bg-background">
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-sidebar p-5 text-sidebar-foreground transition-transform duration-200 lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex items-center justify-between"><Logo dark /><button className="rounded-md p-2 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" data-testid="button-close-menu"><X size={18} /></button></div>
@@ -459,33 +428,6 @@ const nav: NavItem[] = user.role === 'admin'
            {item.children && childOpen && <div className="mt-1 grid gap-1 pl-6">{item.children.map((child) => <Link key={child.href} href={child.href} onClick={() => setMobileOpen(false)} className="flex items-center gap-2.5 rounded-lg bg-sidebar-accent px-3 py-2 text-sm font-semibold text-sidebar-accent-foreground ring-1 ring-sidebar-border transition-colors hover:bg-accent hover:text-primary" data-testid={`link-subnav-${user.role}`}><child.icon size={15} />{child.label}</Link>)}</div>}
          </div>;
         })}</nav></div>
-        {user.role === 'admin' && (
-          <div className="mt-6 border-t border-sidebar-border pt-4" data-testid="section-sidebar-branches">
-            <button type="button" onClick={() => setBranchOptionOpen((v) => !v)} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-semibold transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" data-testid="button-branch-option">
-              <GitBranch size={17} />Branches
-              <ChevronDown size={14} className={`ml-auto transition-transform ${branchOptionOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {branchOptionOpen && (
-              <form onSubmit={createBranchHere} className="mt-2 grid gap-2 rounded-lg border border-sidebar-border bg-sidebar-accent/40 p-3" data-testid="form-create-branch">
-                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/60">Create branch</p>
-                <label className="grid gap-1 text-xs font-medium">Branch name
-                  <input type="text" value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. HASC" className="rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-name" />
-                </label>
-                <label className="grid gap-1 text-xs font-medium">User ID
-                  <input type="text" value={branchUserId} onChange={(e) => setBranchUserId(e.target.value)} placeholder="e.g. hasc" autoComplete="off" className="rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-user-id" />
-                </label>
-                <label className="grid gap-1 text-xs font-medium">Password
-                  <span className="flex items-center gap-2">
-                    <input type={branchPasswordShown ? 'text' : 'password'} value={branchPassword} onChange={(e) => setBranchPassword(e.target.value)} placeholder="Min. 6 characters" autoComplete="new-password" className="flex-1 rounded-md border border-sidebar-border bg-sidebar-accent/60 px-3 py-2 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:border-accent/60 focus:outline-none" data-testid="input-branch-password" />
-                    <button type="button" onClick={() => setBranchPasswordShown((v) => !v)} className="rounded p-1 text-sidebar-foreground/60 hover:text-sidebar-foreground" data-testid="button-toggle-branch-password-sidebar">{branchPasswordShown ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-                  </span>
-                </label>
-                {branchErr && <p className="text-[11px] text-destructive" data-testid="status-branch-create-error">{branchErr}</p>}
-                <button type="submit" disabled={branchBusy || !branchName.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-50" data-testid="button-create-branch"><Plus size={13} /> Create branch</button>
-              </form>
-            )}
-          </div>
-        )}
         <div className="mt-auto rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
          {user.role === 'admin' && <Link href="/admin/settings" onClick={() => setMobileOpen(false)} className="mb-3 flex items-center gap-2 rounded-lg bg-sidebar-accent px-3 py-2 text-sm font-semibold text-sidebar-accent-foreground ring-1 ring-sidebar-border transition-colors hover:bg-accent hover:text-primary" data-testid="link-admin-settings"><Settings size={15} /> Settings</Link>}
          <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-accent text-xs font-bold text-primary">{user.role === 'admin' ? 'A' : initials(user.displayName)}</span><div className="min-w-0"><p className="truncate text-sm font-semibold" data-testid="text-current-user">{user.role === 'admin' ? 'Admin' : user.displayName}</p>{user.role === 'teacher' && user.module && <p className="font-mono-ui text-[10px] uppercase tracking-wider text-sidebar-foreground/55" data-testid="text-current-module">{moduleShort[user.module]}</p>}</div></div>
@@ -536,7 +478,83 @@ function AdminModulesPage() {
             </div>
           </Link>
         ))}
-      {branches != null && branches.length === 0 && <p className="md:col-span-2 xl:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create one from the Branches option in the sidebar.</p>}
+      {branches != null && branches.length === 0 && <p className="md:col-span-2 xl:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">           No branches yet — create one below.</p>}
+    </div>
+  </>;
+}
+
+function AdminBranchesPage() {
+  const branches = useBranches();
+  const [branchName, setBranchName] = useState('');
+  const [branchUserId, setBranchUserId] = useState('');
+  const [branchPassword, setBranchPassword] = useState('');
+  const [branchPasswordShown, setBranchPasswordShown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const createBranch = (event: FormEvent) => {
+    event.preventDefault();
+    const name = branchName.trim();
+    if (!name) return;
+    if (branchUserId.trim() && branchPassword.length > 0 && branchPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    setBusy(true); setError(''); setNotice('');
+    fetch('/api/admin/branches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, username: branchUserId.trim() || undefined, password: branchUserId.trim() ? branchPassword : undefined }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error(data?.error ?? 'create failed');
+        setNotice(`Branch "${name}" created${branchUserId.trim() ? ` with desk login "${branchUserId.trim()}"` : ''}.`);
+        setBranchName(''); setBranchUserId(''); setBranchPassword('');
+        void refreshBranchCatalog();
+      })
+      .catch((err: Error) => setError(err.message === 'create failed' ? 'Could not create that branch.' : err.message))
+      .finally(() => setBusy(false));
+  };
+
+  return <>
+    <PageHeader kicker="Admin / branches" title="Branches." detail="Create a branch with its desk login, then open it to manage its modules." />
+    <section className="rounded-xl border border-border bg-card p-5" data-testid="card-create-branch">
+      <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Create branch</h3>
+      <form onSubmit={createBranch} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="grid gap-1.5 text-sm font-medium">Name
+          <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. HASC" data-testid="input-branch-name" />
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium">User ID
+          <Input value={branchUserId} onChange={(e) => setBranchUserId(e.target.value)} placeholder="e.g. hasc" autoComplete="off" data-testid="input-branch-user-id" />
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium">Password
+          <span className="flex items-center gap-2">
+            <Input type={branchPasswordShown ? 'text' : 'password'} value={branchPassword} onChange={(e) => setBranchPassword(e.target.value)} placeholder="Min. 6 characters" autoComplete="new-password" data-testid="input-branch-password" />
+            <button type="button" onClick={() => setBranchPasswordShown((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid="button-toggle-branch-password">{branchPasswordShown ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </span>
+        </label>
+        <div className="flex items-end">
+          <Button type="submit" disabled={busy || !branchName.trim()} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
+        </div>
+      </form>
+      {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-create-branch-error">{error}</p>}
+      {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-create-branch-success">{notice}</p>}
+    </section>
+
+    <h3 className="mt-8 font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Existing branches</h3>
+    <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {branches == null
+        ? [1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)
+        : branches.map((branch, index) => (
+          <Link key={branch.id} href={`/admin/branch/${branch.id}`} className="group block rounded-xl border border-border bg-card p-5 transition hover:border-accent/60" data-testid={`card-branch-${branch.id}`}>
+            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{String(index + 1).padStart(2, '0')}</p>
+            <h2 className="mt-1 font-display text-2xl font-bold leading-tight">{branch.name}</h2>
+            <p className="mt-2 text-xs text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'}</p>
+          </Link>
+        ))}
+      {branches != null && branches.length === 0 && <p className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create your first one above.</p>}
     </div>
   </>;
 }
@@ -3446,7 +3464,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
