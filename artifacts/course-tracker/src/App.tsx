@@ -440,11 +440,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
 }
 
 function PageHeader({ kicker, title, detail, action }: { kicker: ReactNode; title: string; detail: string; action?: ReactNode }) {
-  return <div className="mb-8 flex flex-col justify-between gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-primary">{kicker}</p><h1 className="mt-2 font-display text-4xl font-bold tracking-tight sm:text-5xl" data-testid="text-page-title">{title}</h1><p className="mt-2 max-w-xl text-sm text-muted-foreground">{detail}</p></div>{action}</div>;
-}
-
-function AdminBranchesKicker() {
-  return <button type="button" onClick={() => window.history.back()} className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</button>;
+  return <div className="mb-8 flex flex-col justify-between gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end"><div><div className="flex items-center gap-2"><button type="button" onClick={() => window.history.back()} className="-ml-1 grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground" title="Back" aria-label="Back" data-testid="button-page-back"><ChevronLeft size={16} /></button><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-primary">{kicker}</p></div><h1 className="mt-2 font-display text-4xl font-bold tracking-tight sm:text-5xl" data-testid="text-page-title">{title}</h1><p className="mt-2 max-w-xl text-sm text-muted-foreground">{detail}</p></div>{action}</div>;
 }
 
 function StatCard({ label, value, detail, icon: Icon, accent = false }: { label: string; value: string | number; detail: string; icon: typeof Users; accent?: boolean }) {
@@ -462,7 +458,7 @@ type AdminBranch = {
 function AdminModulesPage() {
   const branches = useBranches();
   return <>
-    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branches." detail="Each branch runs its own modules. Open a branch to see its modules and reset its desk login." />
+    <PageHeader kicker="Admin / branches" title="Branches." detail="Each branch runs its own modules. Open a branch to see its modules and reset its desk login." />
     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
       {branches == null
         ? [1, 2].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-muted" />)
@@ -615,7 +611,7 @@ function AdminBranchesPage() {
   };
 
   return <>
-    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branches." detail="Create a branch with its desk login, then open it to manage its modules." />
+    <PageHeader kicker="Admin / branches" title="Branches." detail="Create a branch with its desk login, then open it to manage its modules." />
     <section className="rounded-xl border border-border bg-card p-5" data-testid="card-create-branch">
       <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Create branch</h3>
       <form onSubmit={createBranch} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -664,6 +660,12 @@ function AdminBranchesPage() {
                 </label>
                 <label className="grid gap-1 text-xs font-medium">User ID
                   <Input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} data-testid={`input-branch-username-${branch.id}`} />
+                </label>
+                <label className="grid gap-1 text-xs font-medium">Password <span className="font-normal text-muted-foreground">(leave empty to keep the current one)</span>
+                  <div className="relative">
+                    <Input type={editPasswordShown ? 'text' : 'password'} value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="New password" minLength={6} autoComplete="new-password" data-testid={`input-branch-password-${branch.id}`} />
+                    <button type="button" onClick={() => setEditPasswordShown((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid={`button-toggle-branch-password-${branch.id}`}>{editPasswordShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
                 </label>
                 {editError && <p className="text-xs text-destructive" data-testid={`status-edit-branch-error-${branch.id}`}>{editError}</p>}
                 <div className="flex items-center gap-2">
@@ -913,13 +915,13 @@ function AdminBranchPage() {
 
   if (branches != null && !branch) {
     return <>
-      <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branch not found." detail="That branch does not exist." />
+      <PageHeader kicker="Admin / branches" title="Branch not found." detail="That branch does not exist." />
       <Link href="/admin/dashboard" className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-4 py-2 text-sm font-semibold text-primary hover:bg-muted" data-testid="link-back-to-branches"><ChevronLeft size={14} /> Back to branches</Link>
     </>;
   }
 
   return <>
-    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
+    <PageHeader kicker="Admin / branches" title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
     {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-page-error">{error}</p>}
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-page-success">{notice}</p>}
     <section className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-modules-${branch?.id ?? 'loading'}`}>
