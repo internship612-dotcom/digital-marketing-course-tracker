@@ -765,19 +765,16 @@ function AdminBranchPage() {
           <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
         </form>
       )}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(branch?.modules ?? []).map((mod) => (
-          <Link key={mod.id} href={`/admin/dashboard/${mod.id}`} className="group flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 transition hover:border-accent/60 hover:bg-accent/10" data-testid={`card-branch-module-${mod.id}`}>
-            <span className="grid h-8 w-8 place-items-center rounded-md bg-background font-mono-ui text-[10px] font-bold uppercase text-primary">{mod.id.slice(0, 2)}</span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold">{mod.name}</span>
-              <span className="block font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{mod.id}</span>
-            </span>
-            <ArrowRight size={15} className="shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+          <Link key={mod.id} href={`/admin/module/${mod.id}`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
+            <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
+            <h3 className="mt-2 font-display text-lg font-bold leading-tight">{mod.name}</h3>
+            <span className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary">Open module <ArrowRight size={13} /></span>
           </Link>
         ))}
-        {branch != null && branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">No modules yet — add the first one above.</p>}
-        {branches == null && [1, 2].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}
+        {branch != null && branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground sm:col-span-2 xl:col-span-3">No modules yet — add the first one above.</p>}
+        {branches == null && [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}
       </div>
     </section>
     {branch && <AdminBranchLoginCard branch={branch} onChanged={loadBranches} />}
