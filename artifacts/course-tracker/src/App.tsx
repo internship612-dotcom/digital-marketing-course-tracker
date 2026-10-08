@@ -443,6 +443,10 @@ function PageHeader({ kicker, title, detail, action }: { kicker: ReactNode; titl
   return <div className="mb-8 flex flex-col justify-between gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-primary">{kicker}</p><h1 className="mt-2 font-display text-4xl font-bold tracking-tight sm:text-5xl" data-testid="text-page-title">{title}</h1><p className="mt-2 max-w-xl text-sm text-muted-foreground">{detail}</p></div>{action}</div>;
 }
 
+function AdminBranchesKicker() {
+  return <button type="button" onClick={() => window.history.back()} className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</button>;
+}
+
 function StatCard({ label, value, detail, icon: Icon, accent = false }: { label: string; value: string | number; detail: string; icon: typeof Users; accent?: boolean }) {
   return <div className={`rounded-xl border p-5 ${accent ? 'border-accent/40 bg-accent/15' : 'border-border bg-card'}`}><div className="flex items-center justify-between"><span className={`grid h-9 w-9 place-items-center rounded-lg ${accent ? 'bg-accent text-primary' : 'bg-muted text-primary'}`}><Icon size={17} /></span><span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span></div><p className="mt-7 font-display text-4xl font-bold" data-testid={`stat-${label.toLowerCase().replaceAll(' ', '-')}`}>{value}</p><p className="mt-1 text-xs text-muted-foreground">{detail}</p></div>;
 }
@@ -458,7 +462,7 @@ type AdminBranch = {
 function AdminModulesPage() {
   const branches = useBranches();
   return <>
-    <PageHeader kicker={<>Admin / <Link href="/admin/branches" className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</Link></>} title="Branches." detail="Each branch runs its own modules. Open a branch to see its modules and reset its desk login." />
+    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branches." detail="Each branch runs its own modules. Open a branch to see its modules and reset its desk login." />
     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
       {branches == null
         ? [1, 2].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-muted" />)
@@ -611,7 +615,7 @@ function AdminBranchesPage() {
   };
 
   return <>
-    <PageHeader kicker={<>Admin / <Link href="/admin/branches" className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</Link></>} title="Branches." detail="Create a branch with its desk login, then open it to manage its modules." />
+    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branches." detail="Create a branch with its desk login, then open it to manage its modules." />
     <section className="rounded-xl border border-border bg-card p-5" data-testid="card-create-branch">
       <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Create branch</h3>
       <form onSubmit={createBranch} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -909,13 +913,13 @@ function AdminBranchPage() {
 
   if (branches != null && !branch) {
     return <>
-      <PageHeader kicker={<>Admin / <Link href="/admin/branches" className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</Link></>} title="Branch not found." detail="That branch does not exist." />
+      <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title="Branch not found." detail="That branch does not exist." />
       <Link href="/admin/dashboard" className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-4 py-2 text-sm font-semibold text-primary hover:bg-muted" data-testid="link-back-to-branches"><ChevronLeft size={14} /> Back to branches</Link>
     </>;
   }
 
   return <>
-    <PageHeader kicker={<>Admin / <Link href="/admin/branches" className="underline underline-offset-2 hover:text-foreground" data-testid="link-kicker-branches">branches</Link></>} title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
+    <PageHeader kicker={<>Admin / <AdminBranchesKicker /></>} title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
     {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-page-error">{error}</p>}
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-page-success">{notice}</p>}
     <section className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-modules-${branch?.id ?? 'loading'}`}>
