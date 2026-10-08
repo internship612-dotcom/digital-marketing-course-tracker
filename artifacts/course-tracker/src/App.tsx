@@ -2544,18 +2544,9 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const [branch, setBranch] = useState<string>('');
   const branchList = branches ?? [];
   const selectedBranch = branchList.find((b) => String(b.id) === branch) ?? null;
-  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : true));
+  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : false));
   const pickableModules = isAdmin ? branchModules : catalog;
   const visibleModules = isAdmin ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    if (!branch && branchList.length) {
-      setBranch(String(branchList[0].id));
-      const first = branchList[0].modules[0];
-      if (first) setModule(first.id as Module);
-    }
-  }, [branch, branchList, isAdmin]);
 
   return <>
     <PageHeader
@@ -2569,8 +2560,8 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       <p className="text-xs font-semibold text-primary">New notice</p>
       <h2 className="mt-1 font-display text-2xl font-bold">Write an announcement</h2>
       <div className="mt-5 grid gap-3">
-        {isAdmin && branchList.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => { const next = e.target.value; setBranch(next); const sel = branchList.find((b) => String(b.id) === next); if (sel?.modules[0]) setModule(sel.modules[0].id as Module); }} data-testid="select-notice-branch">{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
-        {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{pickableModules.length === 0 && <option value="">— no modules —</option>}{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
+        {isAdmin && branchList.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => { const next = e.target.value; setBranch(next); const sel = branchList.find((b) => String(b.id) === next); if (sel?.modules[0]) setModule(sel.modules[0].id as Module); }} data-testid="select-notice-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
+        {isAdmin && selectedBranch && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{pickableModules.length === 0 && <option value="">— no modules —</option>}{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
         <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="e.g. Class timings changed for next week" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
         <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
           const file = announcementImageFile(e);
@@ -2862,16 +2853,11 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
   const [branch, setBranch] = useState<string>('');
   const branchList = branches ?? [];
   const selectedBranch = branchList.find((b) => String(b.id) === branch) ?? null;
-  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : true));
+  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : false));
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const visible = scope === 'admin' ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    if (!branch && branchList.length) setBranch(String(branchList[0].id));
-  }, [branch, branchList, isAdmin]);
 
   return <>
     <PageHeader
@@ -2881,13 +2867,14 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
         ? 'The syllabus and project PDFs students read. Uploading a file replaces the one already there, so the old version disappears from the student portal at the same moment.'
         : 'The syllabus and project PDFs your students read. Uploading a file replaces the one already there — the old version comes down straight away.'} />
 
-    {isAdmin && branchList.length > 0 && <label className="mb-4 grid w-72 gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => setBranch(e.target.value)} data-testid="select-documents-branch">{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
+    {isAdmin && branchList.length > 0 && <label className="mb-4 grid w-72 gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => setBranch(e.target.value)} data-testid="select-documents-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
 
     {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-documents-error">{error}</p>}
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-documents-success">{notice}</p>}
 
     {failed ? <ErrorState retry={refresh} />
       : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
+      : isAdmin && !selectedBranch ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">Choose a branch above to see its course files.</p>
       : <div className="grid gap-4">{visible.map((meta) => (
           <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`documents-${meta.key}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
