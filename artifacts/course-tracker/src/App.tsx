@@ -777,7 +777,6 @@ function AdminBranchPage() {
         {branches == null && [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}
       </div>
     </section>
-    {branch && <AdminBranchLoginCard branch={branch} onChanged={loadBranches} />}
   </>;
 }
 
