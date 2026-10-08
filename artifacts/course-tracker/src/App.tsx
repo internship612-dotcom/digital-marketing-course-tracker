@@ -3019,17 +3019,26 @@ function TeacherAddStudentPage({ user }: { user: CurrentUser }) {
 
 function AdminEnrolledPage() {
   const [search, setSearch] = useState('');
+  const [branch, setBranch] = useState<string>('');
   const [, setLocation] = useLocation();
   const students = useListStudents(undefined, { query: { queryKey: getListStudentsQueryKey(undefined) } });
   const [remarkFor, setRemarkFor] = useState<Student | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const statusFor = useStudentStatus('/api/admin/students/status', refreshToken);
   const refresh = () => { setRefreshToken((v) => v + 1); queryClient.invalidateQueries({ queryKey: getListStudentsQueryKey() }); void students.refetch(); };
+  const branches = useBranches();
+  const branchList = branches ?? [];
+  const zedking = branchList.find((b) => b.name === 'Zedking');
   // Same table as the module desk, so the two portals read identically.
   const query = search.trim().toLowerCase();
-  const rows = (students.data ?? []).filter((student) => studentMatches(student, query));
+  const branchOf = (student: Student) => student.branchId ?? zedking?.id ?? null;
+  const rows = (students.data ?? []).filter((student) =>
+    (branch === '' || String(branchOf(student)) === branch)
+    && studentMatches(student, query),
+  );
   return <>
     <PageHeader kicker="Admin / student room" title="Student list" detail="Open a student to see their full record, photo and sign-in details." />
+    {branchList.length > 0 && <label className="mb-3 grid w-72 gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => setBranch(e.target.value)} data-testid="select-students-branch"><option value="">— All branches —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
     <StudentSearchBar value={search} onChange={setSearch} count={rows.length} testId="input-search-students" />
     <section className="rounded-xl border border-border bg-card p-5">
       <h2 className="mb-5 font-display text-2xl font-bold">All students</h2>

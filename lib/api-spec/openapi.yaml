@@ -803,6 +803,9 @@ components:
         registrationDate:
           type: string
           format: date-time
+        branchId:
+          type: number
+          nullable: true
         photo:
           type: string
           nullable: true

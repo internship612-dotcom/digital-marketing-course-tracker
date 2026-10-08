@@ -163,6 +163,7 @@ export interface Student {
   contactNumber: string;
   email: string;
   registrationDate: string;
+  branchId?: number | null;
   photo?: string | null;
   remark?: string | null;
   address?: string | null;

@@ -15,6 +15,7 @@ export interface Student {
   contactNumber: string;
   email: string;
   registrationDate: Date;
+  branchId?: number | null;
   photo?: string | null;
   remark?: string | null;
   address?: string | null;

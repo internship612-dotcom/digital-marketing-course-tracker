@@ -138,6 +138,7 @@ function studentView(student: typeof studentsTable.$inferSelect) {
     contactNumber: student.contactNumber,
     email: student.email,
     registrationDate: student.registrationDate.toISOString(),
+    branchId: student.branchId ?? null,
     photo: student.photo,
     remark: student.remark,
     address: student.address,
