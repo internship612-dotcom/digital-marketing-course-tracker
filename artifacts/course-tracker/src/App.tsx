@@ -2886,7 +2886,14 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const visible = scope === 'branch'
-    ? (branchOverviewModules ? catalog.filter((m) => branchOverviewModules.modules.some((om) => om.id === m.key)) : branchOverview.failed ? branchModules : [])
+    ? (branchOverviewModules
+        ? branchOverviewModules.modules.map((om, i) => ({
+            key: om.id,
+            number: i + 1,
+            name: om.name,
+            tagline: `Part of the ${user.displayName} branch.`,
+          }))
+        : branchOverview.failed ? branchModules : [])
     : scope === 'admin' ? branchModules
     : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
