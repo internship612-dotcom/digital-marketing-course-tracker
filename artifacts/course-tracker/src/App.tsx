@@ -236,11 +236,11 @@ function fileSize(bytes: number): string {
 // Downloads go through the caller's own role prefix so the session cookie resolves;
 // a plain <a> cannot send the x-ct-role header, and the path is what the API falls
 // back to. Cache-busted because staff replace a file in place under the same URL.
-function documentHref(scope: 'admin' | 'teacher' | 'student', doc: CourseDocument): string {
+function documentHref(scope: 'admin' | 'teacher' | 'student' | 'branch', doc: CourseDocument): string {
   return `/api/${scope}/documents/${doc.module}/${doc.kind}/file?v=${encodeURIComponent(doc.updatedAt)}`;
 }
 
-function useCourseDocuments(scope: 'admin' | 'teacher' | 'student') {
+function useCourseDocuments(scope: 'admin' | 'teacher' | 'student' | 'branch') {
   const [docs, setDocs] = useState<CourseDocument[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [token, setToken] = useState(0);
@@ -257,7 +257,7 @@ function useCourseDocuments(scope: 'admin' | 'teacher' | 'student') {
 }
 
 // One row per document. Opens in a new tab so the student keeps their place in the portal.
-function DocLink({ scope, kind, doc }: { scope: 'admin' | 'teacher' | 'student'; kind: DocumentKind; doc?: CourseDocument }) {
+function DocLink({ scope, kind, doc }: { scope: 'admin' | 'teacher' | 'student' | 'branch'; kind: DocumentKind; doc?: CourseDocument }) {
   const meta = documentLabels[kind];
   if (!doc) {
     return <div className="flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3 text-muted-foreground" data-testid={`doc-${kind}-pending`}>
@@ -398,7 +398,10 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
       ]
     : user.role === 'branch'
       ? [
-          { href: '/branch', label: 'Branch dashboard', icon: LayoutDashboard },
+          { href: '/branch', label: `${user.displayName || 'Branch'} dashboard`, icon: LayoutDashboard },
+          { href: '/branch/add-student', label: 'Add student', icon: Users, children: [{ href: '/branch/students', label: 'Student list', icon: UserCheck }] },
+          { href: '/branch/documents', label: 'Course files', icon: FileText },
+          { href: '/branch/announcements', label: 'Announcements', icon: Megaphone },
         ]
       : [
         { href: '/student/profile', label: 'My profile', icon: UserRound },
@@ -2458,11 +2461,13 @@ function NoticesByModule({ notices, emptyDetail, modules: visibleProp, actions, 
   })}</div>;
 }
 
-// One screen, two desks. A module owner writes for their own module; the admin sits
+// One screen, three desks. A module owner writes for their own module; the admin sits
 // above all three, picks the module on the way in, and can moderate anything a
-// teacher wrote. `scope` swaps the API prefix and turns the module picker on.
-function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' | 'teacher' }) {
+// teacher wrote; a branch office writes into any of its own modules. `scope` swaps
+// the API prefix and turns the module picker on.
+function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' | 'teacher' | 'branch' }) {
   const isAdmin = scope === 'admin';
+  const isBranch = scope === 'branch';
   const base = `/api/${scope}/announcements`;
   const [notices, setNotices] = useState<Announcement[] | null>(null);
   const [module, setModule] = useState<Module>(user.module ?? 'ai');
@@ -2492,7 +2497,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
     fetch(base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(isAdmin ? { title, body, publish, module, image } : { title, body, publish, image }),
+      body: JSON.stringify(isAdmin || isBranch ? { title, body, publish, module, image } : { title, body, publish, image }),
     })
       .then((res) => { if (!res.ok) throw new Error('save failed'); })
       .then(() => {
@@ -2541,27 +2546,43 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   // headings for the two modules they can neither read nor write.
   const catalog = useCatalogModules();
   const branches = useBranches();
-  const [branch, setBranch] = useState<string>('');
   const branchList = branches ?? [];
-  const selectedBranch = branchList.find((b) => String(b.id) === branch) ?? null;
-  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : false));
-  const pickableModules = isAdmin ? branchModules : catalog;
-  const visibleModules = isAdmin ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
+  const [branch, setBranch] = useState<string>('');
+  const currentBranch = isBranch ? (branchList.find((b) => b.name === user.displayName) ?? null) : null;
+  const selectedBranch = currentBranch ?? (branchList.find((b) => String(b.id) === branch) ?? null);
+  const branchModules = catalog.filter((m) => {
+    const source = currentBranch ?? selectedBranch;
+    return source ? source.modules.some((mod) => mod.id === m.key) : false;
+  });
+  const pickableModules = isAdmin || isBranch ? branchModules : catalog;
+  const visibleModules = isAdmin || isBranch
+    ? branchModules
+    : catalog.filter((m) => m.key === (user.module ?? 'ai'));
+
+  // A branch module picker needs a concrete default once the catalog loads: unlike a
+  // teacher, the branch's desk does not own exactly one module.
+  useEffect(() => {
+    if (isBranch && branchModules.length > 0 && !branchModules.some((m) => m.key === module)) {
+      setModule(branchModules[0].key as Module);
+    }
+  }, [isBranch, branchModules, module]);
 
   return <>
     <PageHeader
-      kicker={isAdmin ? 'Admin / announcements' : `Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
+      kicker={isAdmin ? 'Admin / announcements' : isBranch ? `Branch / ${user.displayName}` : `Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Announcements"
       detail={isAdmin
         ? 'Every notice across all three modules. Write one for any module, or take down something a module owner posted.'
-        : `Notices for ${user.module ? moduleNames[user.module] : 'your module'} only. Publish one and it appears on your students' portal straight away.`} />
+        : isBranch
+          ? `Notices for ${user.displayName} and its modules only. Publish one and it appears on the branch's students' portal straight away.`
+          : `Notices for ${user.module ? moduleNames[user.module] : 'your module'} only. Publish one and it appears on your students' portal straight away.`} />
 
     <section className="rounded-xl border border-border bg-card p-5">
       <p className="text-xs font-semibold text-primary">New notice</p>
       <h2 className="mt-1 font-display text-2xl font-bold">Write an announcement</h2>
       <div className="mt-5 grid gap-3">
         {isAdmin && branchList.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => { const next = e.target.value; setBranch(next); const sel = branchList.find((b) => String(b.id) === next); if (sel?.modules[0]) setModule(sel.modules[0].id as Module); }} data-testid="select-notice-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
-        {isAdmin && selectedBranch && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{pickableModules.length === 0 && <option value="">— no modules —</option>}{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
+        {(isAdmin ? selectedBranch != null : isBranch ? branchModules.length > 0 : false) && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{pickableModules.length === 0 && <option value="">— no modules —</option>}{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
         <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="e.g. Class timings changed for next week" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
         <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
           const file = announcementImageFile(e);
@@ -2765,7 +2786,7 @@ function StudentModulesPage() {
 // "delete the old one and put the new one up" is a single action; Remove is there for
 // taking a file down without a replacement ready.
 function DocumentSlot({ scope, module, kind, doc, onChanged, onError, onNotice }: {
-  scope: 'admin' | 'teacher';
+  scope: 'admin' | 'teacher' | 'branch';
   module: Module;
   kind: DocumentKind;
   doc?: CourseDocument;
@@ -2784,7 +2805,7 @@ function DocumentSlot({ scope, module, kind, doc, onChanged, onError, onNotice }
     const reader = new FileReader();
     reader.onerror = () => { setBusy(false); onError('That file could not be read. Try again.'); };
     reader.onload = () => {
-      const body = scope === 'admin'
+      const body = scope === 'admin' || scope === 'branch'
         ? { module, kind, fileName: file.name, content: reader.result }
         : { kind, fileName: file.name, content: reader.result };
       fetch(`/api/${scope}/documents`, {
@@ -2808,7 +2829,7 @@ function DocumentSlot({ scope, module, kind, doc, onChanged, onError, onNotice }
     if (!doc) return;
     if (!window.confirm(`Remove the ${meta.label.toLowerCase()} for ${moduleNames[module]}? Students will stop seeing it straight away.`)) return;
     onError(''); onNotice('');
-    const url = scope === 'admin' ? `/api/admin/documents/${module}/${kind}` : `/api/teacher/documents/${kind}`;
+    const url = scope === 'teacher' ? `/api/teacher/documents/${kind}` : `/api/${scope}/documents/${module}/${kind}`;
     fetch(url, { method: 'DELETE' })
       .then((res) => { if (!res.ok) throw new Error('delete failed'); onNotice(`${meta.label} removed.`); onChanged(); })
       .catch(() => onError('We could not remove that file. Try again.'));
@@ -2844,24 +2865,30 @@ function DocumentSlot({ scope, module, kind, doc, onChanged, onError, onNotice }
   </div>;
 }
 
-// Admin manages all three modules; a module desk only ever sees its own.
-function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin' | 'teacher' }) {
+// Admin manages all three modules; a module desk only ever sees its own; a branch
+// office sees the files of its own modules.
+function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin' | 'teacher' | 'branch' }) {
   const { docs, failed, refresh } = useCourseDocuments(scope);
   const catalog = useCatalogModules();
   const isAdmin = scope === 'admin';
+  const isBranch = scope === 'branch';
   const branches = useBranches();
-  const [branch, setBranch] = useState<string>('');
   const branchList = branches ?? [];
-  const selectedBranch = branchList.find((b) => String(b.id) === branch) ?? null;
-  const branchModules = catalog.filter((m) => (selectedBranch ? selectedBranch.modules.some((mod) => mod.id === m.key) : false));
+  const [branch, setBranch] = useState<string>('');
+  const currentBranch = isBranch ? (branchList.find((b) => b.name === user.displayName) ?? null) : null;
+  const selectedBranch = currentBranch ?? (branchList.find((b) => String(b.id) === branch) ?? null);
+  const branchModules = catalog.filter((m) => {
+    const source = currentBranch ?? selectedBranch;
+    return source ? source.modules.some((mod) => mod.id === m.key) : false;
+  });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const visible = scope === 'admin' ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
+  const visible = scope === 'admin' || scope === 'branch' ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
 
   return <>
     <PageHeader
-      kicker={scope === 'admin' ? 'Admin / course files' : `Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
+      kicker={scope === 'admin' ? 'Admin / course files' : scope === 'branch' ? `Branch / ${user.displayName}` : `Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Course files"
       detail={scope === 'admin'
         ? 'The syllabus and project PDFs students read. Uploading a file replaces the one already there, so the old version disappears from the student portal at the same moment.'
@@ -2875,6 +2902,7 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
     {failed ? <ErrorState retry={refresh} />
       : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
       : isAdmin && !selectedBranch ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">Choose a branch above to see its course files.</p>
+      : visible.length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No modules available for this branch yet.</p>
       : <div className="grid gap-4">{visible.map((meta) => (
           <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`documents-${meta.key}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
@@ -3053,6 +3081,63 @@ function AdminEnrolledPage() {
   </>;
 }
 
+function BranchAddStudentPage() {
+  const [students, setStudents] = useState<Student[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const load = () => {
+    fetch('/api/branch/students')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (Array.isArray(data)) setStudents(data as Student[]); })
+      .catch(() => undefined);
+  };
+  useEffect(load, []);
+  // Branch offices post to /branch/students; the branch is taken from the session, so
+  // the form hides its branch select and the create always lands under this branch.
+  const onCreate = (data: NewStudentInput) => {
+    setCreating(true);
+    return fetch('/api/branch/students', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+      .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
+      .then(({ ok, body }) => { if (!ok) throw new Error('create failed'); load(); return body as Student; })
+      .finally(() => setCreating(false));
+  };
+  return <StudentEnrolForm kicker="Branch / student room" total={students?.length ?? 0} creating={creating} photoBase="/api/branch/students" showBranch={false} onCreate={onCreate} />;
+}
+
+function BranchStudentListPage() {
+  const [search, setSearch] = useState('');
+  const [, setLocation] = useLocation();
+  const [students, setStudents] = useState<Student[] | null>(null);
+  const [remarkFor, setRemarkFor] = useState<Student | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const load = () => {
+    setFailed(false);
+    fetch('/api/branch/students')
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (ok) setStudents(data as Student[]); else setFailed(true); })
+      .catch(() => setFailed(true));
+  };
+  useEffect(load, []);
+  const statusFor = useStudentStatus('/api/branch/students/status', refreshToken);
+  const refresh = () => { setRefreshToken((v) => v + 1); load(); };
+  const query = search.trim().toLowerCase();
+  const rows = (students ?? []).filter((s) => studentMatches(s, query));
+  return <>
+    <PageHeader kicker="Branch / student room" title="Student list" detail="The students enrolled in this branch. Open a student to see their full record, photo and sign-in details." />
+    <StudentSearchBar value={search} onChange={setSearch} count={rows.length} testId="input-branch-student-search" />
+    <section className="rounded-xl border border-border bg-card p-5">
+      <h2 className="mb-5 font-display text-2xl font-bold">All students</h2>
+      {failed ? <ErrorState retry={load} />
+        : students == null ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
+        : rows.length === 0 ? <EmptyState title="No matching students" detail="Try a name, student ID, contact number or email." icon={UserRound} />
+        : <StudentTable students={rows} testIdPrefix="row-branch-student" statusFor={statusFor} onRowClick={(student) => setLocation(`/branch/students/${student.id}`)} action={(student) => (
+            <RecordActions student={student} base="/api/branch/students" onRemark={() => setRemarkFor(student)} onDeleted={refresh} />
+          )} />}
+    </section>
+    {remarkFor && <RemarkPanel student={remarkFor} base="/api/branch/students" onClose={() => setRemarkFor(null)} onSaved={refresh} />}
+  </>;
+}
+
 // Resize in the browser so a phone photo lands as a small square instead of 4 MB.
 function readSquarePhoto(file: File, size = 320): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -3079,7 +3164,7 @@ function readSquarePhoto(file: File, size = 320): Promise<string> {
 
 const emptyProfileForm: StudentProfileForm = { fullName: '', fathersName: '', course: 'Digital Marketing with AI', dateOfJoining: '', contactNumber: '', guardianContact: '', email: '', address: '' };
 
-function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
+function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' }) {
   const params = useParams<{ id: string }>();
   const base = `/api/${scope}/students/${encodeURIComponent(params.id)}`;
   const [student, setStudent] = useState<Student | null>(null);
@@ -3203,8 +3288,9 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
       .finally(() => setProfileSaving(false));
   };
 
-  const backHref = scope === 'admin' ? '/admin/students/enrolled' : '/teacher/students';
-  if (loadError) return <><PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title="Student record" detail="We could not open this record." /><ErrorState retry={load} /></>;
+  const backHref = scope === 'admin' ? '/admin/students/enrolled' : scope === 'branch' ? '/branch/students' : '/teacher/students';
+  const recordKicker = scope === 'admin' ? 'Admin' : scope === 'branch' ? 'Branch' : 'Teacher';
+  if (loadError) return <><PageHeader kicker={`${recordKicker} / student record`} title="Student record" detail="We could not open this record." /><ErrorState retry={load} /></>;
   if (!student) return <LoadingScreen label="Opening student record" />;
 
   const rows: Array<[string, string]> = [
@@ -3222,7 +3308,7 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' }) {
 
   return <>
     <Link href={backHref} className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground" data-testid="link-back-students"><ChevronLeft size={16} /> Back to student list</Link>
-    <PageHeader kicker={`${scope === 'admin' ? 'Admin' : 'Teacher'} / student record`} title={student.fullName} detail="The full record, the photo, and the sign-in details for this learner." action={<div className="flex items-center gap-3">{!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}<StudentAvatar student={student} size={48} /></div>} />
+    <PageHeader kicker={`${recordKicker} / student record`} title={student.fullName} detail="The full record, the photo, and the sign-in details for this learner." action={<div className="flex items-center gap-3">{!editing && <Button type="button" size="sm" variant="outline" onClick={openEdit} data-testid="button-edit-student-profile"><Pencil size={14} /> Edit profile</Button>}<StudentAvatar student={student} size={48} /></div>} />
     <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
       <div className="grid gap-6">
       <section className="rounded-xl border border-border bg-card p-5">
@@ -3584,8 +3670,6 @@ type BranchOverview = {
 
 function BranchPage() {
   const [overview, setOverview] = useState<BranchOverview | null>(null);
-  const [students, setStudents] = useState<Student[] | null>(null);
-  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
     let alive = true;
@@ -3593,20 +3677,11 @@ function BranchPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (alive && data) setOverview(data as BranchOverview); })
       .catch(() => setError('Could not load the branch.'));
-    fetch('/api/branch/students')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && Array.isArray(data)) setStudents(data as Student[]); })
-      .catch(() => setError('Could not load the students.'));
     return () => { alive = false; };
   }, []);
-  const query = search.trim().toLowerCase();
-  const rows = (students ?? []).filter((s) =>
-    [s.fullName, s.id, s.fathersName, s.contactNumber, s.email, s.course].some((v) => v?.toLowerCase().includes(query)),
-  );
   return <>
-    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="Students and module coverage for this branch." />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <StatCard label="Students" value={overview?.totalStudents ?? '—'} detail="in this branch" icon={Users} accent />
+    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="Module coverage for this branch. Add a student or open the student list from the sidebar." />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <StatCard label="Attendance marked" value={overview?.attendanceMarked ?? '—'} detail={`${overview?.attendancePending ?? 0} student${(overview?.attendancePending ?? 0) === 1 ? '' : 's'} with no attendance yet`} icon={CalendarCheck2} />
       <StatCard label="Attendance pending" value={overview?.attendancePending ?? '—'} detail="never recorded for this student" icon={Clock} />
       <StatCard label="Project entries" value={overview?.assessmentMarked ?? '—'} detail={`${overview?.assessmentPending ?? 0} student${(overview?.assessmentPending ?? 0) === 1 ? '' : 's'} with no marks yet`} icon={ClipboardCheck} />
@@ -3624,18 +3699,7 @@ function BranchPage() {
         {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet.</p>}
       </div>
     </section>
-    <section className="mt-8">
-      <div className="mb-5 flex items-center justify-between gap-4">
-        <h2 className="font-display text-2xl font-bold">Students</h2>
-        <StudentSearchBar value={search} onChange={setSearch} count={rows.length} testId="input-branch-student-search" />
-      </div>
-      {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
-      {students == null ? (
-        <div className="grid gap-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
-      ) : (
-        <StudentTable students={rows} action={() => null} testIdPrefix="row-branch-student" />
-      )}
-    </section>
+    {error && <p className="mt-8 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
   </>;
 }
 
@@ -3644,7 +3708,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -3670,6 +3734,16 @@ function AdminDocumentsFromRoute() {
 function TeacherDocumentsFromRoute() {
   const { data: user } = useCurrentUser();
   return user ? <CourseDocumentsPage user={user} scope="teacher" /> : null;
+}
+
+function BranchAnnouncementsFromRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <AnnouncementsPage user={user} scope="branch" /> : null;
+}
+
+function BranchDocumentsFromRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <CourseDocumentsPage user={user} scope="branch" /> : null;
 }
 
 function TeacherAttendanceFromRoute() {

@@ -120,6 +120,14 @@ async function studentModuleKeys(studentId: string): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+async function branchModuleIds(branchId: number): Promise<string[]> {
+  const rows = await db
+    .select({ id: modulesCatalog.id })
+    .from(modulesCatalog)
+    .where(eq(modulesCatalog.branchId, branchId));
+  return rows.map((r) => r.id);
+}
+
 function moduleLabel(module: Module): string {
   return module === "ai"
     ? "AI"
@@ -2926,6 +2934,370 @@ router.get(
   },
 );
 
+// A branch office enrols students exactly like the admin desk, only pinned to its own
+// branch. The caller's branchId wins — anything sent in the body is ignored so a branch
+// can never sign a student up under another branch.
+router.post(
+  "/branch/students",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const parsed = CreateStudentBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Please complete all student fields correctly." });
+      return;
+    }
+    const data = parsed.data;
+    const email = normalizeEmail(data.email);
+    const [existing] = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(eq(studentsTable.email, email))
+      .limit(1);
+    if (existing) {
+      res.status(400).json({ error: "An account with this email already exists." });
+      return;
+    }
+    const [lastStudent] = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .orderBy(desc(studentsTable.registrationDate))
+      .limit(1);
+    const [student] = await db
+      .insert(studentsTable)
+      .values({
+        id: nextStudentId(lastStudent?.id),
+        fullName: data.fullName.trim(),
+        fathersName: data.fathersName.trim(),
+        course: data.course.trim(),
+        dateOfJoining: data.dateOfJoining.toISOString().slice(0, 10),
+        contactNumber: data.contactNumber.trim(),
+        email,
+        address: optionalText(data.address),
+        guardianContact: optionalText(data.guardianContact),
+        passwordHash: await hashPassword(data.password),
+        plainPassword: data.password,
+        branchId: req.auth.branchId,
+      })
+      .returning();
+    res.status(201).json(CreateStudentResponse.parse(studentView(student)));
+  },
+);
+
+// Branch twin of /admin/students/status: who in this branch is clear right now, read
+// against only the modules that belong to this branch. Registered before :id routes.
+router.get(
+  "/branch/students/status",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    res.json(await buildStatus(await branchModuleIds(req.auth.branchId)));
+  },
+);
+
+// The branch record screen mirrors the admin one, but every lookup is scoped to the
+// branch so a branch can never read or touch a student enrolled under another one.
+function rootBranchStudentId(req: { params: { id?: unknown } }): string {
+  return String(req.params.id ?? "");
+}
+
+router.get(
+  "/branch/students/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .limit(1);
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(GetStudentResponse.parse(studentView(student)));
+  },
+);
+
+router.get(
+  "/branch/students/:id/detail",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .limit(1);
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(studentView(student));
+  },
+);
+
+router.get(
+  "/branch/students/:id/credential",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [student] = await db
+      .select({ id: studentsTable.id, plainPassword: studentsTable.plainPassword })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .limit(1);
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json({ password: student.plainPassword });
+  },
+);
+
+router.patch(
+  "/branch/students/:id/photo",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const photo = req.body?.photo;
+    if (photo !== null && typeof photo !== "string") {
+      res.status(400).json({ error: "Send a photo data URL, or null to remove it." });
+      return;
+    }
+    if (typeof photo === "string" && !/^data:image\/(png|jpeg|webp);base64,/.test(photo)) {
+      res.status(400).json({ error: "Only PNG, JPEG or WebP images are accepted." });
+      return;
+    }
+    if (typeof photo === "string" && photo.length > 1_500_000) {
+      res.status(400).json({ error: "That image is too large." });
+      return;
+    }
+    const [student] = await db
+      .update(studentsTable)
+      .set({ photo })
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(studentView(student));
+  },
+);
+
+router.patch(
+  "/branch/students/:id/remark",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const raw = req.body?.remark;
+    if (raw !== null && typeof raw !== "string") {
+      res.status(400).json({ error: "Send a remark, or null to clear it." });
+      return;
+    }
+    const remark = typeof raw === "string" ? raw.trim().slice(0, 2000) : null;
+    const [student] = await db
+      .update(studentsTable)
+      .set({ remark: remark === "" ? null : remark })
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(studentView(student));
+  },
+);
+
+router.patch(
+  "/branch/students/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const parsed = UpdateStudentBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Please complete all student fields correctly." });
+      return;
+    }
+    const data = parsed.data;
+    const id = rootBranchStudentId(req);
+    const email = normalizeEmail(data.email);
+    const [clash] = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(and(eq(studentsTable.email, email), ne(studentsTable.id, id)))
+      .limit(1);
+    if (clash) {
+      res.status(409).json({ error: "An account with this email already exists." });
+      return;
+    }
+    const [student] = await db
+      .update(studentsTable)
+      .set({
+        fullName: data.fullName.trim(),
+        fathersName: data.fathersName.trim(),
+        course: data.course.trim(),
+        dateOfJoining: data.dateOfJoining.toISOString().slice(0, 10),
+        contactNumber: data.contactNumber.trim(),
+        email,
+        address: optionalText(data.address),
+        guardianContact: optionalText(data.guardianContact),
+      })
+      .where(
+        and(
+          eq(studentsTable.id, id),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(studentView(student));
+  },
+);
+
+router.patch(
+  "/branch/students/:id/password",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const parsed = UpdateStudentPasswordBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Enter a valid new password." });
+      return;
+    }
+    const [student] = await db
+      .update(studentsTable)
+      .set({
+        passwordHash: await hashPassword(parsed.data.password),
+        plainPassword: parsed.data.password,
+      })
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .returning();
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.sendStatus(204);
+  },
+);
+
+router.delete(
+  "/branch/students/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const deleted = await db
+      .delete(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .returning({ id: studentsTable.id });
+    if (!deleted[0]) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    await db
+      .delete(sessionsTable)
+      .where(
+        and(eq(sessionsTable.userId, deleted[0].id), eq(sessionsTable.role, "student")),
+      );
+    res.sendStatus(204);
+  },
+);
+
+router.get(
+  "/branch/students/:id/report",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [ownership] = await db
+      .select({ branchId: studentsTable.branchId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.id, rootBranchStudentId(req)),
+          eq(studentsTable.branchId, req.auth.branchId),
+        ),
+      )
+      .limit(1);
+    if (!ownership) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(await buildStudentReport(rootBranchStudentId(req)));
+  },
+);
+
 // ---------------------------------------------------------------- announcements
 // A module owner writes notices for students. Drafts stay on their own desk; only a
 // published notice reaches the student portal, and unpublishing takes it back down.
@@ -3207,6 +3579,145 @@ router.delete(
   },
 );
 
+// The branch desk moderates its own branch: it reads the notices of its own modules
+// and writes one into whichever module it picks. Like the admin desk, an announcement
+// written here leaves `createdBy` null (that column references teachers) and leans on
+// `authorName` instead.
+
+router.get(
+  "/branch/announcements",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const moduleKeys = await branchModuleIds(req.auth.branchId);
+    const rows = await db
+      .select()
+      .from(announcementsTable)
+      .orderBy(desc(announcementsTable.createdAt));
+    res.json(rows.filter((row) => moduleKeys.includes(row.module)).map(announcementView));
+  },
+);
+
+router.post(
+  "/branch/announcements",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = (req.body as { module?: unknown })?.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const input = announcementInput(req.body);
+    if (!input) {
+      res.status(400).json({ error: "Enter a title and a message." });
+      return;
+    }
+    const publish = (req.body as { publish?: unknown })?.publish === true;
+    const [record] = await db
+      .insert(announcementsTable)
+      .values({
+        module,
+        title: input.title,
+        body: input.body,
+        authorName: req.auth?.displayName ?? null,
+        createdBy: null,
+        publishedAt: publish ? new Date() : null,
+        image: input.image ?? null,
+      })
+      .returning();
+    res.status(201).json(announcementView(record));
+  },
+);
+
+router.patch(
+  "/branch/announcements/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid notice." });
+      return;
+    }
+    const moduleKeys = await branchModuleIds(req.auth.branchId);
+    const rows = await db
+      .select({ id: announcementsTable.id, module: announcementsTable.module })
+      .from(announcementsTable)
+      .where(eq(announcementsTable.id, id))
+      .limit(1);
+    if (!rows[0] || !moduleKeys.includes(rows[0].module)) {
+      res.status(404).json({ error: "Notice not found." });
+      return;
+    }
+    const raw = (req.body ?? {}) as { publish?: unknown; title?: unknown; body?: unknown; image?: unknown };
+    const patch: Partial<typeof announcementsTable.$inferInsert> = { updatedAt: new Date() };
+    if (raw.title !== undefined || raw.body !== undefined) {
+      const input = announcementInput(req.body);
+      if (!input) {
+        res.status(400).json({ error: "Enter a title and a message." });
+        return;
+      }
+      patch.title = input.title;
+      patch.body = input.body;
+      if (input.image !== undefined) patch.image = input.image;
+    }
+    if (raw.image !== undefined && !(raw.title !== undefined || raw.body !== undefined)) {
+      patch.image = normalizeImage(raw.image) ?? null;
+    }
+    if (typeof raw.publish === "boolean") {
+      patch.publishedAt = raw.publish ? new Date() : null;
+    }
+    const [record] = await db
+      .update(announcementsTable)
+      .set(patch)
+      .where(eq(announcementsTable.id, id))
+      .returning();
+    if (!record) {
+      res.status(404).json({ error: "Notice not found." });
+      return;
+    }
+    res.json(announcementView(record));
+  },
+);
+
+router.delete(
+  "/branch/announcements/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid notice." });
+      return;
+    }
+    const moduleKeys = await branchModuleIds(req.auth.branchId);
+    const rows = await db
+      .select({ id: announcementsTable.id, module: announcementsTable.module })
+      .from(announcementsTable)
+      .where(eq(announcementsTable.id, id))
+      .limit(1);
+    if (!rows[0] || !moduleKeys.includes(rows[0].module)) {
+      res.status(404).json({ error: "Notice not found." });
+      return;
+    }
+    await db.delete(announcementsTable).where(eq(announcementsTable.id, id));
+    res.status(204).end();
+  },
+);
+
   // Students read published notices for the modules inside THEIR branch only.
   router.get(
   "/student/announcements",
@@ -3374,6 +3885,31 @@ router.get(
   },
 );
 
+// A branch office manages its own modules' files — only the PDFs under its modules.
+router.get(
+  "/branch/documents",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const moduleKeys = await branchModuleIds(req.auth.branchId);
+    const rows = await db
+      .select({
+        module: courseDocumentsTable.module,
+        kind: courseDocumentsTable.kind,
+        fileName: courseDocumentsTable.fileName,
+        contentType: courseDocumentsTable.contentType,
+        sizeBytes: courseDocumentsTable.sizeBytes,
+        uploadedByName: courseDocumentsTable.uploadedByName,
+        updatedAt: courseDocumentsTable.updatedAt,
+      })
+      .from(courseDocumentsTable);
+    res.json(rows.filter((row) => moduleKeys.includes(row.module)).map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() })));
+  },
+);
+
 // The download. Inline so the browser's PDF viewer opens it instead of saving it.
 // Every signed-in role may read any module's file — students take all three modules.
 router.get(
@@ -3381,14 +3917,25 @@ router.get(
     "/admin/documents/:module/:kind/file",
     "/teacher/documents/:module/:kind/file",
     "/student/documents/:module/:kind/file",
+    "/branch/documents/:module/:kind/file",
   ],
-  requireRole("admin", "teacher", "student"),
+  requireRole("admin", "teacher", "student", "branch"),
   async (req, res): Promise<void> => {
     const module = req.params.module as Module;
     const kind = req.params.kind as DocumentKind;
     if (!(await isValidModule(module))) {
       res.status(400).json({ error: "Invalid module." });
       return;
+    }
+    if (req.auth?.role === "branch") {
+      if (req.auth.branchId == null) {
+        res.status(400).json({ error: "Choose a branch." });
+        return;
+      }
+      if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+        res.status(404).json({ error: "That file has not been uploaded yet." });
+        return;
+      }
     }
     if (!(documentKinds as readonly string[]).includes(kind)) {
       res.status(400).json({ error: "Invalid document." });
@@ -3478,6 +4025,41 @@ router.post(
   },
 );
 
+// The branch upload takes the target module in the body (it may own several), checked
+// against THIS branch's catalog before anything is saved.
+router.post(
+  "/branch/documents",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = (req.body as { module?: unknown })?.module as Module;
+    const kind = (req.body as { kind?: unknown })?.kind as DocumentKind;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    if (!(documentKinds as readonly string[]).includes(kind)) {
+      res.status(400).json({ error: "Choose a valid document." });
+      return;
+    }
+    const upload = parseDocumentUpload(req.body);
+    if ("error" in upload) {
+      res.status(400).json({ error: upload.error });
+      return;
+    }
+    const record = await saveDocument(
+      module,
+      kind,
+      upload,
+      req.auth?.displayName ?? null,
+    );
+    res.status(201).json(documentView(record));
+  },
+);
+
 router.delete(
   "/admin/documents/:module/:kind",
   requireRole("admin"),
@@ -3527,6 +4109,42 @@ router.delete(
       .where(
         and(
           eq(courseDocumentsTable.module, req.auth.module),
+          eq(courseDocumentsTable.kind, kind),
+        ),
+      )
+      .returning();
+    if (!record) {
+      res.status(404).json({ error: "That file has not been uploaded yet." });
+      return;
+    }
+    res.status(204).end();
+  },
+);
+
+// Branch files are removed by (module, kind); the module must belong to this branch.
+router.delete(
+  "/branch/documents/:module/:kind",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    const kind = req.params.kind as DocumentKind;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    if (!(documentKinds as readonly string[]).includes(kind)) {
+      res.status(400).json({ error: "Invalid document." });
+      return;
+    }
+    const [record] = await db
+      .delete(courseDocumentsTable)
+      .where(
+        and(
+          eq(courseDocumentsTable.module, module),
           eq(courseDocumentsTable.kind, kind),
         ),
       )
