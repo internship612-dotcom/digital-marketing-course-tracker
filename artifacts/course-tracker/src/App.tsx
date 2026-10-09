@@ -2881,9 +2881,14 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
     const source = currentBranch ?? selectedBranch;
     return source ? source.modules.some((mod) => mod.id === m.key) : false;
   });
+  const branchOverview = useBranchOverview();
+  const branchOverviewModules = branchOverview.overview;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const visible = scope === 'admin' || scope === 'branch' ? branchModules : catalog.filter((m) => m.key === (user.module ?? 'ai'));
+  const visible = scope === 'branch'
+    ? (branchOverviewModules ? catalog.filter((m) => branchOverviewModules.modules.some((om) => om.id === m.key)) : branchOverview.failed ? branchModules : [])
+    : scope === 'admin' ? branchModules
+    : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
 
   return <>
@@ -2900,7 +2905,7 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-documents-success">{notice}</p>}
 
     {failed ? <ErrorState retry={refresh} />
-      : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
+      : docs == null || (isBranch && branchOverview.overview == null && !branchOverview.failed) ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
       : isAdmin && !selectedBranch ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">Choose a branch above to see its course files.</p>
       : visible.length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No modules available for this branch yet.</p>
       : <div className="grid gap-4">{visible.map((meta) => (
@@ -3658,6 +3663,24 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
   </AuthLayout>;
 }
 
+// The branch desk reads its own modules straight from the server (scoped by the
+// session's branchId), not from a name match against the catalog. The dashboard and
+// the course-files page share this so both always show the same branch's modules.
+function useBranchOverview() {
+  const [overview, setOverview] = useState<BranchOverview | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setFailed(false);
+    fetch('/api/branch/overview')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setOverview(data as BranchOverview); else if (alive) setFailed(true); })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, []);
+  return { overview, failed };
+}
+
 type BranchOverview = {
   branchName: string;
   totalStudents: number;
@@ -3669,37 +3692,23 @@ type BranchOverview = {
 };
 
 function BranchPage() {
-  const [overview, setOverview] = useState<BranchOverview | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    let alive = true;
-    fetch('/api/branch/overview')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && data) setOverview(data as BranchOverview); })
-      .catch(() => setError('Could not load the branch.'));
-    return () => { alive = false; };
-  }, []);
+  const { overview, failed } = useBranchOverview();
   return <>
-    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="Module coverage for this branch. Add a student or open the student list from the sidebar." />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <StatCard label="Attendance marked" value={overview?.attendanceMarked ?? '—'} detail={`${overview?.attendancePending ?? 0} student${(overview?.attendancePending ?? 0) === 1 ? '' : 's'} with no attendance yet`} icon={CalendarCheck2} />
-      <StatCard label="Attendance pending" value={overview?.attendancePending ?? '—'} detail="never recorded for this student" icon={Clock} />
-      <StatCard label="Project entries" value={overview?.assessmentMarked ?? '—'} detail={`${overview?.assessmentPending ?? 0} student${(overview?.assessmentPending ?? 0) === 1 ? '' : 's'} with no marks yet`} icon={ClipboardCheck} />
-    </div>
-    <section className="mt-8">
+    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="The course modules this branch runs. Enrol students or open the student list from the sidebar." />
+    <section>
       <h2 className="font-display text-2xl font-bold">Modules</h2>
       <div className="mt-4 grid gap-4 md:grid-cols-3">
+        {overview == null && !failed && [1, 2, 3].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}
         {(overview?.modules ?? []).map((mod) => (
           <div key={mod.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-module-${mod.id}`}>
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id}</p>
-            <h3 className="mt-1 font-display text-lg font-bold">{mod.name}</h3>
-            <p className="mt-3 text-xs text-muted-foreground">{mod.attendanceMarked} student{mod.attendanceMarked === 1 ? '' : 's'} with attendance • {mod.assessmentMarked} with marks</p>
+            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
+            <h3 className="mt-1 font-display text-lg font-bold">{mod.id.toUpperCase()} · {mod.name}</h3>
           </div>
         ))}
         {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet.</p>}
       </div>
     </section>
-    {error && <p className="mt-8 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">{error}</p>}
+    {failed && <p className="mt-8 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">Could not load the branch.</p>}
   </>;
 }
 
