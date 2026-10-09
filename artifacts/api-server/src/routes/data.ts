@@ -4157,6 +4157,114 @@ router.delete(
   },
 );
 
+// Branch module attendance summary — mirrors admin but scoped to the session's branch.
+router.get(
+  "/branch/modules/:module/attendance/summary",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const rawMonth = typeof req.query.month === "string" ? req.query.month : "";
+    const monthKey = /^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth)
+      ? rawMonth
+      : isoDay(new Date()).slice(0, 7);
+
+    const branchStudents = await db
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(eq(studentsTable.branchId, req.auth.branchId));
+    const studentIds = branchStudents.map((s) => s.id);
+
+    const attendanceRows = await db
+      .select()
+      .from(attendanceTable)
+      .where(and(eq(attendanceTable.module, module), inArray(attendanceTable.studentId, studentIds)));
+    const byStudent = new Map<string, (typeof attendanceTable.$inferSelect)[]>();
+    for (const row of attendanceRows) {
+      byStudent.set(row.studentId, [...(byStudent.get(row.studentId) ?? []), row]);
+    }
+    const assessments = await db
+      .select()
+      .from(assessmentsTable)
+      .where(and(eq(assessmentsTable.module, module), inArray(assessmentsTable.studentId, studentIds)));
+
+    const events = await eventDates();
+
+    const monthKeys = new Set<string>();
+    for (const student of branchStudents) {
+      for (const slice of courseMonths(student.dateOfJoining, events)) {
+        if (slice.start) monthKeys.add(slice.start.slice(0, 7));
+      }
+    }
+    const months = [...monthKeys].sort();
+    const currentKey = isoDay(new Date()).slice(0, 7);
+    if (months.length > 0 && currentKey >= months[0] && currentKey <= months[months.length - 1]) {
+      monthKeys.add(currentKey);
+    }
+    const orderedMonths = [...monthKeys].sort();
+
+    let studentsMarked = 0;
+    let presentDays = 0;
+    let possibleDays = 0;
+    let projectOneMarked = 0;
+    let projectTwoMarked = 0;
+    for (const student of branchStudents) {
+      const slice = courseMonths(student.dateOfJoining, events).find(
+        (s) => s.start && s.start.slice(0, 7) === monthKey,
+      );
+      if (!slice) continue;
+      possibleDays += slice.days.length;
+
+      const presentOn = presentDatesByModule(
+        student.dateOfJoining,
+        byStudent.get(student.id) ?? [],
+      );
+      const present = slice.days.filter((day) => presentOn.get(day)?.has(module)).length;
+      presentDays += present;
+      if (present > 0) studentsMarked += 1;
+
+      const cycle1 = (slice.month - 1) * 2 + 1;
+      const cycle2 = (slice.month - 1) * 2 + 2;
+      const own = assessments.filter((a) => a.studentId === student.id);
+      if (own.find((a) => a.cycle === cycle1 && a.marks != null)) projectOneMarked += 1;
+      if (own.find((a) => a.cycle === cycle2 && a.marks != null)) projectTwoMarked += 1;
+    }
+
+    const totalStudents = branchStudents.reduce(
+      (sum, student) =>
+        sum +
+        (courseMonths(student.dateOfJoining, events).some(
+          (s) => s.start && s.start.slice(0, 7) === monthKey,
+        )
+          ? 1
+          : 0),
+      0,
+    );
+
+    res.json({
+      month: monthKey,
+      months: orderedMonths,
+      totalStudents,
+      studentsMarked,
+      studentsPending: Math.max(0, totalStudents - studentsMarked),
+      marked: presentDays,
+      expected: possibleDays,
+      pending: Math.max(0, possibleDays - presentDays),
+      assessmentMarked: projectOneMarked + projectTwoMarked,
+      projects: [
+        { project: 1, marked: projectOneMarked },
+        { project: 2, marked: projectTwoMarked },
+      ],
+    });
+  },
+);
 
 export default router;
 

@@ -3692,16 +3692,18 @@ type BranchOverview = {
 function BranchPage() {
   const { overview, failed } = useBranchOverview();
   return <>
-    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="The course modules this branch runs. Enrol students or open the student list from the sidebar." />
+    <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="The course modules this branch runs. Click a module to manage instructors, attendance, and marks." />
     <section>
       <h2 className="font-display text-2xl font-bold">Modules</h2>
       <div className="mt-4 grid gap-4 md:grid-cols-3">
         {overview == null && !failed && [1, 2, 3].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}
         {(overview?.modules ?? []).map((mod) => (
-          <div key={mod.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-module-${mod.id}`}>
+          <Link key={mod.id} href={`/branch/module/${mod.id}`} className="rounded-xl border border-border bg-card p-5 transition-colors hover:border-accent hover:bg-accent/5" data-testid={`card-branch-module-${mod.id}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
             <h3 className="mt-1 font-display text-lg font-bold">{mod.id.toUpperCase()} · {mod.name}</h3>
-          </div>
+            <p className="mt-3 text-xs text-muted-foreground">{mod.attendanceMarked} with attendance · {mod.assessmentMarked} with marks</p>
+            <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary"><ArrowRight size={14} /> Open</span>
+          </Link>
         ))}
         {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet.</p>}
       </div>
@@ -3710,12 +3712,199 @@ function BranchPage() {
   </>;
 }
 
+function BranchModuleDetailPage() {
+  const params = useParams<{ module: string }>();
+  const moduleKey = params.module as Module;
+  const catalog = useCatalogModules();
+  const meta = catalog.find((m) => m.key === moduleKey);
+  const teachers = useListTeachers();
+  const create = useCreateTeacher();
+  const update = useUpdateTeacher();
+  const remove = useDeleteTeacher();
+
+  const [showForm, setShowForm] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+  const [form, setForm] = useState({ displayName: '', username: '', password: '' });
+  const [justCreated, setJustCreated] = useState<{ displayName: string; username: string; password: string } | null>(null);
+  const [justCreatedShown, setJustCreatedShown] = useState(false);
+  const [revealedIds, setRevealedIds] = useState<number[]>([]);
+  const [pwdEditId, setPwdEditId] = useState<number | null>(null);
+  const [newPwd, setNewPwd] = useState('');
+  const [newPwdShown, setNewPwdShown] = useState(false);
+  const [pending, setPending] = useState<{ type: 'reveal' | 'delete' | 'password'; teacher: Teacher } | null>(null);
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const moduleTeachers = (teachers.data ?? []).filter((t) => t.module === moduleKey);
+  const designation = `${moduleShort[moduleKey] ?? ''} Instructor`;
+  const refresh = () => { void queryClient.invalidateQueries({ queryKey: getListTeachersQueryKey() }); };
+  const closePwdEdit = () => { setPwdEditId(null); setNewPwd(''); setNewPwdShown(false); };
+
+  const verifyAdmin = () => {
+    if (!pending || !confirmPwd) return;
+    const target = pending.teacher;
+    const action = pending.type;
+    setConfirmBusy(true); setConfirmError('');
+    void fetch('/api/admin/account/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: confirmPwd }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('The admin password is incorrect.');
+        if (action === 'reveal') {
+          setRevealedIds((v) => [...v, target.id]);
+          setPending(null); setConfirmPwd(''); setConfirmBusy(false);
+        } else if (action === 'password') {
+          void update.mutate({ id: target.id, password: newPwd }, { onSuccess: () => { closePwdEdit(); setPending(null); setConfirmPwd(''); refresh(); } });
+        } else if (action === 'delete') {
+          void remove.mutate(target.id, { onSuccess: () => { setPending(null); setConfirmPwd(''); refresh(); } });
+        }
+      })
+      .catch((e) => { setConfirmError(e.message); setConfirmBusy(false); });
+  };
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+    void create.mutate({ ...form, module: moduleKey }, {
+      onSuccess: (teacher) => {
+        setJustCreated({ displayName: teacher.displayName, username: teacher.username, password: form.password });
+        setJustCreatedShown(true);
+        setForm({ displayName: '', username: '', password: '' });
+        setShowForm(false);
+        refresh();
+      },
+      onError: (e) => setError(apiErrorMessage(e, 'Could not create login.')),
+    });
+  };
+
+  if (!meta) return <><PageHeader kicker="Branch / module" title="Module not found." detail="That module does not exist." /></>;
+
+  return <>
+    <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} desk`} title={meta.name} detail="Instructor logins for this module. Create, reveal, change password, or delete — each action needs your admin password." action={showForm ? <Button variant="outline" size="sm" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button> : <Button size="sm" onClick={() => { setShowForm(true); setJustCreated(null); setJustCreatedShown(false); }}><Plus size={14} /> Create login</Button>} />
+    {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-teacher-error">{error}</p>}
+    {success && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-teacher-success">{success}</p>}
+    {justCreated && justCreatedShown && (
+      <div className="mb-4 rounded-xl border border-accent bg-accent/5 p-4" data-testid="banner-just-created">
+        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login created — shown once</p>
+        <p className="mt-1 font-semibold">{justCreated.displayName}</p>
+        <p className="text-sm font-mono-ui">User ID: {justCreated.username}</p>
+        <p className="text-sm font-mono-ui">Password: {justCreated.password}</p>
+        <Button variant="outline" size="sm" className="mt-2" onClick={() => setJustCreatedShown(false)}>Dismiss</Button>
+      </div>
+    )}
+    {showForm && (
+      <div className="mb-6 rounded-xl border border-border bg-card p-5" data-testid="form-create-teacher">
+        <h3 className="font-display text-lg font-bold">Create instructor login</h3>
+        <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-3">
+          <Field label="Name"><Input value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} required maxLength={100} placeholder="e.g. Priya Sharma" /></Field>
+          <Field label="User ID"><Input value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} required maxLength={50} placeholder="e.g. priya.ai" pattern="^[a-zA-Z0-9._-]+$" /></Field>
+          <PasswordField label="Password (min 6)" toggleTestId="input-teacher-pwd-create" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} required minLength={6} />
+          <div className="sm:col-span-3 flex gap-2"><Button type="submit" disabled={create.isPending}><Loader2 size={14} className="mr-2 animate-spin" /> Creating…</Button><Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button></div>
+        </form>
+      </div>
+    )}
+    <div className="grid gap-4 lg:grid-cols-2">
+      {moduleTeachers.map((teacher) => (
+        <div key={teacher.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-teacher-${teacher.id}`}>
+          <div className="flex items-center justify-between">
+            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{designation}</p>
+            <span className="rounded-full px-2.5 py-1 font-mono-ui text-[10px] bg-accent/20 text-primary">Active</span>
+          </div>
+          <h3 className="mt-2 font-display text-xl font-bold">{teacher.displayName || teacher.username}</h3>
+          <p className="mt-1 text-sm font-mono-ui text-muted-foreground">User ID: {teacher.username}</p>
+          <div className="mt-3 flex items-center gap-2">
+            <PasswordField label="Password" toggleTestId={`input-teacher-pwd-${teacher.id}`} value={revealedIds.includes(teacher.id) ? teacher.plainPassword || '' : '••••••••'} readOnly onChange={() => {}} />
+            {!revealedIds.includes(teacher.id) ? (
+              <Button size="sm" variant="outline" onClick={() => { setPending({ type: 'reveal', teacher }); setConfirmPwd(''); setConfirmError(''); }}><Eye size={14} /> Reveal</Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={() => setRevealedIds((v) => v.filter((id) => id !== teacher.id))}><EyeOff size={14} /> Hide</Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => { setPwdEditId(teacher.id); setNewPwd(''); setNewPwdShown(false); }}><Key size={14} /> Change</Button>
+            <Button size="sm" variant="destructive" onClick={() => { setPending({ type: 'delete', teacher }); setConfirmPwd(''); setConfirmError(''); }}><Trash2 size={14} /> Delete</Button>
+          </div>
+          {pwdEditId === teacher.id && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2" data-testid="form-teacher-pwd-edit">
+              <PasswordField label="New password (min 6)" toggleTestId={`input-teacher-newpwd-${teacher.id}`} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} required minLength={6} />
+              <div className="sm:col-span-2 flex gap-2"><Button size="sm" onClick={() => { setPending({ type: 'password', teacher }); setConfirmPwd(''); setConfirmError(''); }} disabled={newPwd.length < 6 || confirmBusy}>Save <Loader2 size={14} className={confirmBusy ? 'mr-2 animate-spin' : 'hidden'} /></Button><Button size="sm" variant="outline" onClick={closePwdEdit}>Cancel</Button></div>
+            </div>
+          )}
+        </div>
+      ))}
+      {moduleTeachers.length === 0 && (
+        <div className="rounded-xl border border-dashed border-border bg-card/50 p-8 text-center lg:col-span-2">
+          <p className="text-muted-foreground">No instructor logins for this module yet.</p>
+          <Button className="mt-3" size="sm" onClick={() => setShowForm(true)}><Plus size={14} /> Create first login</Button>
+        </div>
+      )}
+    </div>
+    {pending && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="modal-admin-verify">
+        <div className="w-full max-w-md rounded-xl border border-border bg-card p-6">
+          <h3 className="font-display text-lg font-bold">Confirm with your admin password</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{pending.type === 'reveal' ? `Reveal password for ${pending.teacher.username}` : pending.type === 'password' ? `Change password for ${pending.teacher.username}` : `Delete login ${pending.teacher.username}`}</p>
+          <PasswordField label="Admin password" toggleTestId="input-admin-verify" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} required minLength={6} className="mt-4" />
+          {confirmError && <p className="mt-2 text-sm text-destructive" data-testid="text-admin-verify-error">{confirmError}</p>}
+          <div className="mt-4 flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => { setPending(null); setConfirmPwd(''); }}>Cancel</Button>
+            <Button onClick={verifyAdmin} disabled={confirmBusy || !confirmPwd}><Loader2 size={14} className={confirmBusy ? 'mr-2 animate-spin' : 'hidden'} /> Confirm</Button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>;
+}
+
+function BranchModuleReportPage() {
+  const params = useParams<{ module: string }>();
+  const moduleKey = params.module as Module;
+  const catalog = useCatalogModules();
+  const meta = catalog.find((m) => m.key === moduleKey);
+  const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/branch/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setSummary(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, monthKey]);
+  if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
+  const total = summary?.totalStudents ?? 0;
+  const expected = summary?.expected ?? 0;
+  const projects = summary?.projects ?? [];
+  const projectsMeta = projects.map((p, i) => {
+    const status = total > 0 && p.marked === total ? 'Submitted' : p.marked > 0 ? 'Partial' : 'Pending';
+    return { ...p, index: i + 1, status };
+  });
+  return <>
+    <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and the month's projects." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Project entries" value={summary?.assessmentMarked ?? '—'} detail="marks entered this month" icon={ClipboardCheck} /></div>
+    <section className="mt-8 rounded-xl border border-border bg-card p-5"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">This month</p><h2 className="mt-1 font-display text-2xl font-bold">Projects status</h2><p className="mt-2 text-sm text-muted-foreground">Whether each of the month's two projects has been submitted by the module owner.</p></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{summary === null || !summary ? [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />) : projectsMeta.map((p) => <div key={p.project} className="rounded-xl border border-border p-5" data-testid={`project-${p.index}`}><div className="flex items-center justify-between"><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Project {p.index}</p><span className={`rounded-full px-2.5 py-1 font-mono-ui text-[10px] ${p.status === 'Submitted' ? 'bg-accent/20 text-primary' : p.status === 'Partial' ? 'bg-muted text-foreground' : 'bg-destructive/10 text-destructive'}`}>{p.status}</span></div><h3 className="mt-2 font-display text-xl font-bold">{monthNameFromKey(monthKey)} · project {p.project}</h3><p className="mt-1 text-sm text-muted-foreground">{p.marked} of {total} students submitted</p></div>)}</div></section>
+  </>;
+}
+
+function BranchModuleRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <BranchModuleDetailPage /> : null;
+}
+
+function BranchModuleReportRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <BranchModuleReportPage /> : null;
+}
+
 function Router() {
   const [pathname] = useLocation();
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
