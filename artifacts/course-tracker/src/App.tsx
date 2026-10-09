@@ -2881,19 +2881,10 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
     const source = currentBranch ?? selectedBranch;
     return source ? source.modules.some((mod) => mod.id === m.key) : false;
   });
-  const branchOverview = useBranchOverview();
-  const branchOverviewModules = branchOverview.overview;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const visible = scope === 'branch'
-    ? (branchOverviewModules
-        ? branchOverviewModules.modules.map((om, i) => ({
-            key: om.id,
-            number: i + 1,
-            name: om.name,
-            tagline: `Part of the ${user.displayName} branch.`,
-          }))
-        : branchOverview.failed ? branchModules : [])
+    ? branchModules.map((m, i) => ({ ...m, number: i + 1 }))
     : scope === 'admin' ? branchModules
     : catalog.filter((m) => m.key === (user.module ?? 'ai'));
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
@@ -2912,7 +2903,7 @@ function CourseDocumentsPage({ user, scope }: { user: CurrentUser; scope: 'admin
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-documents-success">{notice}</p>}
 
     {failed ? <ErrorState retry={refresh} />
-      : docs == null || (isBranch && branchOverview.overview == null && !branchOverview.failed) ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
+      : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-60 animate-pulse rounded-xl bg-muted" />)}</div>
       : isAdmin && !selectedBranch ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">Choose a branch above to see its course files.</p>
       : visible.length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No modules available for this branch yet.</p>
       : <div className="grid gap-4">{visible.map((meta) => (
