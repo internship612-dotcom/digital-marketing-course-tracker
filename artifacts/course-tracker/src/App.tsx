@@ -3721,6 +3721,11 @@ function BranchModuleDetailPage() {
   const moduleKey = params.module as Module;
   const catalog = useCatalogModules();
   const meta = catalog.find((m) => m.key === moduleKey);
+  const { overview } = useBranchOverview();
+  const branchModuleIds = overview?.modules.map((m) => m.id) ?? [];
+  if (!branchModuleIds.includes(moduleKey)) {
+    return <><PageHeader kicker="Branch / module" title="Access denied." detail="This module does not belong to your branch." /></>;
+  }
   const teachers = useListTeachers();
   const create = useCreateTeacher();
   const update = useUpdateTeacher();
@@ -3925,6 +3930,12 @@ function BranchModuleReportPage() {
   const moduleKey = params.module as Module;
   const catalog = useCatalogModules();
   const meta = catalog.find((m) => m.key === moduleKey);
+  const { overview } = useBranchOverview();
+  const branchModuleIds = overview?.modules.map((m) => m.id) ?? [];
+  if (!branchModuleIds.includes(moduleKey)) {
+    return <><PageHeader kicker="Branch / module report" title="Access denied." detail="This module does not belong to your branch." /></>;
+  }
+  if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
   const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
