@@ -157,10 +157,12 @@ function loadBranchCatalog(): Promise<void> {
     .then((data) => {
       if (Array.isArray(data)) {
         branchCatalog = data as BranchSummary[];
-        // Keep the flat name maps in step so labels resolve for new modules too.
+        // Keep the flat name maps in step so labels resolve for new modules, and a
+        // rename replaces the old label everywhere (moduleNames must always track the
+        // catalog, not just fill gaps once).
         for (const branch of branchCatalog) {
           for (const mod of branch.modules) {
-            if (!moduleNames[mod.id]) moduleNames[mod.id] = mod.name;
+            moduleNames[mod.id] = mod.name;
             if (!moduleShort[mod.id]) moduleShort[mod.id] = mod.id.toUpperCase().slice(0, 6);
           }
         }
@@ -888,6 +890,9 @@ function AdminBranchPage() {
   const [branches, setBranches] = useState<AdminBranch[] | null>(null);
   const [moduleName, setModuleName] = useState('');
   const [addingModule, setAddingModule] = useState(false);
+  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
+  const [editModuleName, setEditModuleName] = useState('');
+  const [deletingModuleId, setDeletingModuleId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -921,6 +926,39 @@ function AdminBranchPage() {
       .finally(() => setBusy(false));
   };
 
+  const renameModule = (moduleId: string) => (event: FormEvent) => {
+    event.preventDefault();
+    if (!editModuleName.trim()) return;
+    setBusy(true); setError(''); setNotice('');
+    fetch(`/api/admin/modules/${encodeURIComponent(moduleId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editModuleName.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
+        setEditingModuleId(null);
+        setNotice('Module updated.');
+        void refreshBranchCatalog().then(loadBranches);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+
+  const confirmDeleteModule = (moduleId: string) => {
+    setBusy(true); setError(''); setNotice('');
+    fetch(`/api/admin/modules/${encodeURIComponent(moduleId)}`, { method: 'DELETE' })
+      .then((res) => (res.ok ? undefined : res.json().then((data: { error?: string }) => { throw new Error((data as { error?: string })?.error ?? 'delete failed'); })))
+      .then(() => {
+        setDeletingModuleId(null);
+        setNotice('Module deleted.');
+        void refreshBranchCatalog().then(loadBranches);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+
   if (branches != null && !branch) {
     return <>
       <PageHeader kicker="Admin / branches" title="Branch not found." detail="That branch does not exist." />
@@ -948,11 +986,36 @@ function AdminBranchPage() {
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(branch?.modules ?? []).map((mod) => (
-          <Link key={mod.id} href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
+          <div key={mod.id} className="relative flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
+            <div className="absolute right-2 top-2 flex items-center gap-0.5">
+              <button type="button" onClick={() => { setEditingModuleId(mod.id); setEditModuleName(mod.name); setDeletingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit module" aria-label="Edit module" data-testid={`button-edit-module-${mod.id}`}><Pencil size={14} /></button>
+              <button type="button" onClick={() => { setDeletingModuleId(mod.id); setEditingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete module" aria-label="Delete module" data-testid={`button-delete-module-${mod.id}`}><Trash2 size={14} /></button>
+            </div>
             <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
-            <h3 className="mt-2 font-display text-lg font-bold leading-tight">{mod.name}</h3>
-            <span className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary">Open module <ArrowRight size={13} /></span>
-          </Link>
+            <h3 className="mt-2 pr-12 font-display text-lg font-bold leading-tight">{mod.name}</h3>
+            <Link href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground hover:text-primary" data-testid={`link-open-module-${mod.id}`}>Open module <ArrowRight size={13} /></Link>
+            {editingModuleId === mod.id && (
+              <form onSubmit={renameModule(mod.id)} className="mt-3 grid gap-2 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-module-${mod.id}`}>
+                <label className="grid gap-1 text-xs font-medium">Module name
+                  <Input value={editModuleName} onChange={(e) => setEditModuleName(e.target.value)} data-testid={`input-module-name-${mod.id}`} />
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button type="submit" size="sm" disabled={busy || !editModuleName.trim()} data-testid={`button-save-module-${mod.id}`}>Save</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setEditingModuleId(null); setError(''); }}>Cancel</button>
+                </div>
+              </form>
+            )}
+            {deletingModuleId === mod.id && (
+              <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3" data-testid={`confirm-delete-module-${mod.id}`}>
+                <p className="text-sm font-semibold text-destructive">Delete module?</p>
+                <p className="mt-1 text-xs text-muted-foreground">Removes this module from the branch. A module that still has teachers or records cannot be deleted.</p>
+                <div className="mt-3 flex items-center gap-2">
+                  <Button type="button" size="sm" variant="destructive" onClick={() => confirmDeleteModule(mod.id)} disabled={busy} data-testid={`button-confirm-delete-module-${mod.id}`}>Delete</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => setDeletingModuleId(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
         ))}
         {branch != null && branch.modules.length === 0 && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground sm:col-span-2 xl:col-span-3">No modules yet — add the first one above.</p>}
         {branches == null && [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}
@@ -3715,7 +3778,6 @@ function BranchPage() {
           <Link key={mod.id} href={`/branch/module/${mod.id}`} className="rounded-xl border border-border bg-card p-5 transition-colors hover:border-accent hover:bg-accent/5" data-testid={`card-branch-module-${mod.id}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
             <h3 className="mt-1 font-display text-lg font-bold">{mod.id.toUpperCase()} · {mod.name}</h3>
-            <p className="mt-3 text-xs text-muted-foreground">{mod.attendanceMarked} with attendance · {mod.assessmentMarked} with marks</p>
             <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary"><ArrowRight size={14} /> Open</span>
           </Link>
         ))}

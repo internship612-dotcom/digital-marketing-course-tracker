@@ -2790,6 +2790,86 @@ router.post(
   },
 );
 
+// Rename a module. The id is a stable key every attendance/marks/announcement row
+// joins on, so it never changes — only the display name does.
+router.patch(
+  "/admin/modules/:id",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const moduleId = req.params.id as string;
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!moduleId || !name) {
+      res.status(400).json({ error: "Enter a module name." });
+      return;
+    }
+    const [updated] = await db
+      .update(modulesCatalog)
+      .set({ name })
+      .where(eq(modulesCatalog.id, moduleId))
+      .returning();
+    if (!updated) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    res.json(updated);
+  },
+);
+
+// Delete an empty module. Any live reference — a teacher login, attendance or marks
+// rows, notices or course files — refuses the delete, because a dead module id would
+// orphan that data silently. Clear those out first, then remove the module.
+router.delete(
+  "/admin/modules/:id",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const moduleId = req.params.id as string;
+    if (!moduleId) {
+      res.status(400).json({ error: "Enter a module." });
+      return;
+    }
+    const [mod] = await db
+      .select({ id: modulesCatalog.id })
+      .from(modulesCatalog)
+      .where(eq(modulesCatalog.id, moduleId))
+      .limit(1);
+    if (!mod) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    const [teacher] = await db
+      .select({ id: teachersTable.id })
+      .from(teachersTable)
+      .where(eq(teachersTable.module, moduleId))
+      .limit(1);
+    const [attended] = await db
+      .select({ id: attendanceTable.studentId })
+      .from(attendanceTable)
+      .where(eq(attendanceTable.module, moduleId))
+      .limit(1);
+    const [assessed] = await db
+      .select({ id: assessmentsTable.studentId })
+      .from(assessmentsTable)
+      .where(eq(assessmentsTable.module, moduleId))
+      .limit(1);
+    const [announced] = await db
+      .select({ id: announcementsTable.id })
+      .from(announcementsTable)
+      .where(eq(announcementsTable.module, moduleId))
+      .limit(1);
+    const [doc] = await db
+      .select({ module: courseDocumentsTable.module })
+      .from(courseDocumentsTable)
+      .where(eq(courseDocumentsTable.module, moduleId))
+      .limit(1);
+    if (teacher || attended || assessed || announced || doc) {
+      res.status(400).json({ error: "This module still has teachers or records. Remove those first before deleting it." });
+      return;
+    }
+    await db.delete(modulesCatalog).where(eq(modulesCatalog.id, moduleId));
+    res.status(204).send();
+  },
+);
+
 // A branch holds exactly one desk login: the admin assigns one userid/password
 // here, and from then on it can only be changed.
 router.post(
