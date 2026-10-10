@@ -1751,14 +1751,17 @@ router.get(
     const monthKey = /^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth)
       ? rawMonth
       : isoDay(new Date()).slice(0, 7);
+    const branchId = typeof req.query.branchId === "string" ? Number(req.query.branchId) : null;
 
     const students = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
-      .from(studentsTable);
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, branchId: studentsTable.branchId })
+      .from(studentsTable)
+      .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined);
+    const studentIds = students.map((s) => s.id);
     const attendanceRows = await db
       .select()
       .from(attendanceTable)
-      .where(eq(attendanceTable.module, module));
+      .where(and(eq(attendanceTable.module, module), inArray(attendanceTable.studentId, studentIds)));
     const byStudent = new Map<string, (typeof attendanceTable.$inferSelect)[]>();
     for (const row of attendanceRows) {
       byStudent.set(row.studentId, [...(byStudent.get(row.studentId) ?? []), row]);
@@ -1766,7 +1769,7 @@ router.get(
     const assessments = await db
       .select()
       .from(assessmentsTable)
-      .where(eq(assessmentsTable.module, module));
+      .where(and(eq(assessmentsTable.module, module), inArray(assessmentsTable.studentId, studentIds)));
 
     const events = await eventDates();
 
@@ -2184,7 +2187,7 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
 //
 // An event day reports the event instead of counts — nobody was marked on it and it is
 // not in anyone's percentage. Sunday was never a teaching day, so it is equally empty.
-async function buildDayStatus(module: Module, date: Date) {
+async function buildDayStatus(module: Module, date: Date, branchId?: number | null) {
   const iso = isoDay(date);
   const events = await eventDates();
   const eventTitle = events.get(iso) ?? null;
@@ -2192,15 +2195,21 @@ async function buildDayStatus(module: Module, date: Date) {
   const students = await db
     .select()
     .from(studentsTable)
+    .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined)
     .orderBy(asc(studentsTable.fullName));
+  const studentIds = (await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined))
+    .map((s) => s.id);
   const attendanceRows = await db
     .select()
     .from(attendanceTable)
-    .where(eq(attendanceTable.module, module));
+    .where(and(eq(attendanceTable.module, module), inArray(attendanceTable.studentId, studentIds)));
   const assessmentRows = await db
     .select()
     .from(assessmentsTable)
-    .where(eq(assessmentsTable.module, module));
+    .where(and(eq(assessmentsTable.module, module), inArray(assessmentsTable.studentId, studentIds)));
 
   const result = {
     date: iso,
@@ -2281,7 +2290,8 @@ router.get(
       res.status(400).json({ error: "Choose a valid date." });
       return;
     }
-    res.json(await buildDayStatus(module, date));
+    const branchId = typeof req.query.branchId === "string" ? Number(req.query.branchId) : null;
+    res.json(await buildDayStatus(module, date, branchId));
   },
 );
 

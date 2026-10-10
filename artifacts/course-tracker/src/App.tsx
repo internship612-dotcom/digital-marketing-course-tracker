@@ -945,7 +945,7 @@ function AdminBranchPage() {
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(branch?.modules ?? []).map((mod) => (
-          <Link key={mod.id} href={`/admin/module/${mod.id}`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
+          <Link key={mod.id} href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="group flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
             <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
             <h3 className="mt-2 font-display text-lg font-bold leading-tight">{mod.name}</h3>
             <span className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground group-hover:text-primary">Open module <ArrowRight size={13} /></span>
@@ -958,7 +958,7 @@ function AdminBranchPage() {
   </>;
 }
 
-function AdminModuleReportPage() {
+function AdminModuleReportPage({ branchId }: { branchId?: number }) {
   const params = useParams<{ module: string }>();
   const moduleKey = params.module as Module;
   const catalog = useCatalogModules();
@@ -967,12 +967,15 @@ function AdminModuleReportPage() {
   const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
     let alive = true;
-    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
+    const url = branchId != null
+      ? `/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}&branchId=${branchId}`
+      : `/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`;
+    fetch(url)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (alive && data) setSummary(data); })
       .catch(() => undefined);
     return () => { alive = false; };
-  }, [moduleKey, monthKey]);
+  }, [moduleKey, monthKey, branchId]);
   if (!meta) return <><PageHeader kicker="Admin / module reports" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
@@ -1033,7 +1036,7 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-function ModuleDetailPage() {
+function ModuleDetailPage({ branchId }: { branchId?: number }) {
   const params = useParams<{ module: string }>();
   const moduleKey = params.module as Module;
   const catalog = useCatalogModules();
@@ -1059,6 +1062,7 @@ function ModuleDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  // Filter teachers by branch if branchId is provided
   const moduleTeachers = (teachers.data ?? []).filter((t) => t.module === moduleKey);
   const designation = `${moduleShort[moduleKey] ?? ''} Instructor`;
   const refresh = () => { void queryClient.invalidateQueries({ queryKey: getListTeachersQueryKey() }); };
@@ -1104,7 +1108,7 @@ function ModuleDetailPage() {
   const handleCreate = (e: FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess('');
-    const payload = { username: form.username.trim(), password: form.password, displayName: form.displayName.trim(), module: moduleKey };
+    const payload = { username: form.username.trim(), password: form.password, displayName: form.displayName.trim(), module: moduleKey, branchId };
     create.mutate({ data: payload }, {
       onSuccess: () => {
         refresh();
@@ -1273,22 +1277,25 @@ function ModuleDetailPage() {
       </div>
     )}
 
-    <ModuleStatusSection moduleKey={moduleKey} />
+    <ModuleStatusSection moduleKey={moduleKey} branchId={branchId} />
   </>;
 }
 
-function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
+function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branchId?: number }) {
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
   const [summary, setSummary] = useState<{ months: string[]; studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { project: number; marked: number }[] } | null>(null);
   useEffect(() => {
     let alive = true;
     setSummary(null);
-    fetch(`/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
+    const url = branchId != null
+      ? `/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}&branchId=${branchId}`
+      : `/api/admin/modules/${moduleKey}/attendance/summary?month=${monthKey}`;
+    fetch(url)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (alive && data) setSummary(data); })
       .catch(() => undefined);
     return () => { alive = false; };
-  }, [moduleKey, monthKey]);
+  }, [moduleKey, monthKey, branchId]);
 
   // "How many students are still missing" is the question this section answers, so
   // say it in students — not a bare Updated/Pending badge.
@@ -1329,7 +1336,7 @@ function ModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
     {/* The day view follows the month pick above: the same attendance card
         re-reads its date when the month switches. */}
     <div className="mt-5">
-      <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
+      <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" branchId={branchId} />
     </div>
     <div className="mt-4">
       <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
@@ -1353,7 +1360,7 @@ type DayStatus = {
   assessmentPending: number;
 };
 
-function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, wide = false }: { monthKey?: string; moduleKey: Module; scope: 'admin' | 'teacher' | 'branch'; label: string; icon: typeof Users; testId: string; wide?: boolean }) {
+function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, wide = false, branchId }: { monthKey?: string; moduleKey: Module; scope: 'admin' | 'teacher' | 'branch'; label: string; icon: typeof Users; testId: string; wide?: boolean; branchId?: number }) {
   const [date, setDate] = useState(todayIso);
   const [status, setStatus] = useState<DayStatus | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -1374,7 +1381,7 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
     let alive = true;
     setStatus(null);
     const url = scope === 'admin'
-      ? `/api/admin/modules/${moduleKey}/day-status?date=${date}`
+      ? `/api/admin/modules/${moduleKey}/day-status?date=${date}${branchId != null ? `&branchId=${branchId}` : ''}`
       : scope === 'branch'
       ? `/api/branch/modules/${moduleKey}/day-status?date=${date}`
       : `/api/teacher/day-status?date=${date}`;
@@ -1383,7 +1390,7 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
       .then(({ ok, data }) => { if (alive && ok) setStatus(data as DayStatus); })
       .catch(() => undefined);
     return () => { alive = false; };
-  }, [moduleKey, scope, date, reloadToken]);
+  }, [moduleKey, scope, date, reloadToken, branchId]);
 
   const tiles = status == null ? [] : [
     { key: 'present', label: 'Present', value: status.present, tone: 'text-emerald-600' },
@@ -3723,7 +3730,9 @@ function BranchModuleDetailPage() {
   const meta = catalog.find((m) => m.key === moduleKey);
   const { overview } = useBranchOverview();
   const branchModuleIds = overview?.modules.map((m) => m.id) ?? [];
-  if (!branchModuleIds.includes(moduleKey)) {
+  
+  // Only check access after overview is loaded
+  if (overview != null && !branchModuleIds.includes(moduleKey)) {
     return <><PageHeader kicker="Branch / module" title="Access denied." detail="This module does not belong to your branch." /></>;
   }
   const [moduleTeachers, setModuleTeachers] = useState<Teacher[]>([]);
@@ -3993,7 +4002,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -4259,6 +4268,26 @@ function ModulePanelRoute() {
   const valid = catalog.some((m) => m.key === raw) || (modules as readonly string[]).includes(raw);
   if (!valid) return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Panel not found</h1><Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
   return <ModulePanel panel={raw as Module} />;
+}
+
+function AdminBranchModuleRoute() {
+  const params = useParams<{ branchId: string; module: string }>();
+  const branchId = Number(params.branchId);
+  const catalog = useCatalogModules();
+  const moduleKey = params.module as Module;
+  const meta = catalog.find((m) => m.key === moduleKey);
+  if (!meta) return <><PageHeader kicker="Admin / module" title="Module not found." detail="That module does not exist." /></>;
+  return <ModuleDetailPage branchId={branchId} />;
+}
+
+function AdminBranchModuleReportRoute() {
+  const params = useParams<{ branchId: string; module: string }>();
+  const branchId = Number(params.branchId);
+  const catalog = useCatalogModules();
+  const moduleKey = params.module as Module;
+  const meta = catalog.find((m) => m.key === moduleKey);
+  if (!meta) return <><PageHeader kicker="Admin / module report" title="Module not found." detail="That module does not exist." /></>;
+  return <AdminModuleReportPage branchId={branchId} />;
 }
 
 function TopLevelPanelRoute() {
