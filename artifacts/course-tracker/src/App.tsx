@@ -3097,7 +3097,7 @@ function BranchAddStudentPage() {
       .then((data) => { if (Array.isArray(data)) setStudents(data as Student[]); })
       .catch(() => undefined);
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   // Branch offices post to /branch/students; the branch is taken from the session, so
   // the form hides its branch select and the create always lands under this branch.
   const onCreate = (data: NewStudentInput) => {
@@ -3124,7 +3124,7 @@ function BranchStudentListPage() {
       .then(({ ok, data }) => { if (ok) setStudents(data as Student[]); else setFailed(true); })
       .catch(() => setFailed(true));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const statusFor = useStudentStatus('/api/branch/students/status', refreshToken);
   const refresh = () => { setRefreshToken((v) => v + 1); load(); };
   const query = search.trim().toLowerCase();
