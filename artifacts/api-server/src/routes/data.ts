@@ -2285,6 +2285,62 @@ router.get(
   },
 );
 
+// Branch module day status — mirrors admin but scoped to the session's branch.
+router.get(
+  "/branch/modules/:module/day-status",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const date = parseDayParam(req.query.date);
+    if (!date) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    const branchStudents = await db
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(eq(studentsTable.branchId, req.auth.branchId));
+    const studentIds = branchStudents.map((s) => s.id);
+    const rows = await db
+      .select()
+      .from(attendanceTable)
+      .where(and(eq(attendanceTable.module, module), inArray(attendanceTable.studentId, studentIds)));
+
+    const byStudent = new Map<string, (typeof attendanceTable.$inferSelect)[]>();
+    for (const row of rows) {
+      byStudent.set(row.studentId, [...(byStudent.get(row.studentId) ?? []), row]);
+    }
+
+    let present = 0, absent = 0, leave = 0, unmarked = 0;
+    for (const student of branchStudents) {
+      const wd = weekAndDayFor(student.dateOfJoining, date);
+      if (!wd) continue;
+      const studentRows = byStudent.get(student.id) ?? [];
+      const row = studentRows.find((r) => r.week === wd.week);
+      if (!row) {
+        unmarked += 1;
+        continue;
+      }
+      if (row.leaveDays !== null && row.leaveDays !== undefined && (row.leaveDays & dayBit(wd.day))) {
+        leave += 1;
+      } else if (row[wd.day]) {
+        present += 1;
+      } else {
+        absent += 1;
+      }
+    }
+    res.json({ present, absent, leave, unmarked });
+  },
+);
+
 // ---------------------------------------------------------------- day register
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 

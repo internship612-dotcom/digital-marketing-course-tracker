@@ -45,8 +45,10 @@ import {
   GitBranch,
   GraduationCap,
   Image as ImageIcon,
+  Key,
   KeyRound,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Megaphone,
   Menu,
@@ -1351,7 +1353,7 @@ type DayStatus = {
   assessmentPending: number;
 };
 
-function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, wide = false }: { monthKey?: string; moduleKey: Module; scope: 'admin' | 'teacher'; label: string; icon: typeof Users; testId: string; wide?: boolean }) {
+function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, wide = false }: { monthKey?: string; moduleKey: Module; scope: 'admin' | 'teacher' | 'branch'; label: string; icon: typeof Users; testId: string; wide?: boolean }) {
   const [date, setDate] = useState(todayIso);
   const [status, setStatus] = useState<DayStatus | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -1373,6 +1375,8 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
     setStatus(null);
     const url = scope === 'admin'
       ? `/api/admin/modules/${moduleKey}/day-status?date=${date}`
+      : scope === 'branch'
+      ? `/api/branch/modules/${moduleKey}/day-status?date=${date}`
       : `/api/teacher/day-status?date=${date}`;
     fetch(url)
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
@@ -3759,9 +3763,9 @@ function BranchModuleDetailPage() {
           setRevealedIds((v) => [...v, target.id]);
           setPending(null); setConfirmPwd(''); setConfirmBusy(false);
         } else if (action === 'password') {
-          void update.mutate({ id: target.id, password: newPwd }, { onSuccess: () => { closePwdEdit(); setPending(null); setConfirmPwd(''); refresh(); } });
+          void update.mutate({ id: target.id, data: { password: newPwd } }, { onSuccess: () => { closePwdEdit(); setPending(null); setConfirmPwd(''); refresh(); } });
         } else if (action === 'delete') {
-          void remove.mutate(target.id, { onSuccess: () => { setPending(null); setConfirmPwd(''); refresh(); } });
+          void remove.mutate({ id: target.id }, { onSuccess: () => { setPending(null); setConfirmPwd(''); refresh(); } });
         }
       })
       .catch((e) => { setConfirmError(e.message); setConfirmBusy(false); });
@@ -3770,7 +3774,8 @@ function BranchModuleDetailPage() {
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess('');
-    void create.mutate({ ...form, module: moduleKey }, {
+    const payload = { username: form.username.trim(), password: form.password, displayName: form.displayName.trim(), module: moduleKey };
+    void create.mutate({ data: payload }, {
       onSuccess: (teacher) => {
         setJustCreated({ displayName: teacher.displayName, username: teacher.username, password: form.password });
         setJustCreatedShown(true);
@@ -3856,7 +3861,63 @@ function BranchModuleDetailPage() {
         </div>
       </div>
     )}
+    <BranchModuleStatusSection moduleKey={moduleKey} />
   </>;
+}
+
+function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
+  const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; studentsMarked: number; studentsPending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setSummary(null);
+    fetch(`/api/branch/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setSummary(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, monthKey]);
+
+  const total = summary?.totalStudents ?? 0;
+  const projects = summary?.projects ?? [];
+  const assessmentDone = projects.length ? Math.min(...projects.map((p) => p.marked)) : 0;
+
+  const Card = ({ label, done, total: cardTotal, detail, icon: Icon, testId }: { label: string; done: number; total: number; detail: string; icon: typeof Users; testId: string }) => {
+    const pending = Math.max(0, cardTotal - done);
+    const percent = cardTotal === 0 ? 0 : Math.round((done / cardTotal) * 100);
+    return <div className="rounded-xl border border-border p-5" data-testid={testId}>
+      <div className="flex items-center justify-between">
+        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
+        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      </div>
+      {summary == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
+        <p className="mt-5 font-display text-3xl font-bold">{done}<span className="text-xl text-muted-foreground"> of {cardTotal}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">students</span></p>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} uploaded</span>
+          <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} not uploaded</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+      </>}
+    </div>;
+  };
+
+  return <section className="mt-6 rounded-xl border border-border bg-card p-6">
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
+        <h2 className="mt-1 font-display text-2xl font-bold">Attendance & assessment</h2>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day, and how many projects were due by it. The day view follows the month pick above.</p>
+      </div>
+      <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
+    </div>
+    <div className="mt-5">
+      <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="branch" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
+    </div>
+    <div className="mt-4">
+      <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' \u00B7 ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
+    </div>
+  </section>;
 }
 
 function BranchModuleReportPage() {
