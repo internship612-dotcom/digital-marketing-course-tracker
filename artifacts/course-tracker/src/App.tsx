@@ -3655,8 +3655,8 @@ function AdminLoginPage() {
     <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
     <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
     <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
-    <h2 className="mt-3 font-display text-4xl font-bold tracking-tight">Access your module desk.</h2>
-    <p className="mt-3 text-sm leading-6 text-muted-foreground">Use the identifier your institute gave you.</p>
+    <h2 className="mt-3 font-display text-4xl font-bold tracking-tight">Admin Portal</h2>
+    <p className="mt-3 text-sm leading-6 text-muted-foreground">Administrator access.</p>
     <form onSubmit={handleSignIn} className="mt-7 grid gap-4">
       <Field label="Email" type="email" value={form.email} onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-admin-identifier" />
       <PasswordField label="Password" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} placeholder="Enter password" autoComplete="current-password" required data-testid="input-admin-password" toggleTestId="button-toggle-admin-pwd" />
