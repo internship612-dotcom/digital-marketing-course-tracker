@@ -2655,7 +2655,7 @@ function StudentAnnouncementsPage() {
       .then(({ ok, data }) => { if (ok) setNotices(data as Announcement[]); else setFailed(true); })
       .catch(() => setFailed(true));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   return <>
     <PageHeader kicker="Student / announcements" title="Announcements" detail="Notices from your three modules, kept apart. Click a title to read the whole notice." />
@@ -2680,7 +2680,7 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
       .then(({ ok, data }) => { if (ok) setProfile(data as StudentProfile); else setFailed(true); })
       .catch(() => setFailed(true));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState('');
