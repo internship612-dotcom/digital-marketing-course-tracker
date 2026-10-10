@@ -1847,6 +1847,68 @@ router.get(
   },
 );
 
+// Whole-course marks status, deliberately free of any calendar/term logic: project marks
+// keep being uploaded after their 15-day window, so a month-bound count would mislead. It
+// answers one question — of the module's students, how many have a marks row at all?
+async function moduleMarksSummary(module: string, branchId: number | null) {
+  const students = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined);
+  const studentIds = students.map((s) => s.id);
+  let assessmentMarked = 0;
+  if (studentIds.length > 0) {
+    const markedRows = await db
+      .selectDistinct({ studentId: assessmentsTable.studentId })
+      .from(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.module, module),
+          isNotNull(assessmentsTable.marks),
+          inArray(assessmentsTable.studentId, studentIds),
+        ),
+      );
+    assessmentMarked = markedRows.length;
+  }
+  return {
+    totalStudents: studentIds.length,
+    assessmentMarked,
+    assessmentPending: Math.max(0, studentIds.length - assessmentMarked),
+  };
+}
+
+router.get(
+  "/admin/modules/:module/marks-summary",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const module = req.params.module as Module;
+    if (!(await isValidModule(module))) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const rawBranchId = typeof req.query.branchId === "string" ? Number(req.query.branchId) : null;
+    const branchId = rawBranchId != null && Number.isFinite(rawBranchId) ? rawBranchId : null;
+    res.json(await moduleMarksSummary(module, branchId));
+  },
+);
+
+router.get(
+  "/branch/modules/:module/marks-summary",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    res.json(await moduleMarksSummary(module, req.auth.branchId));
+  },
+);
+
 router.get(
   "/admin/modules/:module/activity",
   requireRole("admin"),

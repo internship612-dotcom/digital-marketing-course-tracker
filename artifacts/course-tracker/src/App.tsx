@@ -1030,7 +1030,7 @@ function AdminModuleReportPage({ branchId }: { branchId?: number }) {
   const catalog = useCatalogModules();
   const meta = catalog.find((m) => m.key === moduleKey);
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number } | null>(null);
   useEffect(() => {
     let alive = true;
     const url = branchId != null
@@ -1042,18 +1042,34 @@ function AdminModuleReportPage({ branchId }: { branchId?: number }) {
       .catch(() => undefined);
     return () => { alive = false; };
   }, [moduleKey, monthKey, branchId]);
+
+  // Marks are whole-course, not month-bound: project marks keep getting uploaded after
+  // their 15-day window, so the count is students with marks, not this month's entries.
+  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setMarks(null);
+    const url = `/api/admin/modules/${moduleKey}/marks-summary${branchId != null ? `?branchId=${branchId}` : ''}`;
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setMarks(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, branchId]);
   if (!meta) return <><PageHeader kicker="Admin / module reports" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
-  const projects = summary?.projects ?? [];
-  const projectsMeta = projects.map((p, i) => {
-    const status = total > 0 && p.marked === total ? 'Submitted' : p.marked > 0 ? 'Partial' : 'Pending';
-    return { ...p, index: i + 1, status };
-  });
   return <>
-    <PageHeader kicker={`Admin / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and the month's projects." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Project entries" value={summary?.assessmentMarked ?? '—'} detail="marks entered this month" icon={ClipboardCheck} /></div>
-    <section className="mt-8 rounded-xl border border-border bg-card p-5"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">This month</p><h2 className="mt-1 font-display text-2xl font-bold">Projects status</h2><p className="mt-2 text-sm text-muted-foreground">Whether each of the month's two projects has been submitted by the module owner.</p></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{summary === null || !summary ? [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />) : projectsMeta.map((p) => <div key={p.project} className="rounded-xl border border-border p-5" data-testid={`project-${p.index}`}><div className="flex items-center justify-between"><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Project {p.index}</p><span className={`rounded-full px-2.5 py-1 font-mono-ui text-[10px] ${p.status === 'Submitted' ? 'bg-accent/20 text-primary' : p.status === 'Partial' ? 'bg-muted text-foreground' : 'bg-destructive/10 text-destructive'}`}>{p.status}</span></div><h3 className="mt-2 font-display text-xl font-bold">{monthNameFromKey(monthKey)} · project {p.project}</h3><p className="mt-1 text-sm text-muted-foreground">{p.marked} of {total} students submitted</p></div>)}</div></section>
+    <PageHeader kicker={`Admin / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and how many students have their marks." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Marks uploaded" value={marks ? `${marks.assessmentMarked}/${marks.totalStudents}` : '—'} detail="students with marks, whole course" icon={ClipboardCheck} /></div>
+    <section className="mt-8" data-testid="section-marks-status">
+      <div className="mb-4">
+        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Marks status</p>
+        <h2 className="mt-1 font-display text-2xl font-bold">Project marks</h2>
+        <p className="mt-2 text-sm text-muted-foreground">How many students on this module have had their project marks uploaded — no deadlines, just who is done.</p>
+      </div>
+      {marks == null ? <div className="h-32 animate-pulse rounded-xl bg-muted" /> : <ProgressCard label="Marks" done={marks.assessmentMarked} pending={marks.assessmentPending} doneLabel="marks uploaded" pendingLabel="pending" icon={ClipboardCheck} testId="card-marks-status" />}
+    </section>
   </>;
 }
 
@@ -1349,7 +1365,7 @@ function ModuleDetailPage({ branchId }: { branchId?: number }) {
 
 function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branchId?: number }) {
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ months: string[]; studentsMarked: number; studentsPending: number; assessmentMarked: number; totalStudents: number; projects: { project: number; marked: number }[] } | null>(null);
+  const [summary, setSummary] = useState<{ months: string[] } | null>(null);
   useEffect(() => {
     let alive = true;
     setSummary(null);
@@ -1363,12 +1379,24 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
     return () => { alive = false; };
   }, [moduleKey, monthKey, branchId]);
 
+  // Marks are whole-course, not tied to the month pick above: project marks keep being
+  // uploaded after their 15-day window, so a calendar-bound number would mislead.
+  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setMarks(null);
+    const url = `/api/admin/modules/${moduleKey}/marks-summary${branchId != null ? `?branchId=${branchId}` : ''}`;
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setMarks(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey, branchId]);
+
   // "How many students are still missing" is the question this section answers, so
   // say it in students — not a bare Updated/Pending badge.
-  const total = summary?.totalStudents ?? 0;
-  const projects = summary?.projects ?? [];
-  // A student counts as done for the month once both of its projects carry a mark.
-  const assessmentDone = projects.length ? Math.min(...projects.map((p) => p.marked)) : 0;
+  const assessmentDone = marks?.assessmentMarked ?? 0;
+  const total = marks?.totalStudents ?? 0;
 
   const Card = ({ label, done, total: cardTotal, detail, icon: Icon, testId }: { label: string; done: number; total: number; detail: string; icon: typeof Users; testId: string }) => {
     const pending = Math.max(0, cardTotal - done);
@@ -1378,7 +1406,7 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
         <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
         <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
-      {summary == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
+      {marks == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
         <p className="mt-5 font-display text-3xl font-bold">{done}<span className="text-xl text-muted-foreground"> of {cardTotal}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">students</span></p>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -1395,7 +1423,7 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day, and how many projects were due by it. The day view follows the month pick above.</p>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Marks are whole-course: just who is uploaded and who is pending.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
@@ -1405,7 +1433,7 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
       <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" branchId={branchId} />
     </div>
     <div className="mt-4">
-      <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' · ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
+      <Card label="Assessment" done={assessmentDone} total={total} detail={marks != null ? (marks.assessmentPending > 0 ? `${marks.assessmentPending} students still need their marks uploaded.` : 'Every student on this module has marks.') : ''} icon={ClipboardCheck} testId="status-assessment" />
     </div>
   </section>;
 }
@@ -4026,7 +4054,7 @@ function BranchModuleDetailPage() {
 
 function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; studentsMarked: number; studentsPending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
+  const [summary, setSummary] = useState<{ months: string[] } | null>(null);
   useEffect(() => {
     let alive = true;
     setSummary(null);
@@ -4037,9 +4065,21 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
     return () => { alive = false; };
   }, [moduleKey, monthKey]);
 
-  const total = summary?.totalStudents ?? 0;
-  const projects = summary?.projects ?? [];
-  const assessmentDone = projects.length ? Math.min(...projects.map((p) => p.marked)) : 0;
+  // Whole-course marks, deliberately free of the month pick above — the same rule as the
+  // admin desk: project marks keep being uploaded after their 15-day window.
+  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setMarks(null);
+    fetch(`/api/branch/modules/${moduleKey}/marks-summary`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setMarks(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey]);
+
+  const assessmentDone = marks?.assessmentMarked ?? 0;
+  const total = marks?.totalStudents ?? 0;
 
   const Card = ({ label, done, total: cardTotal, detail, icon: Icon, testId }: { label: string; done: number; total: number; detail: string; icon: typeof Users; testId: string }) => {
     const pending = Math.max(0, cardTotal - done);
@@ -4049,7 +4089,7 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
         <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
         <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
-      {summary == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
+      {marks == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
         <p className="mt-5 font-display text-3xl font-bold">{done}<span className="text-xl text-muted-foreground"> of {cardTotal}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">students</span></p>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -4065,8 +4105,8 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
-        <h2 className="mt-1 font-display text-2xl font-bold">Attendance & assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day, and how many projects were due by it. The day view follows the month pick above.</p>
+        <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Marks are whole-course: just who is uploaded and who is pending.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
@@ -4074,7 +4114,7 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
       <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="branch" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
     </div>
     <div className="mt-4">
-      <Card label="Assessment" done={assessmentDone} total={total} detail={projects.length ? projects.map((p) => `Project ${p.project}: ${p.marked} of ${total}`).join(' \u00B7 ') : 'No projects for this month yet.'} icon={ClipboardCheck} testId="status-assessment" />
+      <Card label="Assessment" done={assessmentDone} total={total} detail={marks != null ? (marks.assessmentPending > 0 ? `${marks.assessmentPending} students still need their marks uploaded.` : 'Every student on this module has marks.') : ''} icon={ClipboardCheck} testId="status-assessment" />
     </div>
   </section>;
 }
@@ -4091,7 +4131,7 @@ function BranchModuleReportPage() {
   }
   if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; assessmentMarked: number; projects: { project: number; marked: number }[] } | null>(null);
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number } | null>(null);
   useEffect(() => {
     let alive = true;
     fetch(`/api/branch/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
@@ -4100,18 +4140,33 @@ function BranchModuleReportPage() {
       .catch(() => undefined);
     return () => { alive = false; };
   }, [moduleKey, monthKey]);
+
+  // Whole-course marks: project marks keep being uploaded after their 15-day window, so
+  // the count is students with marks, not this month's entries.
+  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setMarks(null);
+    fetch(`/api/branch/modules/${moduleKey}/marks-summary`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (alive && data) setMarks(data); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey]);
   if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
-  const projects = summary?.projects ?? [];
-  const projectsMeta = projects.map((p, i) => {
-    const status = total > 0 && p.marked === total ? 'Submitted' : p.marked > 0 ? 'Partial' : 'Pending';
-    return { ...p, index: i + 1, status };
-  });
   return <>
-    <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and the month's projects." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Project entries" value={summary?.assessmentMarked ?? '—'} detail="marks entered this month" icon={ClipboardCheck} /></div>
-    <section className="mt-8 rounded-xl border border-border bg-card p-5"><div><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">This month</p><h2 className="mt-1 font-display text-2xl font-bold">Projects status</h2><p className="mt-2 text-sm text-muted-foreground">Whether each of the month's two projects has been submitted by the module owner.</p></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{summary === null || !summary ? [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />) : projectsMeta.map((p) => <div key={p.project} className="rounded-xl border border-border p-5" data-testid={`project-${p.index}`}><div className="flex items-center justify-between"><p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Project {p.index}</p><span className={`rounded-full px-2.5 py-1 font-mono-ui text-[10px] ${p.status === 'Submitted' ? 'bg-accent/20 text-primary' : p.status === 'Partial' ? 'bg-muted text-foreground' : 'bg-destructive/10 text-destructive'}`}>{p.status}</span></div><h3 className="mt-2 font-display text-xl font-bold">{monthNameFromKey(monthKey)} · project {p.project}</h3><p className="mt-1 text-sm text-muted-foreground">{p.marked} of {total} students submitted</p></div>)}</div></section>
+    <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and how many students have their marks." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Marks uploaded" value={marks ? `${marks.assessmentMarked}/${marks.totalStudents}` : '—'} detail="students with marks, whole course" icon={ClipboardCheck} /></div>
+    <section className="mt-8" data-testid="section-marks-status">
+      <div className="mb-4">
+        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Marks status</p>
+        <h2 className="mt-1 font-display text-2xl font-bold">Project marks</h2>
+        <p className="mt-2 text-sm text-muted-foreground">How many students on this module have had their project marks uploaded — no deadlines, just who is done.</p>
+      </div>
+      {marks == null ? <div className="h-32 animate-pulse rounded-xl bg-muted" /> : <ProgressCard label="Marks" done={marks.assessmentMarked} pending={marks.assessmentPending} doneLabel="marks uploaded" pendingLabel="pending" icon={ClipboardCheck} testId="card-marks-status" />}
+    </section>
   </>;
 }
 
