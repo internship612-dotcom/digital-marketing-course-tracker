@@ -628,7 +628,9 @@ router.get(
 );
 
 // Module owners enrol students from their own desk. Students are global (no module
-// column), so this mirrors POST /admin/students exactly — same validation, same ids.
+// column), so this mirrors POST /admin/students exactly — same validation, same ids —
+// except the branch: the owner's module decides it, never the request body, because a
+// module desk has no branch picker and its students always belong to that module's branch.
 router.post(
   "/teacher/students",
   requireRole("teacher"),
@@ -639,6 +641,10 @@ router.post(
       return;
     }
     const data = parsed.data;
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Module not resolved." });
+      return;
+    }
     const email = normalizeEmail(data.email);
     const [existing] = await db
       .select({ id: studentsTable.id })
@@ -649,23 +655,17 @@ router.post(
       res.status(400).json({ error: "An account with this email already exists." });
       return;
     }
+    const [ownerModule] = await db
+      .select({ branchId: modulesCatalog.branchId })
+      .from(modulesCatalog)
+      .where(eq(modulesCatalog.id, req.auth.module))
+      .limit(1);
+    const branchId = ownerModule?.branchId ?? data.branchId ?? null;
     const [lastStudent] = await db
       .select({ id: studentsTable.id })
       .from(studentsTable)
       .orderBy(desc(studentsTable.registrationDate))
       .limit(1);
-    const branchId = data.branchId ?? null;
-    if (branchId != null) {
-      const [branch] = await db
-        .select({ id: branchesTable.id })
-        .from(branchesTable)
-        .where(eq(branchesTable.id, branchId))
-        .limit(1);
-      if (!branch) {
-        res.status(400).json({ error: "Selected branch not found." });
-        return;
-      }
-    }
     const [student] = await db
       .insert(studentsTable)
       .values({

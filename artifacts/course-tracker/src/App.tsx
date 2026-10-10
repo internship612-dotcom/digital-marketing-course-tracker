@@ -192,8 +192,11 @@ function useCatalogModules(): typeof adminModules {
   const branches = useBranches();
   if (!branches) return adminModules;
   const metas: typeof adminModules = [];
-  let number = 0;
   for (const branch of branches) {
+    // Module numbers are local to the branch (1..n), never global — another branch's
+    // module must not renumber this one. Zedking stays ai=1, dm=2, sm=3 no matter how
+    // many branches exist.
+    let number = 0;
     for (const mod of branch.modules) {
       number += 1;
       metas.push({
@@ -3056,7 +3059,7 @@ function TeacherAddStudentPage({ user }: { user: CurrentUser }) {
       })
       .finally(() => setCreating(false));
   };
-  return <StudentEnrolForm kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} total={students.data?.length ?? 0} creating={creating} photoBase="/api/teacher/students" onCreate={onCreate} />;
+  return <StudentEnrolForm kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} total={students.data?.length ?? 0} creating={creating} photoBase="/api/teacher/students" onCreate={onCreate} showBranch={false} />;
 }
 
 function AdminEnrolledPage() {
