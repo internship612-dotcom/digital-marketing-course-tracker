@@ -4322,5 +4322,177 @@ router.get(
   },
 );
 
+// Branch teachers for a specific module — scoped to the session's branch.
+router.get(
+  "/branch/modules/:module/teachers",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const teachers = await db
+      .select({
+        id: teachersTable.id,
+        username: teachersTable.username,
+        module: teachersTable.module,
+        displayName: teachersTable.displayName,
+        plainPassword: teachersTable.plainPassword,
+      })
+      .from(teachersTable)
+      .where(eq(teachersTable.module, module))
+      .orderBy(asc(teachersTable.displayName));
+    res.json(teachers);
+  },
+);
+
+// Branch teacher CRUD for a specific module — scoped to the session's branch.
+router.post(
+  "/branch/modules/:module/teachers",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const bodyWithModule = { ...req.body, module: req.params.module };
+    const parsed = CreateTeacherBody.safeParse(bodyWithModule);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Enter valid teacher details." });
+      return;
+    }
+    const { username, password, displayName } = parsed.data;
+    const [dup] = await db
+      .select({ id: teachersTable.id })
+      .from(teachersTable)
+      .where(eq(teachersTable.username, username))
+      .limit(1);
+    if (dup) {
+      res.status(409).json({ error: "That user ID is already in use." });
+      return;
+    }
+    const [teacher] = await db
+      .insert(teachersTable)
+      .values({
+        username,
+        module,
+        displayName,
+        passwordHash: await hashPassword(password),
+        plainPassword: password,
+      })
+      .returning();
+    res.status(201).json({
+      id: teacher.id,
+      username: teacher.username,
+      module: teacher.module,
+      displayName: teacher.displayName,
+      plainPassword: teacher.plainPassword,
+    });
+  },
+);
+
+router.patch(
+  "/branch/modules/:module/teachers/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const teacherId = Number(req.params.id);
+    if (!Number.isInteger(teacherId)) {
+      res.status(400).json({ error: "Choose a teacher." });
+      return;
+    }
+    const body = req.body as { password?: unknown; displayName?: unknown; username?: unknown };
+    const updates: { passwordHash?: string; plainPassword?: string; displayName?: string; username?: string } = {};
+    if (typeof body.password === "string" && body.password.length >= 6) {
+      updates.passwordHash = await hashPassword(body.password);
+      updates.plainPassword = body.password;
+    }
+    if (typeof body.displayName === "string" && body.displayName.trim()) {
+      updates.displayName = body.displayName.trim();
+    }
+    if (typeof body.username === "string" && body.username.trim()) {
+      const username = body.username.trim();
+      const [dup] = await db
+        .select({ id: teachersTable.id })
+        .from(teachersTable)
+        .where(and(eq(teachersTable.username, username), ne(teachersTable.id, teacherId)))
+        .limit(1);
+      if (dup) {
+        res.status(409).json({ error: "That user ID is already in use." });
+        return;
+      }
+      updates.username = username;
+    }
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: "Nothing to update." });
+      return;
+    }
+    const [teacher] = await db
+      .update(teachersTable)
+      .set(updates)
+      .where(and(eq(teachersTable.id, teacherId), eq(teachersTable.module, req.params.module as Module)))
+      .returning();
+    if (!teacher) {
+      res.status(404).json({ error: "Teacher not found." });
+      return;
+    }
+    res.json({
+      id: teacher.id,
+      username: teacher.username,
+      module: teacher.module,
+      displayName: teacher.displayName,
+      plainPassword: teacher.plainPassword ?? null,
+    });
+  },
+);
+
+router.delete(
+  "/branch/modules/:module/teachers/:id",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = req.params.module as Module;
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const teacherId = Number(req.params.id);
+    if (!Number.isInteger(teacherId)) {
+      res.status(400).json({ error: "Choose a teacher." });
+      return;
+    }
+    const [deleted] = await db
+      .delete(teachersTable)
+      .where(and(eq(teachersTable.id, teacherId), eq(teachersTable.module, module)))
+      .returning();
+    if (!deleted) {
+      res.status(404).json({ error: "Teacher not found." });
+      return;
+    }
+    res.status(204).end();
+  },
+);
+
 export default router;
 

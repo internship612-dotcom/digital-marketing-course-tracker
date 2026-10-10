@@ -3726,13 +3726,11 @@ function BranchModuleDetailPage() {
   if (!branchModuleIds.includes(moduleKey)) {
     return <><PageHeader kicker="Branch / module" title="Access denied." detail="This module does not belong to your branch." /></>;
   }
-  const teachers = useListTeachers();
-  const create = useCreateTeacher();
-  const update = useUpdateTeacher();
-  const remove = useDeleteTeacher();
+  const [moduleTeachers, setModuleTeachers] = useState<Teacher[]>([]);
+  const [teachersLoading, setTeachersLoading] = useState(true);
+  const [teachersError, setTeachersError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
-  const [showPwd, setShowPwd] = useState(false);
   const [form, setForm] = useState({ displayName: '', username: '', password: '' });
   const [justCreated, setJustCreated] = useState<{ displayName: string; username: string; password: string } | null>(null);
   const [justCreatedShown, setJustCreatedShown] = useState(false);
@@ -3740,56 +3738,89 @@ function BranchModuleDetailPage() {
   const [pwdEditId, setPwdEditId] = useState<number | null>(null);
   const [newPwd, setNewPwd] = useState('');
   const [newPwdShown, setNewPwdShown] = useState(false);
-  const [pending, setPending] = useState<{ type: 'reveal' | 'delete' | 'password'; teacher: Teacher } | null>(null);
-  const [confirmPwd, setConfirmPwd] = useState('');
-  const [confirmBusy, setConfirmBusy] = useState(false);
-  const [confirmError, setConfirmError] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
 
-  const moduleTeachers = (teachers.data ?? []).filter((t) => t.module === moduleKey);
   const designation = `${moduleShort[moduleKey] ?? ''} Instructor`;
-  const refresh = () => { void queryClient.invalidateQueries({ queryKey: getListTeachersQueryKey() }); };
-  const closePwdEdit = () => { setPwdEditId(null); setNewPwd(''); setNewPwdShown(false); };
 
-  const verifyAdmin = () => {
-    if (!pending || !confirmPwd) return;
-    const target = pending.teacher;
-    const action = pending.type;
-    setConfirmBusy(true); setConfirmError('');
-    void fetch('/api/admin/account/verify-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: confirmPwd }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('The admin password is incorrect.');
-        if (action === 'reveal') {
-          setRevealedIds((v) => [...v, target.id]);
-          setPending(null); setConfirmPwd(''); setConfirmBusy(false);
-        } else if (action === 'password') {
-          void update.mutate({ id: target.id, data: { password: newPwd } }, { onSuccess: () => { closePwdEdit(); setPending(null); setConfirmPwd(''); refresh(); } });
-        } else if (action === 'delete') {
-          void remove.mutate({ id: target.id }, { onSuccess: () => { setPending(null); setConfirmPwd(''); refresh(); } });
-        }
-      })
-      .catch((e) => { setConfirmError(e.message); setConfirmBusy(false); });
+  const loadTeachers = async () => {
+    setTeachersLoading(true);
+    setTeachersError(null);
+    try {
+      const res = await fetch(`/api/branch/modules/${moduleKey}/teachers`);
+      if (!res.ok) throw new Error('Failed to load teachers');
+      const data = await res.json();
+      setModuleTeachers(data as Teacher[]);
+    } catch (e) {
+      setTeachersError(e instanceof Error ? e.message : 'Failed to load teachers');
+    } finally {
+      setTeachersLoading(false);
+    }
   };
 
-  const handleCreate = (e: React.FormEvent) => {
+  useEffect(() => { loadTeachers(); }, [moduleKey]);
+
+  const refresh = () => { loadTeachers(); };
+  const closePwdEdit = () => { setPwdEditId(null); setNewPwd(''); setNewPwdShown(false); };
+
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess('');
-    const payload = { username: form.username.trim(), password: form.password, displayName: form.displayName.trim(), module: moduleKey };
-    void create.mutate({ data: payload }, {
-      onSuccess: (teacher) => {
-        setJustCreated({ displayName: teacher.displayName, username: teacher.username, password: form.password });
-        setJustCreatedShown(true);
-        setForm({ displayName: '', username: '', password: '' });
-        setShowForm(false);
-        refresh();
-      },
-      onError: (e) => setError(apiErrorMessage(e, 'Could not create login.')),
-    });
+    setCreateLoading(true);
+    const payload = { username: form.username.trim(), password: form.password, displayName: form.displayName.trim() };
+    try {
+      const res = await fetch(`/api/branch/modules/${moduleKey}/teachers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Failed to create login');
+      const teacher = await res.json();
+      setJustCreated({ displayName: teacher.displayName, username: teacher.username, password: form.password });
+      setJustCreatedShown(true);
+      setForm({ displayName: '', username: '', password: '' });
+      setShowForm(false);
+      refresh();
+      setSuccess('Teacher login created.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not create login.');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const handleReveal = (teacher: Teacher) => {
+    setRevealedIds((v) => [...v, teacher.id]);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent, teacher: Teacher) => {
+    e.preventDefault();
+    if (newPwd.length < 6) return;
+    try {
+      const res = await fetch(`/api/branch/modules/${moduleKey}/teachers/${teacher.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPwd }),
+      });
+      if (!res.ok) throw new Error('Failed to update password');
+      closePwdEdit();
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update password.');
+    }
+  };
+
+  const handleDelete = async (teacher: Teacher) => {
+    try {
+      const res = await fetch(`/api/branch/modules/${moduleKey}/teachers/${teacher.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete login');
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete login.');
+    }
   };
 
   if (!meta) return <><PageHeader kicker="Branch / module" title="Module not found." detail="That module does not exist." /></>;
@@ -3814,7 +3845,7 @@ function BranchModuleDetailPage() {
           <Field label="Name"><Input value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} required maxLength={100} placeholder="e.g. Priya Sharma" /></Field>
           <Field label="User ID"><Input value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} required maxLength={50} placeholder="e.g. priya.ai" pattern="^[a-zA-Z0-9._-]+$" /></Field>
           <PasswordField label="Password (min 6)" toggleTestId="input-teacher-pwd-create" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} required minLength={6} />
-          <div className="sm:col-span-3 flex gap-2"><Button type="submit" disabled={create.isPending}><Loader2 size={14} className="mr-2 animate-spin" /> Creating…</Button><Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button></div>
+          <div className="sm:col-span-3 flex gap-2"><Button type="submit" disabled={createLoading}><Loader2 size={14} className={createLoading ? 'mr-2 animate-spin' : 'hidden'} /> Creating…</Button><Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button></div>
         </form>
       </div>
     )}
@@ -3830,17 +3861,17 @@ function BranchModuleDetailPage() {
           <div className="mt-3 flex items-center gap-2">
             <PasswordField label="Password" toggleTestId={`input-teacher-pwd-${teacher.id}`} value={revealedIds.includes(teacher.id) ? teacher.plainPassword || '' : '••••••••'} readOnly onChange={() => {}} />
             {!revealedIds.includes(teacher.id) ? (
-              <Button size="sm" variant="outline" onClick={() => { setPending({ type: 'reveal', teacher }); setConfirmPwd(''); setConfirmError(''); }}><Eye size={14} /> Reveal</Button>
+              <Button size="sm" variant="outline" onClick={() => handleReveal(teacher)}><Eye size={14} /> Reveal</Button>
             ) : (
               <Button size="sm" variant="ghost" onClick={() => setRevealedIds((v) => v.filter((id) => id !== teacher.id))}><EyeOff size={14} /> Hide</Button>
             )}
             <Button size="sm" variant="outline" onClick={() => { setPwdEditId(teacher.id); setNewPwd(''); setNewPwdShown(false); }}><Key size={14} /> Change</Button>
-            <Button size="sm" variant="destructive" onClick={() => { setPending({ type: 'delete', teacher }); setConfirmPwd(''); setConfirmError(''); }}><Trash2 size={14} /> Delete</Button>
+            <Button size="sm" variant="destructive" onClick={() => handleDelete(teacher)}><Trash2 size={14} /> Delete</Button>
           </div>
           {pwdEditId === teacher.id && (
             <div className="mt-3 grid gap-2 sm:grid-cols-2" data-testid="form-teacher-pwd-edit">
               <PasswordField label="New password (min 6)" toggleTestId={`input-teacher-newpwd-${teacher.id}`} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} required minLength={6} />
-              <div className="sm:col-span-2 flex gap-2"><Button size="sm" onClick={() => { setPending({ type: 'password', teacher }); setConfirmPwd(''); setConfirmError(''); }} disabled={newPwd.length < 6 || confirmBusy}>Save <Loader2 size={14} className={confirmBusy ? 'mr-2 animate-spin' : 'hidden'} /></Button><Button size="sm" variant="outline" onClick={closePwdEdit}>Cancel</Button></div>
+              <div className="sm:col-span-2 flex gap-2"><Button size="sm" onClick={(e) => { e.preventDefault(); handleChangePassword(e, teacher); }} disabled={newPwd.length < 6}>Save</Button><Button size="sm" variant="outline" onClick={closePwdEdit}>Cancel</Button></div>
             </div>
           )}
         </div>
@@ -3852,20 +3883,6 @@ function BranchModuleDetailPage() {
         </div>
       )}
     </div>
-    {pending && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="modal-admin-verify">
-        <div className="w-full max-w-md rounded-xl border border-border bg-card p-6">
-          <h3 className="font-display text-lg font-bold">Confirm with your admin password</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{pending.type === 'reveal' ? `Reveal password for ${pending.teacher.username}` : pending.type === 'password' ? `Change password for ${pending.teacher.username}` : `Delete login ${pending.teacher.username}`}</p>
-          <PasswordField label="Admin password" toggleTestId="input-admin-verify" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} required minLength={6} className="mt-4" />
-          {confirmError && <p className="mt-2 text-sm text-destructive" data-testid="text-admin-verify-error">{confirmError}</p>}
-          <div className="mt-4 flex gap-2 justify-end">
-            <Button variant="outline" onClick={() => { setPending(null); setConfirmPwd(''); }}>Cancel</Button>
-            <Button onClick={verifyAdmin} disabled={confirmBusy || !confirmPwd}><Loader2 size={14} className={confirmBusy ? 'mr-2 animate-spin' : 'hidden'} /> Confirm</Button>
-          </div>
-        </div>
-      </div>
-    )}
     <BranchModuleStatusSection moduleKey={moduleKey} />
   </>;
 }
