@@ -136,6 +136,53 @@ function moduleLabel(module: Module): string {
       : "Social Media";
 }
 
+// One catalog insert shared by the admin and the branch desk. The desk name (slug) is the
+// URL segment the module opens on after the slash, so an explicit one must be free: a
+// silent suffix would open a desk at a URL nobody typed. Blank keeps the old behaviour of
+// building the slug from the name and suffixing on collision.
+async function createModuleRow(branchId: number, name: string, slug: string | null) {
+  const [branch] = await db
+    .select({ id: branchesTable.id })
+    .from(branchesTable)
+    .where(eq(branchesTable.id, branchId))
+    .limit(1);
+  if (!branch) return { status: 404, error: "Branch not found." };
+
+  let candidate: string;
+  if (slug) {
+    const cleaned = slug.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (!cleaned) {
+      return { status: 400, error: "Desk name can only use letters, numbers and dashes." };
+    }
+    const [exists] = await db
+      .select({ id: modulesCatalog.id })
+      .from(modulesCatalog)
+      .where(eq(modulesCatalog.id, cleaned))
+      .limit(1);
+    if (exists) return { status: 409, error: "That desk name is already in use." };
+    candidate = cleaned;
+  } else {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "module";
+    candidate = base;
+    let n = 2;
+    for (;;) {
+      const [exists] = await db
+        .select({ id: modulesCatalog.id })
+        .from(modulesCatalog)
+        .where(eq(modulesCatalog.id, candidate))
+        .limit(1);
+      if (!exists) break;
+      candidate = `${base}-${n++}`;
+    }
+  }
+
+  const [mod] = await db
+    .insert(modulesCatalog)
+    .values({ id: candidate, branchId, name })
+    .returning();
+  return { mod };
+}
+
 function studentView(student: typeof studentsTable.$inferSelect) {
   return {
     id: student.id,
@@ -2815,40 +2862,20 @@ router.post(
   "/admin/modules",
   requireRole("admin"),
   async (req, res): Promise<void> => {
-    const body = req.body as { branchId?: unknown; name?: unknown };
+    const body = req.body as { branchId?: unknown; name?: unknown; slug?: unknown };
     const branchId = typeof body.branchId === "number" ? body.branchId : Number(body.branchId);
     const name = typeof body.name === "string" ? body.name.trim() : "";
+    const slug = typeof body.slug === "string" ? body.slug.trim() : "";
     if (!Number.isInteger(branchId) || !name) {
       res.status(400).json({ error: "Enter a branch and a module name." });
       return;
     }
-    const [branch] = await db
-      .select({ id: branchesTable.id })
-      .from(branchesTable)
-      .where(eq(branchesTable.id, branchId))
-      .limit(1);
-    if (!branch) {
-      res.status(404).json({ error: "Branch not found." });
+    const result = await createModuleRow(branchId, name, slug || null);
+    if ("mod" in result) {
+      res.status(201).json(result.mod);
       return;
     }
-    // Build a stable id from the name, and fall back to a numeric suffix on collision.
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    let candidate = slug || 'module';
-    let n = 2;
-    for (;;) {
-      const [exists] = await db
-        .select({ id: modulesCatalog.id })
-        .from(modulesCatalog)
-        .where(eq(modulesCatalog.id, candidate))
-        .limit(1);
-      if (!exists) break;
-      candidate = `${slug || 'module'}-${n++}`;
-    }
-    const [mod] = await db
-      .insert(modulesCatalog)
-      .values({ id: candidate, branchId, name })
-      .returning();
-    res.status(201).json(mod);
+    res.status(result.status).json({ error: result.error });
   },
 );
 
@@ -4329,6 +4356,32 @@ router.delete(
       return;
     }
     res.status(204).end();
+  },
+);
+
+// A branch adds its own modules: same desk-name rules as the admin's add-module, but the
+// branch comes from the session so a branch desk can never write into another's catalog.
+router.post(
+  "/branch/modules",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const body = req.body as { name?: unknown; slug?: unknown };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const slug = typeof body.slug === "string" ? body.slug.trim() : "";
+    if (!name) {
+      res.status(400).json({ error: "Enter a module name." });
+      return;
+    }
+    const result = await createModuleRow(req.auth.branchId, name, slug || null);
+    if ("mod" in result) {
+      res.status(201).json(result.mod);
+      return;
+    }
+    res.status(result.status).json({ error: result.error });
   },
 );
 

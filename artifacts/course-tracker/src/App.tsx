@@ -889,6 +889,7 @@ function AdminBranchPage() {
   const branchId = Number(params.id);
   const [branches, setBranches] = useState<AdminBranch[] | null>(null);
   const [moduleName, setModuleName] = useState('');
+  const [moduleSlug, setModuleSlug] = useState('');
   const [addingModule, setAddingModule] = useState(false);
   const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
   const [editModuleName, setEditModuleName] = useState('');
@@ -913,13 +914,14 @@ function AdminBranchPage() {
     fetch('/api/admin/modules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branchId: branch.id, name: moduleName.trim() }),
+      body: JSON.stringify({ branchId: branch.id, name: moduleName.trim(), slug: moduleSlug.trim() }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
-        setNotice(`Module "${moduleName.trim()}" added.`);
-        setModuleName(''); setAddingModule(false);
+        const created = data as { name?: string; id?: string };
+        setNotice(`Module "${created.name ?? moduleName.trim()}" added${created.id ? ` — desk /${created.id}` : ''}.`);
+        setModuleName(''); setModuleSlug(''); setAddingModule(false);
         void refreshBranchCatalog().then(loadBranches);
       })
       .catch((err: Error) => setError(err.message))
@@ -973,15 +975,19 @@ function AdminBranchPage() {
     <section className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-modules-${branch?.id ?? 'loading'}`}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Modules</h3>
-        <button type="button" onClick={() => { setAddingModule((v) => !v); setModuleName(''); setError(''); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline" data-testid="button-branch-add-module-toggle"><Plus size={13} /> Add module</button>
+        <button type="button" onClick={() => { setAddingModule((v) => !v); setModuleName(''); setModuleSlug(''); setError(''); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline" data-testid="button-branch-add-module-toggle"><Plus size={13} /> Add module</button>
       </div>
       {addingModule && (
         <form onSubmit={createModule} className="mt-4 flex flex-wrap items-end gap-3" data-testid="form-add-module">
           <label className="grid gap-1.5 text-sm font-medium">Module name
             <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Artificial Intelligence" autoFocus className="w-64" data-testid="input-module-name" />
           </label>
-          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">Add module</Button>
-          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+          <label className="grid gap-1.5 text-sm font-medium">Desk name (URL)
+            <Input value={moduleSlug} onChange={(e) => setModuleSlug(e.target.value)} placeholder="e.g. ai-lab" className="w-44" data-testid="input-module-slug" />
+          </label>
+          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
+          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleSlug(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+          <p className="w-full text-xs text-muted-foreground">The desk opens at <span className="font-semibold text-foreground">/admin/branch/{branch?.id ?? '—'}/module/&lt;desk name&gt;</span>. Leave it blank to build it from the module name.</p>
         </form>
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -991,8 +997,9 @@ function AdminBranchPage() {
               <button type="button" onClick={() => { setEditingModuleId(mod.id); setEditModuleName(mod.name); setDeletingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit module" aria-label="Edit module" data-testid={`button-edit-module-${mod.id}`}><Pencil size={14} /></button>
               <button type="button" onClick={() => { setDeletingModuleId(mod.id); setEditingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete module" aria-label="Delete module" data-testid={`button-delete-module-${mod.id}`}><Trash2 size={14} /></button>
             </div>
-            <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{mod.id.toUpperCase()}</span>
+            <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</span>
             <h3 className="mt-2 pr-12 font-display text-lg font-bold leading-tight">{mod.name}</h3>
+            <p className="mt-0.5 font-mono-ui text-xs text-muted-foreground">Desk: /{mod.id}</p>
             <Link href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground hover:text-primary" data-testid={`link-open-module-${mod.id}`}>Open module <ArrowRight size={13} /></Link>
             {editingModuleId === mod.id && (
               <form onSubmit={renameModule(mod.id)} className="mt-3 grid gap-2 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-module-${mod.id}`}>
@@ -3772,6 +3779,7 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
 function useBranchOverview() {
   const [overview, setOverview] = useState<BranchOverview | null>(null);
   const [failed, setFailed] = useState(false);
+  const [token, setToken] = useState(0);
   useEffect(() => {
     let alive = true;
     setFailed(false);
@@ -3780,8 +3788,8 @@ function useBranchOverview() {
       .then((data) => { if (alive && data) setOverview(data as BranchOverview); else if (alive) setFailed(true); })
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, []);
-  return { overview, failed };
+  }, [token]);
+  return { overview, failed, reload: () => setToken((v) => v + 1) };
 }
 
 type BranchOverview = {
@@ -3795,21 +3803,68 @@ type BranchOverview = {
 };
 
 function BranchPage() {
-  const { overview, failed } = useBranchOverview();
+  const { overview, failed, reload } = useBranchOverview();
+  const [addingModule, setAddingModule] = useState(false);
+  const [moduleName, setModuleName] = useState('');
+  const [moduleSlug, setModuleSlug] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const createModule = (event: FormEvent) => {
+    event.preventDefault();
+    if (!moduleName.trim()) return;
+    setBusy(true); setError(''); setNotice('');
+    fetch('/api/branch/modules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: moduleName.trim(), slug: moduleSlug.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error || 'Could not add the module.');
+        const created = data as { name?: string; id?: string };
+        setNotice(`Module "${created.name ?? moduleName.trim()}" added${created.id ? ` — desk /${created.id}` : ''}.`);
+        setModuleName(''); setModuleSlug(''); setAddingModule(false);
+        void refreshBranchCatalog().then(reload);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+
   return <>
     <PageHeader kicker="Branch desk" title={overview?.branchName ?? 'Branch desk'} detail="The course modules this branch runs. Click a module to manage instructors, attendance, and marks." />
     <section>
-      <h2 className="font-display text-2xl font-bold">Modules</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-2xl font-bold">Modules</h2>
+        {!addingModule && <Button size="sm" onClick={() => { setAddingModule(true); setModuleName(''); setModuleSlug(''); setError(''); }} data-testid="button-branch-add-module-toggle"><Plus size={15} /> Add module</Button>}
+      </div>
+      {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-add-error">{error}</p>}
+      {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-add-success">{notice}</p>}
+      {addingModule && (
+        <form onSubmit={createModule} className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4" data-testid="form-add-module">
+          <label className="grid gap-1.5 text-sm font-medium">Module name
+            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Artificial Intelligence" autoFocus className="w-64" data-testid="input-module-name" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">Desk name (URL)
+            <Input value={moduleSlug} onChange={(e) => setModuleSlug(e.target.value)} placeholder="e.g. ai-lab" className="w-44" data-testid="input-module-slug" />
+          </label>
+          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
+          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleSlug(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+          <p className="w-full text-xs text-muted-foreground">The desk opens at <span className="font-semibold text-foreground">/branch/module/&lt;desk name&gt;</span>. Leave it blank to build it from the module name.</p>
+        </form>
+      )}
       <div className="mt-4 grid gap-4 md:grid-cols-3">
         {overview == null && !failed && [1, 2, 3].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}
         {(overview?.modules ?? []).map((mod) => (
           <Link key={mod.id} href={`/branch/module/${mod.id}`} className="rounded-xl border border-border bg-card p-5 transition-colors hover:border-accent hover:bg-accent/5" data-testid={`card-branch-module-${mod.id}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
-            <h3 className="mt-1 font-display text-lg font-bold">{mod.id.toUpperCase()} · {mod.name}</h3>
+            <h3 className="mt-1 font-display text-lg font-bold">{mod.name}</h3>
+            <p className="mt-1 font-mono-ui text-xs text-muted-foreground">Desk: /{mod.id}</p>
             <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary"><ArrowRight size={14} /> Open</span>
           </Link>
         ))}
-        {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet.</p>}
+        {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet — add the first one above.</p>}
       </div>
     </section>
     {failed && <p className="mt-8 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">Could not load the branch.</p>}
