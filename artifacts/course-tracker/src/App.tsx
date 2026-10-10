@@ -3740,6 +3740,7 @@ function BranchModuleDetailPage() {
   const [teachersError, setTeachersError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
   const [form, setForm] = useState({ displayName: '', username: '', password: '' });
   const [justCreated, setJustCreated] = useState<{ displayName: string; username: string; password: string } | null>(null);
   const [justCreatedShown, setJustCreatedShown] = useState(false);
@@ -3787,9 +3788,10 @@ function BranchModuleDetailPage() {
       if (!res.ok) throw new Error('Failed to create login');
       const teacher = await res.json();
       setJustCreated({ displayName: teacher.displayName, username: teacher.username, password: form.password });
-      setJustCreatedShown(true);
+      setJustCreatedShown(false);
       setForm({ displayName: '', username: '', password: '' });
       setShowForm(false);
+      setShowPwd(false);
       refresh();
       setSuccess('Teacher login created.');
     } catch (e) {
@@ -3835,63 +3837,124 @@ function BranchModuleDetailPage() {
   if (!meta) return <><PageHeader kicker="Branch / module" title="Module not found." detail="That module does not exist." /></>;
 
   return <>
-    <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} desk`} title={meta.name} detail="Instructor logins for this module. Create, reveal, change password, or delete — each action needs your admin password." action={showForm ? <Button variant="outline" size="sm" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button> : <Button size="sm" onClick={() => { setShowForm(true); setJustCreated(null); setJustCreatedShown(false); }}><Plus size={14} /> Create login</Button>} />
-    {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-teacher-error">{error}</p>}
-    {success && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-teacher-success">{success}</p>}
-    {justCreated && justCreatedShown && (
-      <div className="mb-4 rounded-xl border border-accent bg-accent/5 p-4" data-testid="banner-just-created">
-        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login created — shown once</p>
-        <p className="mt-1 font-semibold">{justCreated.displayName}</p>
-        <p className="text-sm font-mono-ui">User ID: {justCreated.username}</p>
-        <p className="text-sm font-mono-ui">Password: {justCreated.password}</p>
-        <Button variant="outline" size="sm" className="mt-2" onClick={() => setJustCreatedShown(false)}>Dismiss</Button>
-      </div>
-    )}
-    {showForm && (
-      <div className="mb-6 rounded-xl border border-border bg-card p-5" data-testid="form-create-teacher">
-        <h3 className="font-display text-lg font-bold">Create instructor login</h3>
-        <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-3">
-          <Field label="Name"><Input value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} required maxLength={100} placeholder="e.g. Priya Sharma" /></Field>
-          <Field label="User ID"><Input value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} required maxLength={50} placeholder="e.g. priya.ai" pattern="^[a-zA-Z0-9._-]+$" /></Field>
-          <PasswordField label="Password (min 6)" toggleTestId="input-teacher-pwd-create" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} required minLength={6} />
-          <div className="sm:col-span-3 flex gap-2"><Button type="submit" disabled={createLoading}><Loader2 size={14} className={createLoading ? 'mr-2 animate-spin' : 'hidden'} /> Creating…</Button><Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); }}>Cancel</Button></div>
-        </form>
-      </div>
-    )}
-    <div className="grid gap-4 lg:grid-cols-2">
-      {moduleTeachers.map((teacher) => (
-        <div key={teacher.id} className="rounded-xl border border-border bg-card p-5" data-testid={`card-teacher-${teacher.id}`}>
-          <div className="flex items-center justify-between">
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{designation}</p>
-            <span className="rounded-full px-2.5 py-1 font-mono-ui text-[10px] bg-accent/20 text-primary">Active</span>
-          </div>
-          <h3 className="mt-2 font-display text-xl font-bold">{teacher.displayName || teacher.username}</h3>
-          <p className="mt-1 text-sm font-mono-ui text-muted-foreground">User ID: {teacher.username}</p>
-          <div className="mt-3 flex items-center gap-2">
-            <PasswordField label="Password" toggleTestId={`input-teacher-pwd-${teacher.id}`} value={revealedIds.includes(teacher.id) ? teacher.plainPassword || '' : '••••••••'} readOnly onChange={() => {}} />
-            {!revealedIds.includes(teacher.id) ? (
-              <Button size="sm" variant="outline" onClick={() => handleReveal(teacher)}><Eye size={14} /> Reveal</Button>
-            ) : (
-              <Button size="sm" variant="ghost" onClick={() => setRevealedIds((v) => v.filter((id) => id !== teacher.id))}><EyeOff size={14} /> Hide</Button>
-            )}
-            <Button size="sm" variant="outline" onClick={() => { setPwdEditId(teacher.id); setNewPwd(''); setNewPwdShown(false); }}><Key size={14} /> Change</Button>
-            <Button size="sm" variant="destructive" onClick={() => handleDelete(teacher)}><Trash2 size={14} /> Delete</Button>
-          </div>
-          {pwdEditId === teacher.id && (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2" data-testid="form-teacher-pwd-edit">
-              <PasswordField label="New password (min 6)" toggleTestId={`input-teacher-newpwd-${teacher.id}`} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} required minLength={6} />
-              <div className="sm:col-span-2 flex gap-2"><Button size="sm" onClick={(e) => { e.preventDefault(); handleChangePassword(e, teacher); }} disabled={newPwd.length < 6}>Save</Button><Button size="sm" variant="outline" onClick={closePwdEdit}>Cancel</Button></div>
-            </div>
-          )}
+    <PageHeader kicker="Branch / module detail" title={meta.name} detail={`Manage and oversee the ${meta.name.toLowerCase()} module.`} />
+    {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="banner-module-error">{error}</div>}
+    {success && <div className="mb-4 rounded-md bg-accent/10 px-4 py-3 text-sm text-primary" data-testid="banner-module-success">{success}</div>}
+
+    {/* Profiles only — no credentials here. Those live in the login section below. */}
+    <section className="rounded-xl border border-border bg-card p-6" data-testid="teacher-profile-block">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module team</p>
+          <h2 className="mt-1 font-display text-2xl font-bold">Instructors</h2>
+          <p className="mt-2 max-w-md text-sm text-muted-foreground">Who teaches the {moduleShort[moduleKey]} module.</p>
         </div>
-      ))}
-      {moduleTeachers.length === 0 && (
-        <div className="rounded-xl border border-dashed border-border bg-card/50 p-8 text-center lg:col-span-2">
-          <p className="text-muted-foreground">No instructor logins for this module yet.</p>
-          <Button className="mt-3" size="sm" onClick={() => setShowForm(true)}><Plus size={14} /> Create first login</Button>
+        <span className="rounded-full bg-muted px-2.5 py-1 font-mono-ui text-[10px] text-muted-foreground" data-testid="count-module-teachers">{moduleTeachers.length} instructor{moduleTeachers.length === 1 ? '' : 's'}</span>
+      </div>
+      {teachersLoading ? (
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">{[1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />)}</div>
+      ) : moduleTeachers.length === 0 ? (
+        <div className="mt-5"><EmptyState title="Not assigned yet" detail="Create the first login for this module below." icon={GraduationCap} /></div>
+      ) : (
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          {moduleTeachers.map((t) => {
+            const name = t.displayName || t.username;
+            return <div key={t.id} className="flex items-center gap-4 rounded-xl border border-border p-4" data-testid={`row-module-teacher-${t.id}`}>
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-accent font-display text-lg font-bold text-primary">{initials(name)}</span>
+              <div className="min-w-0">
+                <p className="truncate text-sm"><span className="text-muted-foreground">Name: </span><span className="font-display text-lg font-bold" data-testid={`text-teacher-name-${t.id}`}>{name}</span></p>
+                <p className="mt-0.5 truncate text-sm"><span className="text-muted-foreground">Designation: </span><span className="font-semibold text-primary" data-testid={`text-teacher-designation-${t.id}`}>{designation}</span></p>
+              </div>
+            </div>;
+          })}
         </div>
       )}
-    </div>
+    </section>
+
+    <section className="mt-6 rounded-xl border border-border bg-card p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login access</p>
+          <h2 className="mt-1 font-display text-2xl font-bold">Teacher logins</h2>
+          <p className="mt-2 max-w-md text-sm text-muted-foreground">Pick any name, user ID and password. The login lets the teacher sign in to their module desk.</p>
+        </div>
+        {!showForm && <Button onClick={() => { setForm({ displayName: '', username: '', password: '' }); setShowForm(true); setShowPwd(false); }} data-testid="button-create-login"><Plus size={16} /> Create Login</Button>}
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleCreate} className="mt-5 grid max-w-lg gap-4 border-t border-border pt-5" data-testid="form-create-login">
+          <Field label="Name" value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} placeholder="e.g. Ajay" minLength={2} required data-testid="input-login-name" />
+          <Field label="User ID" value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} placeholder="e.g. ajay.ai" minLength={3} required data-testid="input-login-username" />
+          <div className="relative">
+            <Field label="Password" type={showPwd ? 'text' : 'password'} value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} minLength={6} required data-testid="input-login-password" />
+            <button type="button" onClick={() => setShowPwd((v) => !v)} className="absolute right-2 top-[34px] rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid="button-toggle-pwd">
+              {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">Designation is set automatically: <span className="font-semibold text-primary">{designation}</span></p>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={createLoading} data-testid="button-submit-login">{createLoading ? 'Saving…' : 'Create Login'}</Button>
+            <Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); setShowPwd(false); }} data-testid="button-cancel-login">Cancel</Button>
+          </div>
+        </form>
+      )}
+
+      {justCreated && (
+        <div className="mt-5 rounded-lg border border-accent/50 bg-accent/10 p-4" data-testid="banner-created-creds">
+          <div className="flex items-start justify-between gap-3">
+            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login created — save these details now</p>
+            <button type="button" onClick={() => { setJustCreated(null); setJustCreatedShown(false); }} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Dismiss" data-testid="button-dismiss-created"><X size={14} /></button>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div className="text-sm"><span className="text-muted-foreground">Name: </span><span className="font-semibold" data-testid="created-name">{justCreated.displayName}</span></div>
+            <div className="truncate text-sm"><span className="text-muted-foreground">User ID: </span><span className="font-mono-ui font-semibold" data-testid="created-username">{justCreated.username}</span></div>
+            <div className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">Password: </span>
+              <span className="font-mono-ui font-semibold" data-testid="created-password">{justCreatedShown ? justCreated.password : '••••••••'}</span>
+              <button type="button" onClick={() => setJustCreatedShown((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={justCreatedShown ? 'Hide password' : 'See password'} data-testid="button-eye-created">{justCreatedShown ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!teachersLoading && moduleTeachers.length > 0 && (
+        <div className="mt-5 grid gap-3 border-t border-border pt-5">
+          {moduleTeachers.map((t) => {
+            const isRevealed = revealedIds.includes(t.id);
+            const name = t.displayName || t.username;
+            return <div key={t.id} className="rounded-xl border border-border p-4" data-testid={`row-module-login-${t.id}`}>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                <p className="min-w-[8rem] truncate text-sm font-semibold" data-testid={`text-login-owner-${t.id}`}>{name}</p>
+                <p className="truncate font-mono-ui text-xs"><span className="text-muted-foreground">User ID: </span><span className="font-bold text-foreground" data-testid={`text-teacher-username-${t.id}`}>{t.username}</span></p>
+                <p className="flex items-center gap-2 font-mono-ui text-xs"><span className="text-muted-foreground">Password: </span>
+                  <span className="font-bold text-foreground" data-testid={`text-teacher-password-${t.id}`}>{isRevealed ? (t.plainPassword ?? '—') : '••••••••'}</span>
+                  <button type="button" onClick={() => { if (isRevealed) { setRevealedIds((ids) => ids.filter((id) => id !== t.id)); return; } handleReveal(t); }} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={isRevealed ? 'Hide password' : 'See password'} data-testid={`button-eye-teacher-${t.id}`}>{isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                </p>
+                <div className="ml-auto flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => { if (pwdEditId === t.id) { closePwdEdit(); return; } setPwdEditId(t.id); setNewPwd(''); setNewPwdShown(false); }} data-testid={`button-change-password-${t.id}`}><KeyRound size={14} /> Change password</Button>
+                  <Button variant="outline" size="sm" onClick={() => handleDelete(t)} data-testid={`button-delete-teacher-${t.id}`}><Trash2 size={14} /> Delete</Button>
+                </div>
+              </div>
+
+              {pwdEditId === t.id && (
+                <form onSubmit={(e) => handleChangePassword(e, t)} className="mt-4 grid max-w-sm gap-3 border-t border-border pt-4" data-testid={`form-change-password-${t.id}`}>
+                  <div className="relative">
+                    <Field label="New password" type={newPwdShown ? 'text' : 'password'} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} minLength={6} autoFocus required data-testid={`input-new-password-${t.id}`} />
+                    <button type="button" onClick={() => setNewPwdShown((v) => !v)} className="absolute right-2 top-[34px] rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid={`button-toggle-new-password-${t.id}`}>
+                      {newPwdShown ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" disabled={createLoading || newPwd.length < 6} data-testid={`button-save-password-${t.id}`}>{createLoading ? 'Saving…' : 'Save password'}</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={closePwdEdit} data-testid={`button-cancel-password-${t.id}`}>Cancel</Button>
+                  </div>
+                </form>
+              )}
+            </div>;
+          })}
+        </div>
+      )}
+    </section>
+
     <BranchModuleStatusSection moduleKey={moduleKey} />
   </>;
 }
