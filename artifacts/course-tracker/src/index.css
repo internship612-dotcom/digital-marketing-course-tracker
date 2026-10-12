@@ -311,6 +311,219 @@
   --shadow-2xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0);
 }
 
+/* ==========================================================================
+   PANEL THEMES
+   The app runs four visually distinct panels — Admin, the Zedking branch,
+   every other branch, and the Student portal. Each panel's layout root carries
+   a `data-theme` attribute (chosen in src/themes.ts); these tokens cascade from
+   that root, so every component re-colours itself without any hard-coded
+   values. The status colours (Present green / Absent red / Pending amber) use
+   fixed Tailwind colours on purpose and are never overridden here, so they stay
+   legible in every theme.
+
+   To add a theme: copy a block, give it a new `data-theme` name, then register
+   it in src/themes.ts. Nothing else changes.
+   ========================================================================== */
+
+/* ADMIN — deep navy sidebar, grey-blue page, amber accents. Also the fallback
+   for anything drawn outside a panel (loading screens, 404 pages). */
+:root,
+[data-theme='admin'] {
+  --bg: 220 38% 97%;
+  --surface: 0 0% 100%;
+  --sidebar-bg: 221 51% 16%;
+  --sidebar-text: 220 24% 88%;
+  --text: 222 30% 15%;
+  --text-muted: 220 14% 45%;
+  --border: 220 20% 88%;
+  --primary: 221 51% 16%;
+  --primary-hover: 221 51% 23%;
+  --primary-foreground: 42 100% 47%;
+  --accent: 42 100% 47%;
+  --accent-foreground: 221 51% 16%;
+  --secondary: 220 30% 92%;
+  --secondary-foreground: 222 30% 15%;
+  --muted: 220 28% 94%;
+  --input: 220 20% 82%;
+  --ring: 42 100% 47%;
+  --sidebar-border: 221 40% 25%;
+  --sidebar-accent: 221 44% 23%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-primary: 42 100% 47%;
+  --sidebar-primary-foreground: 221 51% 16%;
+  --destructive: 1 71% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 42 100% 47%;
+  --chart-2: 221 51% 30%;
+  --chart-3: 187 58% 43%;
+  --chart-4: 1 71% 54%;
+  --chart-5: 145 42% 42%;
+
+  /* shadcn aliases — components read these names, not the canonical ones above */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --card-border: var(--border);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --popover-border: var(--border);
+  --muted-foreground: var(--text-muted);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--sidebar-text);
+}
+
+/* ZEDKING BRANCH — deep green sidebar, mint page, emerald/lime accents. Shared
+   by all three Zedking modules (AI, Digital Marketing, Social Media). */
+[data-theme='zedking'] {
+  --bg: 146 33% 96%;
+  --surface: 0 0% 100%;
+  --sidebar-bg: 162 67% 18%;
+  --sidebar-text: 150 25% 90%;
+  --text: 160 30% 13%;
+  --text-muted: 155 12% 38%;
+  --border: 150 18% 87%;
+  --primary: 162 67% 18%;
+  --primary-hover: 162 60% 25%;
+  --primary-foreground: 141 45% 81%;
+  --accent: 141 45% 81%;
+  --accent-foreground: 162 67% 18%;
+  --secondary: 150 30% 92%;
+  --secondary-foreground: 160 30% 13%;
+  --muted: 150 28% 94%;
+  --input: 150 20% 80%;
+  --ring: 154 63% 33%;
+  --sidebar-border: 162 40% 24%;
+  --sidebar-accent: 162 40% 22%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-primary: 154 63% 33%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --destructive: 1 71% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 154 63% 33%;
+  --chart-2: 162 67% 18%;
+  --chart-3: 187 58% 43%;
+  --chart-4: 1 71% 54%;
+  --chart-5: 38 92% 54%;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --card-border: var(--border);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --popover-border: var(--border);
+  --muted-foreground: var(--text-muted);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--sidebar-text);
+}
+
+/* EVERY OTHER BRANCH — deep indigo sidebar, lavender page, indigo/violet
+   accents. The default for any branch the admin creates later. */
+[data-theme='branch'] {
+  --bg: 247 53% 97%;
+  --surface: 0 0% 100%;
+  --sidebar-bg: 238 44% 30%;
+  --sidebar-text: 240 30% 90%;
+  --text: 240 28% 16%;
+  --text-muted: 240 12% 42%;
+  --border: 240 25% 89%;
+  --primary: 238 44% 30%;
+  --primary-hover: 238 44% 37%;
+  --primary-foreground: 244 100% 92%;
+  --accent: 244 100% 92%;
+  --accent-foreground: 238 44% 30%;
+  --secondary: 245 40% 94%;
+  --secondary-foreground: 240 28% 16%;
+  --muted: 245 40% 95%;
+  --input: 240 22% 82%;
+  --ring: 240 60% 60%;
+  --sidebar-border: 238 40% 38%;
+  --sidebar-accent: 238 42% 36%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-primary: 240 60% 60%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --destructive: 1 71% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 240 60% 60%;
+  --chart-2: 238 44% 30%;
+  --chart-3: 187 58% 43%;
+  --chart-4: 1 71% 54%;
+  --chart-5: 145 42% 42%;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --card-border: var(--border);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --popover-border: var(--border);
+  --muted-foreground: var(--text-muted);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--sidebar-text);
+}
+
+/* STUDENT — warm charcoal sidebar, off-white page, coral/peach accents. */
+[data-theme='student'] {
+  --bg: 38 44% 96%;
+  --surface: 0 0% 100%;
+  --sidebar-bg: 26 8% 17%;
+  --sidebar-text: 30 20% 90%;
+  --text: 25 18% 15%;
+  --text-muted: 28 12% 42%;
+  --border: 30 22% 88%;
+  --primary: 26 8% 17%;
+  --primary-hover: 26 8% 25%;
+  --primary-foreground: 19 100% 89%;
+  --accent: 19 100% 89%;
+  --accent-foreground: 18 60% 32%;
+  --secondary: 35 35% 93%;
+  --secondary-foreground: 25 18% 15%;
+  --muted: 35 40% 94%;
+  --input: 30 18% 82%;
+  --ring: 16 79% 57%;
+  --sidebar-border: 28 12% 26%;
+  --sidebar-accent: 28 12% 24%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-primary: 16 79% 57%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --destructive: 1 71% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 16 79% 57%;
+  --chart-2: 26 8% 30%;
+  --chart-3: 187 58% 43%;
+  --chart-4: 1 71% 54%;
+  --chart-5: 145 42% 42%;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --card-border: var(--border);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --popover-border: var(--border);
+  --muted-foreground: var(--text-muted);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--sidebar-text);
+}
+
+/* The button/badge borders are computed from each theme's own tokens. They are
+   declared here as well as in :root because a custom property computes where it
+   is declared — inheriting :root's value would keep the admin border colour
+   inside a green or indigo panel. */
+[data-theme] {
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
 @layer base {
   * {
     @apply border-border;

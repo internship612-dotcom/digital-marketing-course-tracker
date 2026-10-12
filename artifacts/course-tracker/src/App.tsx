@@ -75,6 +75,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { validateStudentEmail } from '@/lib/email-validation';
+import { PANEL_THEME_LABELS, themeForBranch, type PanelTheme } from './themes';
 
 const queryClient = new QueryClient();
 const modules: Module[] = ['ai', 'dm', 'sm'];
@@ -210,6 +211,53 @@ function useCatalogModules(): typeof adminModules {
     }
   }
   return metas.length ? metas : adminModules;
+}
+
+// Which of the four panel themes a signed-in user gets, plus the label for the badge.
+// The theme is decided by ROLE and — for a module owner — by the BRANCH that owns their
+// module, never by the module: every module in one branch shares a single theme. A branch
+// owner reads the branch straight off their own display name; a module owner's branch comes
+// from the catalog. See src/themes.ts for the tokens.
+function usePanelTheme(user?: CurrentUser | null): { theme: PanelTheme; label: string } {
+  const branches = useBranches();
+  if (!user) return { theme: 'student', label: PANEL_THEME_LABELS.student };
+  if (user.role === 'admin') return { theme: 'admin', label: PANEL_THEME_LABELS.admin };
+  if (user.role === 'student') return { theme: 'student', label: PANEL_THEME_LABELS.student };
+  if (user.role === 'branch') {
+    const name = user.displayName || PANEL_THEME_LABELS.branch;
+    return { theme: themeForBranch(name), label: name };
+  }
+  const branch = branches?.find((b) => b.modules.some((m) => m.id === user.module));
+  return { theme: themeForBranch(branch?.name), label: branch?.name ?? 'Module desk' };
+}
+
+// The panel title shown at the top-left of the header, so several panels open in different
+// tabs are instantly distinguishable. `short` is the mobile form; `tab` is the browser tab
+// title. Everything here is read from data the app already holds for the signed-in user —
+// the branch and module catalog plus the session's own display name — so no new request is
+// made. A teacher's branch comes from the module's branch in the catalog; a student's name
+// is their session display name.
+function usePanelTitle(user: CurrentUser): { title: string; short: string; tab: string } {
+  const catalog = useCatalogModules();
+  const branches = useBranches();
+  if (user.role === 'admin') {
+    return { title: 'Admin Panel', short: 'Admin Panel', tab: 'Admin Panel | Course Tracker' };
+  }
+  if (user.role === 'student') {
+    const name = user.displayName?.trim();
+    return { title: name ? `Student Panel · ${name}` : 'Student Panel', short: 'Student Panel', tab: 'Student Panel | Course Tracker' };
+  }
+  if (user.role === 'branch') {
+    const name = user.displayName?.trim() || 'Branch';
+    return { title: `${name} · Branch`, short: `${name} · Branch`, tab: `${name} | Course Tracker` };
+  }
+  const branchName = branches?.find((b) => b.modules.some((m) => m.id === user.module))?.name || 'Branch';
+  const moduleName = catalog.find((m) => m.key === user.module)?.name || moduleShort[user.module ?? ''] || 'Module';
+  return {
+    title: `${branchName} · Teacher · ${moduleName}`,
+    short: `${branchName} · Teacher`,
+    tab: `${branchName} · ${moduleName} | Course Tracker`,
+  };
 }
 
 // The course PDFs students read. They live in the database, not in the repo, because
@@ -359,13 +407,16 @@ function PasswordField({ label, toggleTestId, ...props }: { label: string; toggl
   </div>;
 }
 
-function AuthLayout({ children, eyebrow }: { children: ReactNode; eyebrow: string }) {
+function AuthLayout({ children, eyebrow, theme = 'admin', label }: { children: ReactNode; eyebrow: string; theme?: PanelTheme; label?: string }) {
   return (
-    <div className="app-noise min-h-[100dvh] bg-background lg:grid lg:grid-cols-[minmax(320px,0.85fr)_1.15fr]">
-      <aside className="relative hidden overflow-hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between">
+    <div data-theme={theme} className="app-noise min-h-[100dvh] bg-background lg:grid lg:grid-cols-[minmax(320px,0.85fr)_1.15fr]">
+      <aside className="relative hidden overflow-hidden bg-sidebar p-10 text-sidebar-foreground lg:flex lg:flex-col lg:justify-between">
         <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full border-[32px] border-accent/20" />
         <div className="absolute -bottom-20 -left-12 h-56 w-56 rounded-full border-[24px] border-accent/10" />
-        <Logo dark />
+        <div className="relative flex items-center justify-between gap-3">
+          <Logo dark />
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-[0.16em] text-accent-foreground" data-testid="badge-auth-panel"><span className="h-1.5 w-1.5 rounded-full bg-primary" />{label ?? PANEL_THEME_LABELS[theme]}</span>
+        </div>
         <div className="relative max-w-sm pb-8">
           <p className="font-mono-ui text-xs uppercase tracking-[0.22em] text-accent">Daily academic control room</p>
           <h1 className="mt-5 font-display text-5xl font-bold leading-[0.96]">Everyone's progress, one place.</h1>
@@ -386,6 +437,12 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
   const logout = useLogout();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openItem, setOpenItem] = useState('');
+  const { theme } = usePanelTheme(user);
+  const panel = usePanelTitle(user);
+  useEffect(() => {
+    document.title = panel.tab;
+    return () => { document.title = 'Course Tracker'; };
+  }, [panel.tab]);
     const nav: NavItem[] = user.role === 'admin'
   ? [
       { href: '/admin/dashboard', label: 'Admin dashboard', icon: LayoutDashboard },
@@ -428,7 +485,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
       logout.mutate(undefined, { onSettled: () => finish(user.role === 'teacher' ? `/admin/${user.module ?? 'ai'}` : '/') });
     }
   };
-  return <div className="app-noise min-h-[100dvh] bg-background">
+  return <div data-theme={theme} className="app-noise min-h-[100dvh] bg-background">
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-sidebar p-5 text-sidebar-foreground transition-transform duration-200 lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex items-center justify-between"><Logo dark /><button className="rounded-md p-2 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" data-testid="button-close-menu"><X size={18} /></button></div>
       <div className="mt-12"><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-sidebar-foreground/45">Workspace</p><nav className="mt-3 grid gap-1">{nav.map((item) => {
@@ -445,7 +502,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
        </div>
     </aside>
     {mobileOpen && <button className="fixed inset-0 z-30 bg-primary/30 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close menu overlay" data-testid="button-overlay-menu" />}
-    <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border/70 bg-background/90 px-5 backdrop-blur sm:px-8"><button className="rounded-md p-2 hover:bg-muted lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-menu"><Menu size={20} /></button><div className="lg:hidden"><Logo /></div><div className="ml-auto flex items-center gap-3"><span className="hidden font-mono-ui text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:block">Institute desk / 01</span><span className="h-2 w-2 rounded-full bg-accent" title="Workspace connected" /></div></header><main className="mx-auto max-w-[1500px] p-5 sm:p-8">{children}</main></div>
+    <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border/70 bg-background/90 px-5 backdrop-blur sm:px-8"><div className="flex min-w-0 items-center gap-3"><button className="rounded-md p-2 hover:bg-muted lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-menu"><Menu size={20} /></button><div className="hidden sm:block lg:hidden"><Logo /></div><span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-[0.14em] text-accent-foreground" data-testid="badge-panel-title" title={panel.title}><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span className="hidden truncate sm:inline">{panel.title}</span><span className="truncate sm:hidden">{panel.short}</span></span></div><div className="ml-auto flex shrink-0 items-center gap-3"><span className="hidden font-mono-ui text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:block">Institute desk / 01</span><span className="h-2 w-2 rounded-full bg-accent" title="Workspace connected" /></div></header><main className="mx-auto max-w-[1500px] p-5 sm:p-8">{children}</main></div>
   </div>;
 }
 
@@ -3615,7 +3672,7 @@ function Home() {
     });
   };
   if (isLoading) return <LoadingScreen />;
-  return <AuthLayout eyebrow="Entry point"><h1 className="font-display text-6xl font-bold tracking-tight text-primary text-center sm:text-7xl">WELCOME</h1><div className="mx-auto mt-8 w-full max-w-[340px]"><div className="rounded-xl border border-border bg-card p-5"><p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Student</p><h2 className="mt-2 font-display text-2xl font-bold">Sign in to your record.</h2><form onSubmit={handleSignIn} className="mt-5 grid gap-3"><Field label="Login ID (email)" type="email" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-home-student-identifier" /><PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" required data-testid="input-home-student-password" toggleTestId="button-toggle-home-student-pwd" />{error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-home-error">{error}</p>}<Button type="submit" disabled={login.isPending} className="mt-1 w-full" data-testid="button-home-student-login">{login.isPending ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button></form></div><p className="mt-4 text-center font-mono-ui text-xs uppercase tracking-[0.15em] text-muted-foreground">Login details are issued by your institute.</p></div></AuthLayout>;
+  return <AuthLayout eyebrow="Entry point" theme="student"><h1 className="font-display text-6xl font-bold tracking-tight text-primary text-center sm:text-7xl">WELCOME</h1><div className="mx-auto mt-8 w-full max-w-[340px]"><div className="rounded-xl border border-border bg-card p-5"><p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Student</p><h2 className="mt-2 font-display text-2xl font-bold">Sign in to your record.</h2><form onSubmit={handleSignIn} className="mt-5 grid gap-3"><Field label="Login ID (email)" type="email" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-home-student-identifier" /><PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" required data-testid="input-home-student-password" toggleTestId="button-toggle-home-student-pwd" />{error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-home-error">{error}</p>}<Button type="submit" disabled={login.isPending} className="mt-1 w-full" data-testid="button-home-student-login">{login.isPending ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button></form></div><p className="mt-4 text-center font-mono-ui text-xs uppercase tracking-[0.15em] text-muted-foreground">Login details are issued by your institute.</p></div></AuthLayout>;
 }
 
 function AdminLoginPage() {
@@ -3651,7 +3708,7 @@ function AdminLoginPage() {
     }
   };
 
-  return <AuthLayout eyebrow="Admin Sign In">
+  return <AuthLayout eyebrow="Admin Sign In" theme="admin">
     <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
     <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
     <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
@@ -3682,7 +3739,7 @@ function StudentAuthPage() {
     });
   };
 
-  return <AuthLayout eyebrow="Student Sign In">
+  return <AuthLayout eyebrow="Student Sign In" theme="student">
     <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
     <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
     <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
@@ -3751,7 +3808,7 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
       .finally(() => setLoading(false));
   };
   if (branch) {
-    return <AuthLayout eyebrow={`${branch.name} Sign In`}>
+    return <AuthLayout eyebrow={`${branch.name} Sign In`} theme={themeForBranch(branch.name)} label={branch.name}>
       <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-branch-back-home">Back to home</Link></div>
       <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-branch-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
       <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
@@ -3766,7 +3823,7 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
       <p className="mt-6 text-center text-sm text-muted-foreground">Restricted access — keep these credentials with the institute.</p>
     </AuthLayout>;
   }
-  return <AuthLayout eyebrow="Branch desk">
+  return <AuthLayout eyebrow="Branch desk" theme="branch">
     <h2 className="font-display text-4xl font-bold tracking-tight">Branch desk not found.</h2>
     <p className="mt-3 text-sm leading-6 text-muted-foreground">That page isn&apos;t one of the branches this institute runs. Check the spelling, or contact the institute admin.</p>
     <Link href="/" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-primary" data-testid="link-branch-missing-home"><ChevronLeft size={16} /> Back to home</Link>
@@ -4461,12 +4518,15 @@ function ModulePanel({ panel }: { panel: Module }) {
   const { data: user, isLoading } = useCurrentUser();
   const [, setLocation] = useLocation();
   const login = useLogin();
+  const branches = useBranches();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
   if (isLoading) return <LoadingScreen label="Opening your workspace" />;
   if (user?.role === 'teacher' && user.module === panel) return <Shell user={user}><TeacherPage user={user} /></Shell>;
+
+  const branchName = branches?.find((b) => b.modules.some((m) => m.id === panel))?.name;
 
   const handleSignIn = (event: FormEvent) => {
     event.preventDefault();
@@ -4480,7 +4540,7 @@ function ModulePanel({ panel }: { panel: Module }) {
     });
   };
 
-  return <AuthLayout eyebrow="Module panel">
+  return <AuthLayout eyebrow="Module panel" theme={themeForBranch(branchName)} label={branchName ?? `${moduleShort[panel]} desk`}>
     <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
     <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
     <div className="inline-flex items-center gap-2 rounded-full border border-accent/35 bg-accent/15 px-3 py-1.5 text-xs font-bold text-primary"><span className="h-2 w-2 rounded-full bg-accent" />{moduleShort[panel]} desk</div>
