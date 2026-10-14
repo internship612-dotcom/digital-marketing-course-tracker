@@ -49,6 +49,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Loader2,
+  Lock,
   LogOut,
   Megaphone,
   Menu,
@@ -75,6 +76,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { validateStudentEmail } from '@/lib/email-validation';
+import { LOGIN_THEMES, type LoginThemeKey } from './login-themes';
 import { PANEL_THEME_LABELS, themeForBranch, type PanelTheme } from './themes';
 
 const queryClient = new QueryClient();
@@ -407,24 +409,57 @@ function PasswordField({ label, toggleTestId, ...props }: { label: string; toggl
   </div>;
 }
 
-function AuthLayout({ children, eyebrow, theme = 'admin', label }: { children: ReactNode; eyebrow: string; theme?: PanelTheme; label?: string }) {
+function AuthField({ label, icon: Icon, ...props }: { label: string; icon: typeof Users } & React.ComponentProps<'input'>) {
   return (
-    <div data-theme={theme} className="app-noise min-h-[100dvh] bg-background lg:grid lg:grid-cols-[minmax(320px,0.85fr)_1.15fr]">
-      <aside className="relative hidden overflow-hidden bg-sidebar p-10 text-sidebar-foreground lg:flex lg:flex-col lg:justify-between">
-        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full border-[32px] border-accent/20" />
-        <div className="absolute -bottom-20 -left-12 h-56 w-56 rounded-full border-[24px] border-accent/10" />
-        <div className="relative flex items-center justify-between gap-3">
-          <Logo dark />
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-[0.16em] text-accent-foreground" data-testid="badge-auth-panel"><span className="h-1.5 w-1.5 rounded-full bg-primary" />{label ?? PANEL_THEME_LABELS[theme]}</span>
+    <label className="block">
+      <span className="auth-label">{label}</span>
+      <span className="auth-control">
+        <Icon size={18} className="auth-control-icon" aria-hidden="true" />
+        <input {...props} className="auth-input" />
+      </span>
+    </label>
+  );
+}
+
+function AuthPasswordField({ label, toggleTestId, ...props }: { label: string; toggleTestId?: string } & React.ComponentProps<'input'>) {
+  const [show, setShow] = useState(false);
+  return (
+    <label className="block">
+      <span className="auth-label">{label}</span>
+      <span className="auth-control">
+        <Lock size={18} className="auth-control-icon" aria-hidden="true" />
+        <input {...props} type={show ? 'text' : 'password'} className="auth-input" style={{ paddingRight: 44 }} />
+        <button type="button" onClick={() => setShow((v) => !v)} className="auth-eye" tabIndex={-1} aria-label={show ? 'Hide password' : 'Show password'} data-testid={toggleTestId}>{show ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+      </span>
+    </label>
+  );
+}
+
+// ONE shared layout for all four sign-in screens. The page sets only the theme
+// key (and, for a module desk, the branch's module names for the artwork);
+// colours, badge, illustration, heading and subtitle all come from
+// src/login-themes.ts.
+function AuthShell({ theme, moduleNames, currentIndex, heading, subtitle, children }: { theme: LoginThemeKey; moduleNames?: string[]; currentIndex?: number; heading?: string; subtitle?: string; children: ReactNode }) {
+  const t = LOGIN_THEMES[theme];
+  const Illustration = t.Illustration;
+  const BadgeIcon = t.badgeIcon;
+  const style = { background: t.gradient, '--auth-accent': t.accent, '--auth-pale': t.pale } as React.CSSProperties;
+  return (
+    <div className="auth-shell" style={style}>
+      <span className="auth-shell-circle auth-shell-circle-1" aria-hidden="true" />
+      <span className="auth-shell-circle auth-shell-circle-2" aria-hidden="true" />
+      <span className="auth-shell-circle auth-shell-circle-3" aria-hidden="true" />
+      <div className="auth-inner">
+        <div className={`auth-art auth-art-${theme}`} aria-hidden="true"><Illustration moduleNames={moduleNames} currentIndex={currentIndex} /></div>
+        <div className="auth-card">
+          <img src={zedkingLogo} alt="Zed-Kyng" className="auth-logo" />
+          <p className="auth-tracker">COURSE TRACKER</p>
+          <span className="auth-badge" style={{ background: t.pillTint, color: t.pillText }}><BadgeIcon size={15} aria-hidden="true" />{t.badgeText}</span>
+          <h1 className="auth-heading">{heading ?? t.heading}</h1>
+          <p className="auth-subtitle">{subtitle ?? t.subtitle}</p>
+          <div className="auth-form">{children}</div>
         </div>
-        <div className="relative max-w-sm pb-8">
-          <p className="font-mono-ui text-xs uppercase tracking-[0.22em] text-accent">Daily academic control room</p>
-          <h1 className="mt-5 font-display text-5xl font-bold leading-[0.96]">Everyone's progress, one place.</h1>
-          <p className="mt-6 max-w-xs text-sm leading-6 text-sidebar-foreground/70">One reliable place for teaching records, attendance, and the small signals that make progress visible.</p>
-        </div>
-        <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/45">DIGITAL MARKETING WITH AI</p>
-      </aside>
-      <main className="flex min-h-[100dvh] items-center justify-center p-5 sm:p-10"><div className="w-full max-w-md">{children}</div></main>
+      </div>
     </div>
   );
 }
@@ -3672,7 +3707,14 @@ function Home() {
     });
   };
   if (isLoading) return <LoadingScreen />;
-  return <AuthLayout eyebrow="Entry point" theme="student"><h1 className="font-display text-6xl font-bold tracking-tight text-primary text-center sm:text-7xl">WELCOME</h1><div className="mx-auto mt-8 w-full max-w-[340px]"><div className="rounded-xl border border-border bg-card p-5"><p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Student</p><h2 className="mt-2 font-display text-2xl font-bold">Sign in to your record.</h2><form onSubmit={handleSignIn} className="mt-5 grid gap-3"><Field label="Login ID (email)" type="email" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-home-student-identifier" /><PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" required data-testid="input-home-student-password" toggleTestId="button-toggle-home-student-pwd" />{error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-home-error">{error}</p>}<Button type="submit" disabled={login.isPending} className="mt-1 w-full" data-testid="button-home-student-login">{login.isPending ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button></form></div><p className="mt-4 text-center font-mono-ui text-xs uppercase tracking-[0.15em] text-muted-foreground">Login details are issued by your institute.</p></div></AuthLayout>;
+  return <AuthShell theme="student">
+    <form onSubmit={handleSignIn}>
+      <AuthField label="Login ID (email)" icon={UserRound} type="email" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder={LOGIN_THEMES.student.idPlaceholder} autoComplete="email" required data-testid="input-home-student-identifier" />
+      <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES.student.passwordPlaceholder} autoComplete="current-password" required data-testid="input-home-student-password" toggleTestId="button-toggle-home-student-pwd" />
+      {error && <p className="auth-error" data-testid="status-home-error">{error}</p>}
+      <button type="submit" className="auth-button" disabled={login.isPending} data-testid="button-home-student-login">{login.isPending ? 'Signing in…' : LOGIN_THEMES.student.buttonLabel} <ArrowRight size={18} /></button>
+    </form>
+  </AuthShell>;
 }
 
 function AdminLoginPage() {
@@ -3708,20 +3750,14 @@ function AdminLoginPage() {
     }
   };
 
-  return <AuthLayout eyebrow="Admin Sign In" theme="admin">
-    <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
-    <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
-    <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
-    <h2 className="mt-3 font-display text-4xl font-bold tracking-tight">Admin Portal</h2>
-    <p className="mt-3 text-sm leading-6 text-muted-foreground">Administrator access.</p>
-    <form onSubmit={handleSignIn} className="mt-7 grid gap-4">
-      <Field label="Email" type="email" value={form.email} onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-admin-identifier" />
-      <PasswordField label="Password" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} placeholder="Enter password" autoComplete="current-password" required data-testid="input-admin-password" toggleTestId="button-toggle-admin-pwd" />
-      {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-auth-error">{error}</p>}
-      <Button type="submit" size="lg" disabled={loading} className="mt-2 w-full" data-testid="button-submit-auth">{loading ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button>
+  return <AuthShell theme="admin">
+    <form onSubmit={handleSignIn}>
+      <AuthField label="Email" icon={UserRound} type="email" value={form.email} onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))} placeholder={LOGIN_THEMES.admin.idPlaceholder} autoComplete="email" required data-testid="input-admin-identifier" />
+      <AuthPasswordField label="Password" value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} placeholder={LOGIN_THEMES.admin.passwordPlaceholder} autoComplete="current-password" required data-testid="input-admin-password" toggleTestId="button-toggle-admin-pwd" />
+      {error && <p className="auth-error" data-testid="status-auth-error">{error}</p>}
+      <button type="submit" className="auth-button" disabled={loading} data-testid="button-submit-auth">{loading ? 'Signing in…' : LOGIN_THEMES.admin.buttonLabel} <ArrowRight size={18} /></button>
     </form>
-    <p className="mt-6 text-center text-sm text-muted-foreground">Restricted access for administrators only.</p>
-  </AuthLayout>;
+  </AuthShell>;
 }
 
 function StudentAuthPage() {
@@ -3739,20 +3775,14 @@ function StudentAuthPage() {
     });
   };
 
-  return <AuthLayout eyebrow="Student Sign In" theme="student">
-    <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
-    <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
-    <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
-    <h2 className="mt-3 font-display text-4xl font-bold tracking-tight">Access your personal dashboard.</h2>
-    <p className="mt-3 text-sm leading-6 text-muted-foreground">Use the login details your institute issued you.</p>
-    <form onSubmit={handleSignIn} className="mt-7 grid gap-4">
-      <Field label="Email" type="email" value={signInForm.identifier} onChange={(e) => setSignInForm({ ...signInForm, identifier: e.target.value })} placeholder="you@institute.edu" autoComplete="email" required data-testid="input-student-identifier" />
-      <PasswordField label="Password" value={signInForm.password} onChange={(e) => setSignInForm({ ...signInForm, password: e.target.value })} placeholder="Enter password" autoComplete="current-password" required data-testid="input-student-password" toggleTestId="button-toggle-student-pwd" />
-      {message && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-auth-error">{message}</p>}
-      <Button type="submit" size="lg" disabled={login.isPending} className="mt-2 w-full" data-testid="button-submit-auth">{login.isPending ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button>
+  return <AuthShell theme="student">
+    <form onSubmit={handleSignIn}>
+      <AuthField label="Email" icon={UserRound} type="email" value={signInForm.identifier} onChange={(e) => setSignInForm({ ...signInForm, identifier: e.target.value })} placeholder={LOGIN_THEMES.student.idPlaceholder} autoComplete="email" required data-testid="input-student-identifier" />
+      <AuthPasswordField label="Password" value={signInForm.password} onChange={(e) => setSignInForm({ ...signInForm, password: e.target.value })} placeholder={LOGIN_THEMES.student.passwordPlaceholder} autoComplete="current-password" required data-testid="input-student-password" toggleTestId="button-toggle-student-pwd" />
+      {message && <p className="auth-error" data-testid="status-auth-error">{message}</p>}
+      <button type="submit" className="auth-button" disabled={login.isPending} data-testid="button-submit-auth">{login.isPending ? 'Signing in…' : LOGIN_THEMES.student.buttonLabel} <ArrowRight size={18} /></button>
     </form>
-    <p className="mt-6 text-center text-sm text-muted-foreground">Login details are issued by your institute.</p>
-  </AuthLayout>;
+  </AuthShell>;
 }
 
 
@@ -3808,26 +3838,18 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
       .finally(() => setLoading(false));
   };
   if (branch) {
-    return <AuthLayout eyebrow={`${branch.name} Sign In`} theme={themeForBranch(branch.name)} label={branch.name}>
-      <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-branch-back-home">Back to home</Link></div>
-      <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-branch-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
-      <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Welcome back</p>
-      <h2 className="mt-3 font-display text-4xl font-bold tracking-tight">Sign in to the {branch.name} desk.</h2>
-      <p className="mt-3 text-sm leading-6 text-muted-foreground">Use the user ID and password your institute admin created for this branch.</p>
-      <form onSubmit={handleSignIn} className="mt-7 grid gap-4">
-        <Field label="User ID" type="text" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder={branch.username ?? 'Your user ID'} autoComplete="username" required data-testid="input-branch-login-username" />
-        <PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" required data-testid="input-branch-login-password" toggleTestId="button-toggle-branch-login-pwd" />
-        {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-login-error">{error}</p>}
-        <Button type="submit" size="lg" disabled={loading} className="mt-2 w-full" data-testid="button-submit-branch-login">{loading ? 'Signing in…' : 'Sign in'} <ArrowRight /></Button>
+    return <AuthShell theme="branch">
+      <form onSubmit={handleSignIn}>
+        <AuthField label="User ID" icon={UserRound} type="text" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder={LOGIN_THEMES.branch.idPlaceholder} autoComplete="username" required data-testid="input-branch-login-username" />
+        <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES.branch.passwordPlaceholder} autoComplete="current-password" required data-testid="input-branch-login-password" toggleTestId="button-toggle-branch-login-pwd" />
+        {error && <p className="auth-error" data-testid="status-branch-login-error">{error}</p>}
+        <button type="submit" className="auth-button" disabled={loading} data-testid="button-submit-branch-login">{loading ? 'Signing in…' : LOGIN_THEMES.branch.buttonLabel} <ArrowRight size={18} /></button>
       </form>
-      <p className="mt-6 text-center text-sm text-muted-foreground">Restricted access — keep these credentials with the institute.</p>
-    </AuthLayout>;
+    </AuthShell>;
   }
-  return <AuthLayout eyebrow="Branch desk" theme="branch">
-    <h2 className="font-display text-4xl font-bold tracking-tight">Branch desk not found.</h2>
-    <p className="mt-3 text-sm leading-6 text-muted-foreground">That page isn&apos;t one of the branches this institute runs. Check the spelling, or contact the institute admin.</p>
-    <Link href="/" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-primary" data-testid="link-branch-missing-home"><ChevronLeft size={16} /> Back to home</Link>
-  </AuthLayout>;
+  return <AuthShell theme="branch" heading="Branch desk not found." subtitle="That page isn’t one of the branches this institute runs. Check the spelling, or contact the institute admin.">
+    <Link href="/" className="auth-button" data-testid="link-branch-missing-home">Back to home</Link>
+  </AuthShell>;
 }
 
 // The branch desk reads its own modules straight from the server (scoped by the
@@ -4526,8 +4548,6 @@ function ModulePanel({ panel }: { panel: Module }) {
   if (isLoading) return <LoadingScreen label="Opening your workspace" />;
   if (user?.role === 'teacher' && user.module === panel) return <Shell user={user}><TeacherPage user={user} /></Shell>;
 
-  const branchName = branches?.find((b) => b.modules.some((m) => m.id === panel))?.name;
-
   const handleSignIn = (event: FormEvent) => {
     event.preventDefault();
     setError('');
@@ -4540,23 +4560,30 @@ function ModulePanel({ panel }: { panel: Module }) {
     });
   };
 
-  return <AuthLayout eyebrow="Module panel" theme={themeForBranch(branchName)} label={branchName ?? `${moduleShort[panel]} desk`}>
-    <div className="mb-8 flex items-center justify-between lg:hidden"><Logo /><Link href="/" className="text-sm font-semibold text-primary" data-testid="link-back-home">Back to home</Link></div>
-    <Link href="/" className="mb-8 hidden items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:flex" data-testid="link-back-home-lg"><ChevronLeft size={16} /> Back to home</Link>
-    <div className="inline-flex items-center gap-2 rounded-full border border-accent/35 bg-accent/15 px-3 py-1.5 text-xs font-bold text-primary"><span className="h-2 w-2 rounded-full bg-accent" />{moduleShort[panel]} desk</div>
-    <h1 className="mt-4 font-display text-3xl font-bold tracking-tight">Sign in to your desk.</h1>
-    <p className="mt-2 text-sm text-muted-foreground">{moduleNames[panel]} — module owners sign in with the owner ID issued from the admin panel.</p>
-    <div className="mt-6 rounded-xl border border-border bg-card p-5">
-      <p className="font-mono-ui text-xs uppercase tracking-[0.2em] text-primary">Module owner</p>
-      <form onSubmit={handleSignIn} className="mt-4 grid gap-3">
-        <Field label="Owner ID" type="text" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="e.g. owner@ai" autoComplete="username" required data-testid={`input-panel-identifier-${panel}`} />
-        <PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" required data-testid={`input-panel-password-${panel}`} toggleTestId={`button-toggle-panel-pwd-${panel}`} />
-        {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid={`status-panel-error-${panel}`}>{error}</p>}
-        <Button type="submit" disabled={login.isPending} className="mt-1 w-full" data-testid={`button-panel-login-${panel}`}>{login.isPending ? 'Signing in…' : 'Open desk'} <ArrowRight /></Button>
-      </form>
-    </div>
-    <p className="mt-4 text-center font-mono-ui text-xs uppercase tracking-[0.15em] text-muted-foreground">Login details are issued by your institute.</p>
-  </AuthLayout>;
+  // The artwork shows the module names of the branch this desk belongs to, read
+  // off the public catalog this page already loads. Before the catalog lands we
+  // fall back to a single layer with this module's own name.
+  const branchModules = branches?.find((b) => b.modules.some((m) => m.id === panel))?.modules ?? [];
+  let illustrationNames = [moduleNames[panel]];
+  let illustrationIndex = 0;
+  if (branchModules.length > 0 && branchModules.length <= 3) {
+    illustrationNames = branchModules.map((m) => m.name);
+    illustrationIndex = Math.max(0, branchModules.findIndex((m) => m.id === panel));
+  } else if (branchModules.length > 3) {
+    const current = branchModules.find((m) => m.id === panel);
+    const others = branchModules.filter((m) => m.id !== panel).slice(0, 2);
+    illustrationNames = [current?.name ?? moduleNames[panel], ...others.map((m) => m.name)];
+    illustrationIndex = 0;
+  }
+
+  return <AuthShell theme="module" moduleNames={illustrationNames} currentIndex={illustrationIndex}>
+    <form onSubmit={handleSignIn}>
+      <AuthField label="Owner ID" icon={UserRound} type="text" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder={LOGIN_THEMES.module.idPlaceholder} autoComplete="username" required data-testid={`input-panel-identifier-${panel}`} />
+      <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES.module.passwordPlaceholder} autoComplete="current-password" required data-testid={`input-panel-password-${panel}`} toggleTestId={`button-toggle-panel-pwd-${panel}`} />
+      {error && <p className="auth-error" data-testid={`status-panel-error-${panel}`}>{error}</p>}
+      <button type="submit" className="auth-button" disabled={login.isPending} data-testid={`button-panel-login-${panel}`}>{login.isPending ? 'Signing in…' : LOGIN_THEMES.module.buttonLabel} <ArrowRight size={18} /></button>
+    </form>
+  </AuthShell>;
 }
 
 function ModulePanelRoute() {
