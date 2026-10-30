@@ -24,6 +24,12 @@ export const branchesTable = pgTable("branches", {
   username: text("username").unique(),
   passwordHash: text("password_hash"),
   plainPassword: text("plain_password"),
+  // The shareable login code: the branch login page opens ONLY at /<login_code>, never
+  // at /<name>. Unique per table; the API also enforces uniqueness across branches AND
+  // modules together so one code can never resolve to two desks.
+  loginCode: text("login_code").notNull().unique(),
+  // Optional branch logo stored in Supabase Storage at branches/<branch_id>/logo.<ext>
+  branchLogo: text("branch_logo"),
 });
 
 // Each row is a module an admin created for a branch. The existing three
@@ -36,6 +42,9 @@ export const modulesCatalog = pgTable("modules", {
     .references(() => branchesTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  // The module desk login opens ONLY at /<login_code>. Unique per table, and the API
+  // enforces it against branches.login_code too.
+  loginCode: text("login_code").notNull().unique(),
 });
 export const attendanceStatusEnum = pgEnum("attendance_status", [
   "present",
@@ -158,6 +167,37 @@ export const assessmentsTable = pgTable(
   }),
 );
 
+// A student's own project submission: the name they gave the work and a link to it.
+// There is no file here — the student types a name and pastes a link, which may point at
+// any platform (GitHub, Drive, a deployed site, a Figma file).
+//
+// This is deliberately NOT a column on `assessments`. That row belongs to the module
+// owner (marks, feedback, and the project name *they* typed), and it is written and
+// rewritten by staff, so a student's submission would be destroyed every time a teacher
+// cleared or re-entered marks. Keeping it separate also means "the student submitted
+// this" and "this has been graded" stay two independently true facts.
+//
+// One row per (student, module, cycle). `cycle` runs 1..12 across the six-month course
+// (two projects a month, cycle = (month - 1) * 2 + project), which is why the student
+// has to pick which of the twelve they are submitting.
+export const projectSubmissionsTable = pgTable(
+  "project_submissions",
+  {
+    studentId: text("student_id")
+      .notNull()
+      .references(() => studentsTable.id, { onDelete: "cascade" }),
+    module: text("module").notNull(),
+    cycle: integer("cycle").notNull(),
+    projectName: text("project_name").notNull(),
+    projectLink: text("project_link").notNull(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.studentId, table.module, table.cycle] }),
+  }),
+);
+
 export const sessionsTable = pgTable(
   "sessions",
   {
@@ -188,6 +228,11 @@ export const announcementsTable = pgTable("announcements", {
   // Optional image attached to the notice (data URL, same trade-off as students.photo).
   // Null when the notice is text only.
   image: text("image"),
+  // Automated project reminders are written for one student; a null here means a
+  // normal module-wide notice that every student in the branch can read.
+  studentId: text("student_id").references(() => studentsTable.id, {
+    onDelete: "cascade",
+  }),
 });
 
 // The course PDFs students read: one current file per (module, kind), which is what
@@ -240,6 +285,24 @@ export const calendarEventsTable = pgTable("calendar_events", {
     .defaultNow()
     .notNull(),
 });
+
+export const moduleClassCancellationsTable = pgTable(
+  "module_class_cancellations",
+  {
+    module: text("module").notNull(),
+    date: date("date").notNull(),
+    reason: text("reason").notNull(),
+    createdBy: integer("created_by").references(() => teachersTable.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.module, table.date] }),
+  }),
+);
 
 export type Module = "ai" | "dm" | "sm";
 export type Role = "admin" | "teacher" | "student" | "branch";

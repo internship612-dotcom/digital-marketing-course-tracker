@@ -133,7 +133,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
         email: student.email,
         module: null,
         studentId: student.id,
-        branchId: null,
+        branchId: student.branchId,
         passwordHash: student.passwordHash,
       };
     }

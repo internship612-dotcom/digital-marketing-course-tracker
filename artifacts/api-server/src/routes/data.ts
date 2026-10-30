@@ -1,4 +1,6 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
+import { randomInt } from "node:crypto";
+import { PDFParse } from "pdf-parse";
 import {
   and,
   asc,
@@ -9,6 +11,7 @@ import {
   ilike,
   inArray,
   isNotNull,
+  isNull,
   lte,
   max,
   ne,
@@ -24,6 +27,8 @@ import {
   courseDocumentsTable,
   db,
   modulesCatalog,
+  moduleClassCancellationsTable,
+  projectSubmissionsTable,
   sessionsTable,
   studentsTable,
   teachersTable,
@@ -67,13 +72,33 @@ import {
   UpdateTeacherResponse,
 } from "@workspace/api-zod";
 import {
+  ADMIN_SUPABASE_EMAIL,
   hashPassword,
   nextStudentId,
   normalizeEmail,
   requireRole,
+  supabasePasswordGrant,
 } from "../lib/auth";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+// Editing or deleting a branch/module is sensitive, so the API re-checks the admin's own
+// password server-side before it will run. The admin's real credential lives in Supabase
+// (the `admins` table is only a mapping target), so this asks Supabase for a password
+// grant with the same account the browser confirmed with. There is deliberately NO local
+// hash fallback: a destructive change must fail closed when the identity service cannot
+// be reached rather than accept a weaker local credential.
+//
+// `field` lets a route read the confirmation from a different body key when its own
+// `password` field already means something else (the branch credential route's `password`
+// is the new desk password, so it sends the admin's check under `adminPassword`).
+async function adminPasswordConfirmed(req: Request, field = "password"): Promise<boolean> {
+  const raw = req.body as Record<string, unknown> | undefined;
+  const password = typeof raw?.[field] === "string" ? (raw[field] as string) : "";
+  if (!password) return false;
+  const email = req.auth?.email ?? ADMIN_SUPABASE_EMAIL;
+  return (await supabasePasswordGrant(email, password)) != null;
+}
 const DEFAULT_WEEKS = 12;
 const DEFAULT_CYCLES = 6;
 // A module is an admin-defined row in the modules catalog, scoped by branch. Historical
@@ -128,6 +153,94 @@ async function branchModuleIds(branchId: number): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+// `/<code>` is a public sign-in URL: the code has to be safe to put in a path and must not
+// shadow an existing route, or a branch could claim `/admin` and land on its own desk
+// instead. Codes are unique across BOTH branches and modules (one namespace, one URL), so
+// the checks below look in both tables before accepting one.
+const LOGIN_CODE_RE = /^[a-z0-9-]{4,24}$/;
+const LOGIN_CODE_RESERVED = new Set([
+  "admin",
+  "student",
+  "teacher",
+  "branch",
+  "login",
+  "logout",
+  "signup",
+  "signin",
+  "register",
+  "api",
+  "assets",
+  "static",
+  "dashboard",
+  "module",
+  "modules",
+  "settings",
+  "documents",
+  "announcements",
+  "students",
+  "panel-logins",
+  "branches",
+  "project",
+  "profile",
+  "attendance",
+  "assessment",
+  "reports",
+  "report",
+  "home",
+  "catalog",
+  "healthz",
+]);
+const LOGIN_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+function randomLoginCode(length = 8): string {
+  let out = "";
+  for (let i = 0; i < length; i += 1) out += LOGIN_CODE_ALPHABET[randomInt(LOGIN_CODE_ALPHABET.length)];
+  return out;
+}
+
+async function loginCodeInUse(code: string, exclude: { branchId?: number; moduleId?: string }): Promise<boolean> {
+  const branchWhere =
+    exclude.branchId != null
+      ? and(eq(branchesTable.loginCode, code), ne(branchesTable.id, exclude.branchId))
+      : eq(branchesTable.loginCode, code);
+  const [branch] = await db.select({ id: branchesTable.id }).from(branchesTable).where(branchWhere).limit(1);
+  if (branch) return true;
+
+  const moduleWhere =
+    exclude.moduleId != null
+      ? and(eq(modulesCatalog.loginCode, code), ne(modulesCatalog.id, exclude.moduleId))
+      : eq(modulesCatalog.loginCode, code);
+  const [mod] = await db.select({ id: modulesCatalog.id }).from(modulesCatalog).where(moduleWhere).limit(1);
+  return Boolean(mod);
+}
+
+// Blank input means "generate one". An explicit one is validated and must be free, rather
+// than silently suffixed, so the URL a desk was told about is the URL it keeps.
+async function resolveRequestedLoginCode(
+  raw: unknown,
+  exclude: { branchId?: number; moduleId?: string },
+): Promise<{ code: string } | { status: number; error: string }> {
+  const text = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (text) {
+    if (!LOGIN_CODE_RE.test(text)) {
+      return { status: 400, error: "Login code must be 4-24 characters: lowercase letters, numbers and dashes only." };
+    }
+    if (LOGIN_CODE_RESERVED.has(text)) {
+      return { status: 400, error: "That login code is reserved. Choose another." };
+    }
+    if (await loginCodeInUse(text, exclude)) {
+      return { status: 409, error: "That login code is already in use. Choose another." };
+    }
+    return { code: text };
+  }
+  for (let i = 0; i < 50; i += 1) {
+    const candidate = randomLoginCode();
+    if (LOGIN_CODE_RESERVED.has(candidate)) continue;
+    if (!(await loginCodeInUse(candidate, exclude))) return { code: candidate };
+  }
+  return { status: 500, error: "Could not generate a login code. Try again." };
+}
+
 function moduleLabel(module: Module): string {
   return module === "ai"
     ? "AI"
@@ -140,7 +253,7 @@ function moduleLabel(module: Module): string {
 // URL segment the module opens on after the slash, so an explicit one must be free: a
 // silent suffix would open a desk at a URL nobody typed. Blank keeps the old behaviour of
 // building the slug from the name and suffixing on collision.
-async function createModuleRow(branchId: number, name: string, slug: string | null) {
+async function createModuleRow(branchId: number, name: string, slug: string | null, requestedLoginCode?: unknown) {
   const [branch] = await db
     .select({ id: branchesTable.id })
     .from(branchesTable)
@@ -176,9 +289,12 @@ async function createModuleRow(branchId: number, name: string, slug: string | nu
     }
   }
 
+  const code = await resolveRequestedLoginCode(requestedLoginCode, {});
+  if ("error" in code) return code;
+
   const [mod] = await db
     .insert(modulesCatalog)
-    .values({ id: candidate, branchId, name })
+    .values({ id: candidate, branchId, name, loginCode: code.code })
     .returning();
   return { mod };
 }
@@ -1184,6 +1300,29 @@ async function eventDates(): Promise<Map<string, string>> {
   return new Map(rows.map((row) => [row.date, row.title]));
 }
 
+async function classCancellationsFor(modules: readonly string[]): Promise<Map<string, Map<string, string>>> {
+  if (modules.length === 0) return new Map();
+  const rows = await db
+    .select({ module: moduleClassCancellationsTable.module, date: sql<string>`${moduleClassCancellationsTable.date}::text`, reason: moduleClassCancellationsTable.reason })
+    .from(moduleClassCancellationsTable)
+    .where(inArray(moduleClassCancellationsTable.module, [...modules]));
+  const result = new Map<string, Map<string, string>>();
+  for (const row of rows) {
+    if (!result.has(row.module)) result.set(row.module, new Map());
+    result.get(row.module)!.set(row.date, row.reason);
+  }
+  return result;
+}
+
+async function classCancellationFor(module: string, date: string) {
+  const [record] = await db
+    .select({ module: moduleClassCancellationsTable.module, date: sql<string>`${moduleClassCancellationsTable.date}::text`, reason: moduleClassCancellationsTable.reason })
+    .from(moduleClassCancellationsTable)
+    .where(and(eq(moduleClassCancellationsTable.module, module), eq(moduleClassCancellationsTable.date, date)))
+    .limit(1);
+  return record ?? null;
+}
+
 async function buildStudentReport(studentId: string) {
   const [student] = await db
     .select({ dateOfJoining: studentsTable.dateOfJoining })
@@ -1200,27 +1339,40 @@ async function buildStudentReport(studentId: string) {
     .from(assessmentsTable)
     .where(eq(assessmentsTable.studentId, studentId))
     .orderBy(asc(assessmentsTable.cycle));
+  const submissionRows = await db
+    .select()
+    .from(projectSubmissionsTable)
+    .where(eq(projectSubmissionsTable.studentId, studentId))
+    .orderBy(asc(projectSubmissionsTable.cycle));
 
   const joinedOn = student?.dateOfJoining ?? null;
   const events = await eventDates();
   const slices = courseMonths(joinedOn, events);
   const presentOn = presentDatesByModule(joinedOn, attendanceRows);
   const moduleKeys = await studentModuleKeys(studentId);
+  const cancellations = await classCancellationsFor(moduleKeys);
 
   const months = slices.map((slice) => {
-    const total = slice.days.length;
-  const perModule = moduleKeys.map((module) => {
-      const present = slice.days.filter((day) => presentOn.get(day)?.has(module)).length;
+    const perModule = moduleKeys.map((module) => {
+      const moduleCancellations = cancellations.get(module) ?? new Map<string, string>();
+      const moduleDays = slice.days.filter((day) => !moduleCancellations.has(day));
+      const present = moduleDays.filter((day) => presentOn.get(day)?.has(module)).length;
       return {
         module,
         present,
-        absent: Math.max(0, total - present),
-        total,
-        percentage: total ? Math.round((present / total) * 100) : 0,
+        absent: Math.max(0, moduleDays.length - present),
+        total: moduleDays.length,
+        percentage: moduleDays.length ? Math.round((present / moduleDays.length) * 100) : 0,
         recorded: present > 0,
+        cancelledClasses: slice.days
+          .filter((day) => moduleCancellations.has(day))
+          .map((day) => ({ date: day, reason: moduleCancellations.get(day)! })),
         projects: [1, 2].map((project) => {
           const cycle = (slice.month - 1) * 2 + project;
           const record = assessmentRows.find(
+            (row) => row.module === module && row.cycle === cycle,
+          );
+          const submission = submissionRows.find(
             (row) => row.module === module && row.cycle === cycle,
           );
           return {
@@ -1229,19 +1381,23 @@ async function buildStudentReport(studentId: string) {
             marks: record?.marks ?? null,
             feedback: record?.feedback ?? null,
             projectName: record?.projectName ?? null,
+            projectLink: submission?.projectLink ?? null,
           };
         }),
       };
     });
+    const overallDays = slice.days.filter((day) =>
+      !(moduleKeys.length > 0 && moduleKeys.every((module) => cancellations.get(module)?.has(day))),
+    );
     // A day counts as attended when the student turned up for any module that day.
-    const present = slice.days.filter((day) => (presentOn.get(day)?.size ?? 0) > 0).length;
+    const present = overallDays.filter((day) => (presentOn.get(day)?.size ?? 0) > 0).length;
     return {
       month: slice.month,
       start: slice.start,
       end: slice.end,
       present,
-      absent: Math.max(0, total - present),
-      total,
+      absent: Math.max(0, overallDays.length - present),
+      total: overallDays.length,
       // The event days inside this slice, with what each one was, so the UI can say why the
       // denominator is short instead of leaving a student wondering where days went. Counted
       // from start/end rather than from slice.days, because an event on a Sunday is a no-op
@@ -1249,7 +1405,7 @@ async function buildStudentReport(studentId: string) {
       events: [...events]
         .filter(([day]) => day >= slice.start && day <= slice.end)
         .map(([day, title]) => ({ date: day, title })),
-      percentage: total ? Math.round((present / total) * 100) : 0,
+      percentage: overallDays.length ? Math.round((present / overallDays.length) * 100) : 0,
       recorded: perModule.some((item) => item.recorded),
       modules: perModule,
     };
@@ -2206,10 +2362,12 @@ function attendancePendingFor(
   module: Module,
   today: string,
   isEvent = false,
+  isClassCancelled = false,
 ): number {
   const date = new Date(`${today}T00:00:00Z`);
   if ((date.getUTCDay() + 6) % 7 > 5) return 0; // Sunday
   if (isEvent) return 0; // a PTM or holiday: nobody was marked, nobody is at fault
+  if (isClassCancelled) return 0;
   const slot = weekAndDayFor(joinedOn, date);
   if (!slot) return 1; // outside this student's course — nothing recorded for today
   const row = rows.find((r) => r.module === module && r.week === slot.week);
@@ -2259,6 +2417,11 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
   const assessmentRows = await db.select().from(assessmentsTable);
   const events = await eventDates();
   const isEventToday = events.has(today);
+  const cancelledTodayRows = await db
+    .select({ module: moduleClassCancellationsTable.module })
+    .from(moduleClassCancellationsTable)
+    .where(and(inArray(moduleClassCancellationsTable.module, [...scope]), eq(moduleClassCancellationsTable.date, today)));
+  const cancelledToday = new Set(cancelledTodayRows.map((row) => row.module));
 
   const payload: StatusPayload = {
     attendance: [],
@@ -2278,6 +2441,7 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
         module,
         today,
         isEventToday,
+        cancelledToday.has(module),
       );
       marksPending += marksPendingFor(student.dateOfJoining, ownAssessments, module, today, events);
     }
@@ -2300,6 +2464,7 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
   const iso = isoDay(date);
   const events = await eventDates();
   const eventTitle = events.get(iso) ?? null;
+  const classCancellation = await classCancellationFor(module, iso);
   const sunday = (date.getUTCDay() + 6) % 7 > 5;
   const students = await db
     .select()
@@ -2324,6 +2489,7 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
     date: iso,
     sunday,
     event: eventTitle == null ? null : { date: iso, title: eventTitle },
+    classCancellation: classCancellation ? { date: iso, reason: classCancellation.reason } : null,
     totalStudents: students.length,
     // eligible = students whose course is actually running on this date. Someone who has
     // not joined yet cannot be present, absent or on leave, so they are not counted here —
@@ -2336,7 +2502,7 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
     assessmentMarked: 0,
     assessmentPending: 0,
   };
-  if (eventTitle != null || sunday) return result;
+  if (eventTitle != null || classCancellation || sunday) return result;
 
   for (const student of students) {
     const slot = weekAndDayFor(student.dateOfJoining, date);
@@ -2464,6 +2630,89 @@ function parseDayParam(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+router.get(
+  "/teacher/attendance/class-cancellation",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const date = typeof req.query.date === "string" ? req.query.date : "";
+    if (!parseDayParam(date)) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    const cancellation = await classCancellationFor(req.auth.module, date);
+    res.json(cancellation ? { date: cancellation.date, reason: cancellation.reason } : null);
+  },
+);
+
+router.post(
+  "/teacher/attendance/class-cancellation",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const body = (req.body ?? {}) as { date?: unknown; reason?: unknown };
+    const date = typeof body.date === "string" ? body.date.trim() : "";
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    const parsedDate = parseDayParam(date);
+    if (!parsedDate) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    if ((parsedDate.getUTCDay() + 6) % 7 > 5) {
+      res.status(400).json({ error: "Sunday is already a day off." });
+      return;
+    }
+    if (!reason || reason.length > 1000) {
+      res.status(400).json({ error: "Add a reason (up to 1,000 characters)." });
+      return;
+    }
+    const [saved] = await db
+      .insert(moduleClassCancellationsTable)
+      .values({ module: req.auth.module, date, reason, createdBy: Number(req.auth.userId) })
+      .onConflictDoUpdate({
+        target: [moduleClassCancellationsTable.module, moduleClassCancellationsTable.date],
+        set: { reason, createdBy: Number(req.auth.userId), createdAt: new Date() },
+      })
+      .returning({ module: moduleClassCancellationsTable.module });
+    if (!saved) {
+      res.status(500).json({ error: "Could not save the class cancellation." });
+      return;
+    }
+    res.json({ date, reason });
+  },
+);
+
+router.delete(
+  "/teacher/attendance/class-cancellation/:date",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const date = Array.isArray(req.params.date) ? req.params.date[0] ?? "" : req.params.date ?? "";
+    if (!parseDayParam(date)) {
+      res.status(400).json({ error: "Choose a valid date." });
+      return;
+    }
+    const [removed] = await db
+      .delete(moduleClassCancellationsTable)
+      .where(and(eq(moduleClassCancellationsTable.module, req.auth.module), eq(moduleClassCancellationsTable.date, date)))
+      .returning({ module: moduleClassCancellationsTable.module });
+    if (!removed) {
+      res.status(404).json({ error: "No canceled class was recorded for this date." });
+      return;
+    }
+    res.status(204).end();
+  },
+);
+
 // One row per student for a single calendar date, so a module owner can fill the
 // whole register in one pass instead of opening each student's calendar.
 router.get(
@@ -2532,6 +2781,10 @@ router.post(
       leave?: unknown;
     };
     const date = parseDayParam(body.date);
+    if (date && await classCancellationFor(req.auth.module, isoDay(date))) {
+      res.status(409).json({ error: "This module's class is marked as canceled for that date." });
+      return;
+    }
     const present = Array.isArray(body.present)
       ? body.present.filter((id): id is string => typeof id === "string")
       : [];
@@ -2726,9 +2979,292 @@ router.delete(
   },
 );
 
+// Public lookup for `/<code>` student login URLs. The code points to either a branch
+// (which has its own login desk) or a module (which falls back to that module's
+// branch). Branches can attach a logo stored in the private Supabase bucket.
+router.get(
+  "/login-code/:code",
+  async (req, res): Promise<void> => {
+    const code = String(req.params.code ?? "")
+      .trim()
+      .toLowerCase();
+    if (!LOGIN_CODE_RE.test(code)) {
+      res.status(404).json({ error: "Not found." });
+      return;
+    }
+    const [branch] = await db
+      .select({ id: branchesTable.id, name: branchesTable.name, logoPath: branchesTable.branchLogo })
+      .from(branchesTable)
+      .where(eq(branchesTable.loginCode, code))
+      .limit(1);
+    if (branch) {
+      res.json({
+        type: "branch",
+        id: String(branch.id),
+        name: branch.name,
+        branchName: null,
+        logoUrl: branch.logoPath ? `https://aeywrwzpgyoatwsrtlyd.supabase.co/storage/v1/object/public/branch-logos/${branch.logoPath}` : null,
+      });
+      return;
+    }
+    const [mod] = await db
+      .select({ id: modulesCatalog.id, name: modulesCatalog.name, branchName: branchesTable.name })
+      .from(modulesCatalog)
+      .innerJoin(branchesTable, eq(modulesCatalog.branchId, branchesTable.id))
+      .where(eq(modulesCatalog.loginCode, code))
+      .limit(1);
+    if (mod) {
+      res.json({ type: "module", id: mod.id, name: mod.name, branchName: mod.branchName, logoUrl: null });
+      return;
+    }
+    res.status(404).json({ error: "Not found." });
+  },
+);
+
+// ------------------------------------------------------- student project submissions
+// A student submits a project as a NAME plus a LINK. No file is ever uploaded from the
+// student side — the link may point at any platform (GitHub, Drive, a deployed site, a
+// Figma file), which is why it is validated as a URL rather than stored as an attachment.
+//
+// The course has twelve projects: two a month across six months, numbered
+// cycle = (month - 1) * 2 + project, so the student has to say which one they are
+// submitting rather than the server guessing.
+const PROJECT_CYCLES = 12;
+const PROJECT_NAME_MAX = 100;
+const PROJECT_LINK_MAX = 500;
+
+// http: and https: only. This is the whole reason the link is parsed rather than
+// pattern-matched: `javascript:` and `data:` URLs are what turn a "paste your link here"
+// box into a stored-XSS hole, and a regex like /^(https?|javascript):/ is easy to get
+// wrong. `new URL` also rejects outright nonsense like "not a link".
+function validateProjectLink(raw: string): { ok: true; url: string } | { ok: false; error: string } {
+  const link = raw.trim();
+  if (!link) return { ok: false, error: "Enter the link to your project." };
+  if (link.length > PROJECT_LINK_MAX) {
+    return { ok: false, error: `That link is ${link.length} characters. Please keep it under ${PROJECT_LINK_MAX}.` };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(link);
+  } catch {
+    return { ok: false, error: "That does not look like a link. It should start with http:// or https://" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: "The link must start with http:// or https://." };
+  }
+  return { ok: true, url: link };
+}
+
+router.post(
+  "/student/project-submission",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    const studentId = req.auth?.studentId ?? null;
+    if (!studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const body = req.body as { module?: unknown; cycle?: unknown; projectName?: unknown; projectLink?: unknown };
+    const module = typeof body.module === "string" ? body.module : "";
+    const cycle = typeof body.cycle === "number" ? body.cycle : Number(body.cycle);
+    const name = typeof body.projectName === "string" ? body.projectName.trim() : "";
+
+    if (!module || !Number.isInteger(cycle) || cycle < 1 || cycle > PROJECT_CYCLES) {
+      res.status(400).json({ error: "Choose which of your projects this is." });
+      return;
+    }
+    // Branch isolation: a student may only submit for a module their own branch runs.
+    // The catalog is the source of truth for "their branch's modules", so this cannot be
+    // widened by sending a module id belonging to another branch.
+    const ownModules = await studentModuleKeys(studentId);
+    if (!ownModules.includes(module)) {
+      res.status(403).json({ error: "That module is not part of your course." });
+      return;
+    }
+    if (!name) {
+      res.status(400).json({ error: "Give your project a name." });
+      return;
+    }
+    if (name.length > PROJECT_NAME_MAX) {
+      res.status(400).json({ error: `That name is ${name.length} characters. Please keep it under ${PROJECT_NAME_MAX}.` });
+      return;
+    }
+    const link = validateProjectLink(typeof body.projectLink === "string" ? body.projectLink : "");
+    if (!link.ok) {
+      res.status(400).json({ error: link.error });
+      return;
+    }
+
+    // Graded work is frozen. Reading the marks here rather than changing them: the rule is
+    // "a student cannot edit after the teacher has entered marks", and the marks table is
+    // untouched by this route.
+    const [graded] = await db
+      .select({ marks: assessmentsTable.marks })
+      .from(assessmentsTable)
+      .where(and(
+        eq(assessmentsTable.studentId, studentId),
+        eq(assessmentsTable.module, module),
+        eq(assessmentsTable.cycle, cycle),
+      ))
+      .limit(1);
+    if (graded?.marks != null) {
+      res.status(409).json({ error: "Your teacher has already marked this project, so it can no longer be changed." });
+      return;
+    }
+
+    const [existing] = await db
+      .select({ submittedAt: projectSubmissionsTable.submittedAt })
+      .from(projectSubmissionsTable)
+      .where(and(
+        eq(projectSubmissionsTable.studentId, studentId),
+        eq(projectSubmissionsTable.module, module),
+        eq(projectSubmissionsTable.cycle, cycle),
+      ))
+      .limit(1);
+
+    const [saved] = await db
+      .insert(projectSubmissionsTable)
+      .values({
+        studentId,
+        module,
+        cycle,
+        projectName: name,
+        projectLink: link.url,
+        // The first save keeps its timestamp; a later edit bumps updatedAt only, so the
+        // UI can show when it was handed in as well as when it last changed.
+        submittedAt: existing?.submittedAt ?? new Date(),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [projectSubmissionsTable.studentId, projectSubmissionsTable.module, projectSubmissionsTable.cycle],
+        set: { projectName: name, projectLink: link.url, updatedAt: new Date() },
+      })
+      .returning();
+
+    res.json({
+      module: saved.module,
+      cycle: saved.cycle,
+      projectName: saved.projectName,
+      projectLink: saved.projectLink,
+      submittedAt: saved.submittedAt,
+      updatedAt: saved.updatedAt,
+      // Echo the grade so the student's card can lock itself without a second request.
+      marks: graded?.marks ?? null,
+    });
+  },
+);
+
+// Everything the student has submitted, each row carrying whether it has since been graded.
+// The left join is what lets the Project page show "Submitted" vs "Graded" from one call.
+router.get(
+  "/student/project-submissions",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    const studentId = req.auth?.studentId ?? null;
+    if (!studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const rows = await db
+      .select({
+        module: projectSubmissionsTable.module,
+        cycle: projectSubmissionsTable.cycle,
+        projectName: projectSubmissionsTable.projectName,
+        projectLink: projectSubmissionsTable.projectLink,
+        submittedAt: projectSubmissionsTable.submittedAt,
+        updatedAt: projectSubmissionsTable.updatedAt,
+        marks: assessmentsTable.marks,
+        feedback: assessmentsTable.feedback,
+      })
+      .from(projectSubmissionsTable)
+      .leftJoin(assessmentsTable, and(
+        eq(assessmentsTable.studentId, projectSubmissionsTable.studentId),
+        eq(assessmentsTable.module, projectSubmissionsTable.module),
+        eq(assessmentsTable.cycle, projectSubmissionsTable.cycle),
+      ))
+      .where(eq(projectSubmissionsTable.studentId, studentId))
+      .orderBy(asc(projectSubmissionsTable.module), asc(projectSubmissionsTable.cycle));
+    res.json(rows);
+  },
+);
+
+// A module owner reads submissions for their OWN module only — the module comes from the
+// session, never from the query, so there is nothing a caller can change to widen it.
+router.get(
+  "/teacher/project-submissions",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    const module = req.auth?.module ?? null;
+    if (!module) {
+      res.status(401).json({ error: "Teacher session not found." });
+      return;
+    }
+    const cycleFilter = req.query.cycle === undefined ? null : Number(req.query.cycle);
+    if (cycleFilter !== null && !Number.isInteger(cycleFilter)) {
+      res.status(400).json({ error: "That is not a project number." });
+      return;
+    }
+    const rows = await db
+      .select({
+        studentId: projectSubmissionsTable.studentId,
+        module: projectSubmissionsTable.module,
+        cycle: projectSubmissionsTable.cycle,
+        projectName: projectSubmissionsTable.projectName,
+        projectLink: projectSubmissionsTable.projectLink,
+        submittedAt: projectSubmissionsTable.submittedAt,
+      })
+      .from(projectSubmissionsTable)
+      .where(cycleFilter === null
+        ? eq(projectSubmissionsTable.module, module)
+        : and(eq(projectSubmissionsTable.module, module), eq(projectSubmissionsTable.cycle, cycleFilter)))
+      .orderBy(asc(projectSubmissionsTable.cycle), asc(projectSubmissionsTable.studentId));
+    res.json(rows);
+  },
+);
+
+// Admin reads any student's submissions. Read-only like every other admin route here.
+router.get(
+  "/admin/students/:id/project-submissions",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const studentId = String(req.params.id ?? "");
+    const rows = await db
+      .select({
+        module: projectSubmissionsTable.module,
+        cycle: projectSubmissionsTable.cycle,
+        projectName: projectSubmissionsTable.projectName,
+        projectLink: projectSubmissionsTable.projectLink,
+        submittedAt: projectSubmissionsTable.submittedAt,
+      })
+      .from(projectSubmissionsTable)
+      .where(eq(projectSubmissionsTable.studentId, studentId))
+      .orderBy(asc(projectSubmissionsTable.module), asc(projectSubmissionsTable.cycle));
+    res.json(rows);
+  },
+);
+
 // ---------------------------------------------------------------- branches & modules
 // Branches have admin-created modules. The public/catalog variant drives the student
 // registration branch picker; the admin one is used by the dashboard.
+const BRANCH_LOGO_PUBLIC_URL = "https://aeywrwzpgyoatwsrtlyd.supabase.co/storage/v1/object/public/branch-logos";
+
+function branchLogoUrl(logoPath: string | null | undefined): string | null {
+  if (!logoPath) return null;
+  return logoPath.startsWith("data:image/") ? logoPath : `${BRANCH_LOGO_PUBLIC_URL}/${logoPath}`;
+}
+
+function isValidBranchLogoPath(branchId: number, logoPath: string): boolean {
+  if (new RegExp(`^branches/${branchId}/logo-[a-zA-Z0-9-]+\\.(png|jpg|webp)$`, "i").test(logoPath)) return true;
+  const image = /^data:image\/(png|jpeg|webp);base64,([a-z0-9+/]+={0,2})$/i.exec(logoPath);
+  if (!image) return false;
+  const bytes = Buffer.from(image[2] ?? "", "base64");
+  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024) return false;
+  const mime = image[1]?.toLowerCase();
+  if (mime === "png") return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mime === "jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  return mime === "webp" && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+}
+
 router.get(
   "/catalog/branches",
   async (_req, res): Promise<void> => {
@@ -2737,6 +3273,7 @@ router.get(
     res.json(branches.map((branch) => ({
       id: branch.id,
       name: branch.name,
+      logoUrl: branch.branchLogo?.startsWith("data:image/") ? null : branchLogoUrl(branch.branchLogo),
       modules: modules.filter((m) => m.branchId === branch.id).map((m) => ({ id: m.id, name: m.name })),
     })));
   },
@@ -2753,8 +3290,29 @@ router.get(
       name: branch.name,
       username: branch.username ?? null,
       plainPassword: branch.plainPassword ?? null,
-      modules: modules.filter((m) => m.branchId === branch.id),
+      loginCode: branch.loginCode ?? "",
+      logoPath: branch.branchLogo?.startsWith("data:image/") ? null : branch.branchLogo ?? null,
+      logoUrl: branch.branchLogo?.startsWith("data:image/") ? null : branchLogoUrl(branch.branchLogo),
+      hasLogo: branch.branchLogo != null,
+      modules: modules.filter((m) => m.branchId === branch.id).map((m) => ({
+        ...m,
+        loginCode: m.loginCode ?? "",
+      })),
     })));
+  },
+);
+
+router.get(
+  "/student/branch-logo",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    const branchId = req.auth?.branchId ?? null;
+    const [branch] = await db
+      .select({ name: branchesTable.name, logoPath: branchesTable.branchLogo })
+      .from(branchesTable)
+      .where(branchId == null ? eq(branchesTable.name, "Zedking") : eq(branchesTable.id, branchId))
+      .limit(1);
+    res.json({ branchName: branch?.name ?? null, logoUrl: branchLogoUrl(branch?.logoPath) });
   },
 );
 
@@ -2762,7 +3320,7 @@ router.post(
   "/admin/branches",
   requireRole("admin"),
   async (req, res): Promise<void> => {
-    const body = req.body as { name?: unknown; username?: unknown; password?: unknown };
+    const body = req.body as { name?: unknown; username?: unknown; password?: unknown; loginCode?: unknown };
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const username = typeof body.username === "string" && body.username.trim() ? body.username.trim() : null;
     const password = typeof body.password === "string" ? body.password : null;
@@ -2785,6 +3343,11 @@ router.post(
         return;
       }
     }
+    const code = await resolveRequestedLoginCode(body.loginCode, {});
+    if ("error" in code) {
+      res.status(code.status).json({ error: code.error });
+      return;
+    }
     const [branch] = await db
       .insert(branchesTable)
       .values({
@@ -2792,6 +3355,7 @@ router.post(
         username: username ?? undefined,
         passwordHash: username && password ? await hashPassword(password) : undefined,
         plainPassword: username && password ? password : null,
+        loginCode: code.code,
       })
       .onConflictDoNothing()
       .returning();
@@ -2812,11 +3376,30 @@ router.patch(
       res.status(400).json({ error: "Choose a branch." });
       return;
     }
-    const body = req.body as { name?: unknown; username?: unknown };
-    const updates: { name?: string; username?: string } = {};
+    if (!(await adminPasswordConfirmed(req))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
+      return;
+    }
+    const body = req.body as { name?: unknown; username?: unknown; loginCode?: unknown; logoPath?: unknown };
+    const updates: { name?: string; username?: string; loginCode?: string; branchLogo?: string } = {};
     if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
     if (typeof body.username === "string" && body.username.trim()) updates.username = body.username.trim();
-    if (!updates.name && !updates.username) {
+    if (typeof body.loginCode === "string" && body.loginCode.trim()) {
+      const code = await resolveRequestedLoginCode(body.loginCode, { branchId });
+      if ("error" in code) {
+        res.status(code.status).json({ error: code.error });
+        return;
+      }
+      updates.loginCode = code.code;
+    }
+    if (body.logoPath !== undefined) {
+      if (typeof body.logoPath !== "string" || !isValidBranchLogoPath(branchId, body.logoPath)) {
+        res.status(400).json({ error: "Choose a valid uploaded branch logo." });
+        return;
+      }
+      updates.branchLogo = body.logoPath;
+    }
+    if (!updates.name && !updates.username && !updates.loginCode && !updates.branchLogo) {
       res.status(400).json({ error: "Nothing to update." });
       return;
     }
@@ -2840,7 +3423,69 @@ router.patch(
       }
     }
     const [updated] = await db.update(branchesTable).set(updates).where(eq(branchesTable.id, branchId)).returning();
-    res.json({ id: updated.id, name: updated.name, username: updated.username ?? null });
+    res.json({ id: updated.id, name: updated.name, username: updated.username ?? null, loginCode: updated.loginCode });
+  },
+);
+
+router.patch(
+  "/admin/branches/:id/logo",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    const logoPath = (req.body as { logoPath?: unknown } | undefined)?.logoPath;
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    if (typeof logoPath !== "string" || !new RegExp(`^branches/${branchId}/logo-[a-zA-Z0-9-]+\\.(png|jpg|webp)$`, "i").test(logoPath)) {
+      res.status(400).json({ error: "Choose a valid uploaded branch logo." });
+      return;
+    }
+    const [branch] = await db
+      .update(branchesTable)
+      .set({ branchLogo: logoPath })
+      .where(eq(branchesTable.id, branchId))
+      .returning({ id: branchesTable.id, logoPath: branchesTable.branchLogo });
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    res.json({ id: branch.id, logoPath: branch.logoPath, logoUrl: branchLogoUrl(branch.logoPath) });
+  },
+);
+
+// What deleting this branch will remove, so the confirmation dialog can show real numbers
+// rather than a generic "are you sure". Read-only, so it needs no password.
+router.get(
+  "/admin/branches/:id/delete-impact",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const branchId = Number(req.params.id);
+    if (!Number.isInteger(branchId)) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const [branch] = await db.select({ id: branchesTable.id, name: branchesTable.name }).from(branchesTable).where(eq(branchesTable.id, branchId)).limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    const mods = await db.select({ id: modulesCatalog.id }).from(modulesCatalog).where(eq(modulesCatalog.branchId, branchId));
+    const moduleIds = mods.map((m) => m.id);
+    const countModules = moduleIds.length;
+    const [students] = await db.select({ value: count() }).from(studentsTable).where(eq(studentsTable.branchId, branchId));
+    const [attendance] = moduleIds.length ? await db.select({ value: count() }).from(attendanceTable).where(inArray(attendanceTable.module, moduleIds)) : [{ value: 0 }];
+    const [assessments] = moduleIds.length ? await db.select({ value: count() }).from(assessmentsTable).where(inArray(assessmentsTable.module, moduleIds)) : [{ value: 0 }];
+    res.json({
+      type: "branch",
+      name: branch.name,
+      modules: countModules,
+      // Students survive the delete (their branch_id is cleared, not the row), so the
+      // dialog says so rather than counting them as a loss.
+      students: Number(students?.value ?? 0),
+      attendance: Number(attendance?.value ?? 0),
+      assessments: Number(assessments?.value ?? 0),
+    });
   },
 );
 
@@ -2853,7 +3498,35 @@ router.delete(
       res.status(400).json({ error: "Choose a branch." });
       return;
     }
-    await db.delete(branchesTable).where(eq(branchesTable.id, branchId));
+    if (!(await adminPasswordConfirmed(req))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
+      return;
+    }
+    const [branch] = await db.select({ id: branchesTable.id }).from(branchesTable).where(eq(branchesTable.id, branchId)).limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    // Deleting a branch cascades to `modules` via the FK, but the module-keyed tables
+    // (attendance, assessments, notices, course PDFs, teacher logins) are plain text
+    // columns with no FK, so Postgres would silently orphan them. Clearing them by hand in
+    // one transaction is what stops a deleted branch from leaving rows behind that would
+    // reappear if the same module id were ever recreated. Students keep their rows — the
+    // branch_id FK is ON DELETE SET NULL, which is why they are not touched here.
+    await db.transaction(async (tx) => {
+      const mods = await tx.select({ id: modulesCatalog.id }).from(modulesCatalog).where(eq(modulesCatalog.branchId, branchId));
+      const moduleIds = mods.map((m) => m.id);
+      if (moduleIds.length) {
+        await tx.delete(attendanceTable).where(inArray(attendanceTable.module, moduleIds));
+        await tx.delete(assessmentsTable).where(inArray(assessmentsTable.module, moduleIds));
+        await tx.delete(projectSubmissionsTable).where(inArray(projectSubmissionsTable.module, moduleIds));
+        await tx.delete(announcementsTable).where(inArray(announcementsTable.module, moduleIds));
+        await tx.delete(courseDocumentsTable).where(inArray(courseDocumentsTable.module, moduleIds));
+        await tx.delete(teachersTable).where(inArray(teachersTable.module, moduleIds));
+      }
+      await tx.delete(modulesCatalog).where(eq(modulesCatalog.branchId, branchId));
+      await tx.delete(branchesTable).where(eq(branchesTable.id, branchId));
+    });
     res.status(204).end();
   },
 );
@@ -2862,7 +3535,7 @@ router.post(
   "/admin/modules",
   requireRole("admin"),
   async (req, res): Promise<void> => {
-    const body = req.body as { branchId?: unknown; name?: unknown; slug?: unknown };
+    const body = req.body as { branchId?: unknown; name?: unknown; slug?: unknown; loginCode?: unknown };
     const branchId = typeof body.branchId === "number" ? body.branchId : Number(body.branchId);
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const slug = typeof body.slug === "string" ? body.slug.trim() : "";
@@ -2870,7 +3543,7 @@ router.post(
       res.status(400).json({ error: "Enter a branch and a module name." });
       return;
     }
-    const result = await createModuleRow(branchId, name, slug || null);
+    const result = await createModuleRow(branchId, name, slug || null, body.loginCode);
     if ("mod" in result) {
       res.status(201).json(result.mod);
       return;
@@ -2885,15 +3558,29 @@ router.patch(
   "/admin/modules/:id",
   requireRole("admin"),
   async (req, res): Promise<void> => {
+    if (!(await adminPasswordConfirmed(req))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
+      return;
+    }
     const moduleId = req.params.id as string;
-    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    if (!moduleId || !name) {
+    const body = req.body as { name?: unknown; loginCode?: unknown };
+    const updates: { name?: string; loginCode?: string } = {};
+    if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
+    if (typeof body.loginCode === "string" && body.loginCode.trim()) {
+      const code = await resolveRequestedLoginCode(body.loginCode, { moduleId });
+      if ("error" in code) {
+        res.status(code.status).json({ error: code.error });
+        return;
+      }
+      updates.loginCode = code.code;
+    }
+    if (!moduleId || (!updates.name && !updates.loginCode)) {
       res.status(400).json({ error: "Enter a module name." });
       return;
     }
     const [updated] = await db
       .update(modulesCatalog)
-      .set({ name })
+      .set(updates)
       .where(eq(modulesCatalog.id, moduleId))
       .returning();
     if (!updated) {
@@ -2904,9 +3591,40 @@ router.patch(
   },
 );
 
-// Delete an empty module. Any live reference — a teacher login, attendance or marks
-// rows, notices or course files — refuses the delete, because a dead module id would
-// orphan that data silently. Clear those out first, then remove the module.
+// What deleting this module will remove. Read-only, so no password gate.
+router.get(
+  "/admin/modules/:id/delete-impact",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const moduleId = req.params.id as string;
+    const [mod] = await db
+      .select({ id: modulesCatalog.id, name: modulesCatalog.name })
+      .from(modulesCatalog)
+      .where(eq(modulesCatalog.id, moduleId))
+      .limit(1);
+    if (!mod) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    const [teachers] = await db.select({ value: count() }).from(teachersTable).where(eq(teachersTable.module, moduleId));
+    const [attendance] = await db.select({ value: count() }).from(attendanceTable).where(eq(attendanceTable.module, moduleId));
+    const [assessments] = await db.select({ value: count() }).from(assessmentsTable).where(eq(assessmentsTable.module, moduleId));
+    const [documents] = await db.select({ value: count() }).from(courseDocumentsTable).where(eq(courseDocumentsTable.module, moduleId));
+    res.json({
+      type: "module",
+      id: mod.id,
+      name: mod.name,
+      teachers: Number(teachers?.value ?? 0),
+      attendance: Number(attendance?.value ?? 0),
+      assessments: Number(assessments?.value ?? 0),
+      documents: Number(documents?.value ?? 0),
+    });
+  },
+);
+
+// Delete a module, taking its records with it. The module id is a text key with no FK on
+// attendance/marks/notices/documents/teacher logins, so nothing cascades — each table is
+// cleared explicitly in one transaction or the rows would be orphaned forever.
 router.delete(
   "/admin/modules/:id",
   requireRole("admin"),
@@ -2914,6 +3632,10 @@ router.delete(
     const moduleId = req.params.id as string;
     if (!moduleId) {
       res.status(400).json({ error: "Enter a module." });
+      return;
+    }
+    if (!(await adminPasswordConfirmed(req))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
       return;
     }
     const [mod] = await db
@@ -2925,36 +3647,15 @@ router.delete(
       res.status(404).json({ error: "Module not found." });
       return;
     }
-    const [teacher] = await db
-      .select({ id: teachersTable.id })
-      .from(teachersTable)
-      .where(eq(teachersTable.module, moduleId))
-      .limit(1);
-    const [attended] = await db
-      .select({ id: attendanceTable.studentId })
-      .from(attendanceTable)
-      .where(eq(attendanceTable.module, moduleId))
-      .limit(1);
-    const [assessed] = await db
-      .select({ id: assessmentsTable.studentId })
-      .from(assessmentsTable)
-      .where(eq(assessmentsTable.module, moduleId))
-      .limit(1);
-    const [announced] = await db
-      .select({ id: announcementsTable.id })
-      .from(announcementsTable)
-      .where(eq(announcementsTable.module, moduleId))
-      .limit(1);
-    const [doc] = await db
-      .select({ module: courseDocumentsTable.module })
-      .from(courseDocumentsTable)
-      .where(eq(courseDocumentsTable.module, moduleId))
-      .limit(1);
-    if (teacher || attended || assessed || announced || doc) {
-      res.status(400).json({ error: "This module still has teachers or records. Remove those first before deleting it." });
-      return;
-    }
-    await db.delete(modulesCatalog).where(eq(modulesCatalog.id, moduleId));
+    await db.transaction(async (tx) => {
+      await tx.delete(attendanceTable).where(eq(attendanceTable.module, moduleId));
+      await tx.delete(assessmentsTable).where(eq(assessmentsTable.module, moduleId));
+      await tx.delete(projectSubmissionsTable).where(eq(projectSubmissionsTable.module, moduleId));
+      await tx.delete(announcementsTable).where(eq(announcementsTable.module, moduleId));
+      await tx.delete(courseDocumentsTable).where(eq(courseDocumentsTable.module, moduleId));
+      await tx.delete(teachersTable).where(eq(teachersTable.module, moduleId));
+      await tx.delete(modulesCatalog).where(eq(modulesCatalog.id, moduleId));
+    });
     res.status(204).send();
   },
 );
@@ -2968,6 +3669,10 @@ router.post(
     const branchId = Number(req.params.id);
     if (!Number.isInteger(branchId)) {
       res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    if (!(await adminPasswordConfirmed(req, "adminPassword"))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
       return;
     }
     const body = req.body as { username?: unknown; password?: unknown };
@@ -3015,6 +3720,10 @@ router.patch(
     const branchId = Number(req.params.id);
     if (!Number.isInteger(branchId)) {
       res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    if (!(await adminPasswordConfirmed(req, "adminPassword"))) {
+      res.status(401).json({ error: "Confirm your admin password to continue." });
       return;
     }
     const body = req.body as { username?: unknown; password?: unknown };
@@ -3509,7 +4218,12 @@ function announcementView(record: typeof announcementsTable.$inferSelect) {
     id: record.id,
     module: record.module,
     title: record.title,
-    body: record.body,
+    body: record.body
+      .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, "")
+      .replace(/\(?\s*Day\s+\d+\s*[-–—]\s*\d+\s*\)?/gi, "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
     authorName: record.authorName,
     published: record.publishedAt != null,
     publishedAt: record.publishedAt?.toISOString() ?? null,
@@ -3933,9 +4647,198 @@ router.delete(
     const rows = await db
       .select()
       .from(announcementsTable)
-      .where(isNotNull(announcementsTable.publishedAt))
+      .where(
+        and(
+          isNotNull(announcementsTable.publishedAt),
+          or(
+            isNull(announcementsTable.studentId),
+            eq(announcementsTable.studentId, req.auth.studentId),
+          ),
+        ),
+      )
       .orderBy(desc(announcementsTable.publishedAt));
     res.json(rows.filter((row) => moduleKeys.includes(row.module)).map(announcementView));
+  },
+);
+
+// ------------------------------------------------------------ automated project reminders
+// Runs itself at boot and then hourly (see index.ts); an admin can also trigger it by hand
+// through the endpoint below. Every student is placed in a project cycle by their joining
+// date — one project every fifteen days, twelve in all — and the first time a cycle is seen
+// a notice is written for each module in their branch.
+//
+// The notice is addressed to that one student (`student_id`), so the student portal shows it
+// only to them, while staff still read it on the module's announcements list. Deduplication
+// asks "does this student already have this cycle's notice for this module", not "is today
+// exactly day 0/15/30", so a server that was down on the due day catches up on its next run.
+async function extractPdfNoticeText(content: string): Promise<string> {
+  const encoded = content.includes(",") ? content.slice(content.indexOf(",") + 1) : content;
+  const parser = new PDFParse({ data: Buffer.from(encoded, "base64") });
+  try {
+    const result = await parser.getText();
+    return result.text
+      .replace(/\f/g, "\n")
+      .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, "\n")
+      .replace(/\(?\s*Day\s+\d+\s*[-–—]\s*\d+\s*\)?/gi, "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/[\t ]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } catch (err) {
+    logger.warn({ err }, "Could not extract text from project notice PDF");
+    return "";
+  } finally {
+    await parser.destroy();
+  }
+}
+
+function projectSection(text: string, cycleNumber: number): string {
+  if (!text) return "";
+  const heading = new RegExp(`(?:^|\\n)\\s*Project\\s+${cycleNumber}\\s*:\\s*`, "i").exec(text);
+  if (!heading) return "";
+  const start = heading.index + heading[0].length;
+  const remaining = text.slice(start);
+  const nextSection = /(?:^|\n)\s*(?:Project\s+\d+\s*:|Month\s+\d+\b)/i.exec(remaining);
+  return remaining.slice(0, nextSection?.index ?? remaining.length).trim();
+}
+
+function projectNameFromPlan(text: string, cycleNumber: number): string {
+  const heading = new RegExp(`(?:^|\\n)\\s*Project\\s+${cycleNumber}\\s*:\\s*([^\\n]+)`, "i").exec(text);
+  return heading?.[1]?.replace(/\s*\(Day[^)]*\)\s*$/i, "").trim() || `Project ${cycleNumber}`;
+}
+
+function noticeExcerpt(text: string): string {
+  const maxLength = 1800;
+  if (text.length <= maxLength) return text;
+  const end = text.lastIndexOf(" ", maxLength);
+  return `${text.slice(0, end > 0 ? end : maxLength).trim()}...`;
+}
+
+export async function runAutoProjectReminders(): Promise<{ created: number; skipped: number; date: string }> {
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  const todayMs = Date.parse(`${todayIso}T00:00:00Z`);
+
+  const students = await db
+    .select({
+      id: studentsTable.id,
+      fullName: studentsTable.fullName,
+      dateOfJoining: studentsTable.dateOfJoining,
+      branchId: studentsTable.branchId,
+    })
+    .from(studentsTable)
+    .where(isNotNull(studentsTable.dateOfJoining));
+
+  const allModules = await db.select().from(modulesCatalog);
+  const allDocs = await db.select().from(courseDocumentsTable);
+  const moduleDocuments = new Map<string, { plan: string; guidelines: string }>();
+  await Promise.all(allModules.map(async (module) => {
+    const plan = allDocs.find((doc) => doc.module === module.id && doc.kind === "project_plan");
+    const guidelines = allDocs.find((doc) => doc.module === module.id && doc.kind === "project_guidelines");
+    const [planText, guidelineText] = await Promise.all([
+      plan ? extractPdfNoticeText(plan.content) : Promise.resolve(""),
+      guidelines ? extractPdfNoticeText(guidelines.content) : Promise.resolve(""),
+    ]);
+    moduleDocuments.set(module.id, { plan: planText, guidelines: guidelineText });
+  }));
+
+  let createdCount = 0;
+  let skippedCount = 0;
+
+  for (const student of students) {
+    if (!student.dateOfJoining) {
+      skippedCount++;
+      continue;
+    }
+
+    const joinIso = String(student.dateOfJoining).slice(0, 10);
+    const joinMs = Date.parse(`${joinIso}T00:00:00Z`);
+    if (Number.isNaN(joinMs)) {
+      skippedCount++;
+      continue;
+    }
+    const diffDays = Math.round((todayMs - joinMs) / 86400000);
+    const cycleNumber = Math.floor(diffDays / 15) + 1;
+    // Before admission, or past the twelve-project course.
+    if (diffDays < 0 || cycleNumber > 12) {
+      skippedCount++;
+      continue;
+    }
+
+    const studentModules = allModules.filter((m) => m.branchId === student.branchId);
+    if (studentModules.length === 0) {
+      skippedCount++;
+      continue;
+    }
+
+    for (const mod of studentModules) {
+      const reminderName = `Auto: Project ${cycleNumber} Reminder`;
+      const month = Math.ceil(cycleNumber / 2);
+      const projectInMonth = cycleNumber % 2 === 1 ? 1 : 2;
+      const title = `Project ${cycleNumber} — ${mod.name} (Month ${month}, Project ${projectInMonth})`;
+      const documentText = moduleDocuments.get(mod.id) ?? { plan: "", guidelines: "" };
+      const projectDetails = projectSection(documentText.plan, cycleNumber);
+      const projectGuidelines = projectSection(documentText.guidelines, cycleNumber);
+      const projectName = projectNameFromPlan(documentText.plan, cycleNumber);
+      const dueDate = new Date(joinMs + cycleNumber * 15 * 86400000).toISOString().slice(0, 10);
+      const body = [
+        `Hi ${student.fullName},`,
+        "",
+        `Your ${mod.name} project, ${projectName}, is ready.`,
+        "",
+        "Project details:",
+        projectDetails ? noticeExcerpt(projectDetails) : `The ${mod.name} project plan PDF is not uploaded yet.`,
+        "",
+        "Simple guidelines:",
+        projectGuidelines ? noticeExcerpt(projectGuidelines) : `The ${mod.name} guidelines PDF is not uploaded yet.`,
+        "",
+        `Please submit by ${dueDate}. Add your project link in Student Portal > Project.`,
+      ].join("\n");
+      const existing = await db
+        .select({ id: announcementsTable.id, body: announcementsTable.body, title: announcementsTable.title, studentId: announcementsTable.studentId })
+        .from(announcementsTable)
+        .where(
+          and(
+            eq(announcementsTable.module, mod.id),
+            eq(announcementsTable.authorName, reminderName),
+          ),
+        )
+        ;
+      const existingForStudent = existing.find((row) =>
+        row.studentId === student.id || (row.studentId == null && row.body.startsWith(`Hi ${student.fullName},`)),
+      );
+      if (existingForStudent) {
+        if (existingForStudent.body !== body || existingForStudent.title !== title || existingForStudent.studentId !== student.id) {
+          await db
+            .update(announcementsTable)
+            .set({ title, body, studentId: student.id, updatedAt: new Date() })
+            .where(eq(announcementsTable.id, existingForStudent.id));
+        }
+        continue;
+      }
+
+      await db.insert(announcementsTable).values({
+        module: mod.id,
+        title,
+        body,
+        authorName: reminderName,
+        createdBy: null,
+        publishedAt: new Date(),
+        image: null,
+        studentId: student.id,
+      });
+      createdCount++;
+    }
+  }
+
+  return { created: createdCount, skipped: skippedCount, date: todayIso };
+}
+
+router.post(
+  "/admin/announcements/auto-project-reminders",
+  requireRole("admin"),
+  async (_req, res): Promise<void> => {
+    res.json(await runAutoProjectReminders());
   },
 );
 
@@ -4369,14 +5272,14 @@ router.post(
       res.status(400).json({ error: "Choose a branch." });
       return;
     }
-    const body = req.body as { name?: unknown; slug?: unknown };
+    const body = req.body as { name?: unknown; slug?: unknown; loginCode?: unknown };
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const slug = typeof body.slug === "string" ? body.slug.trim() : "";
     if (!name) {
       res.status(400).json({ error: "Enter a module name." });
       return;
     }
-    const result = await createModuleRow(req.auth.branchId, name, slug || null);
+    const result = await createModuleRow(req.auth.branchId, name, slug || null, body.loginCode);
     if ("mod" in result) {
       res.status(201).json(result.mod);
       return;

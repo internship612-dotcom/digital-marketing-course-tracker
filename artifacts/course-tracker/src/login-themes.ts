@@ -18,7 +18,7 @@ import {
   type LoginIllustrationProps,
 } from './components/login-illustrations';
 
-export type LoginThemeKey = 'student' | 'admin' | 'branch' | 'module';
+export type LoginThemeKey = 'student' | 'admin' | 'branch' | 'zedking' | 'module';
 
 export type LoginThemeConfig = {
   /** Page background gradient. */
@@ -43,11 +43,11 @@ export type LoginThemeConfig = {
 
 export const LOGIN_THEMES: Record<LoginThemeKey, LoginThemeConfig> = {
   student: {
-    gradient: 'linear-gradient(135deg, #E3F4EA 0%, #F6FBF8 100%)',
-    accent: '#1B5E4B',
-    pale: '#D6F0E1',
-    pillTint: '#D6F0E1',
-    pillText: '#1B5E4B',
+    gradient: 'linear-gradient(135deg, hsl(38 44% 96%) 0%, hsl(38 44% 99%) 100%)',
+    accent: 'hsl(26 8% 17%)',
+    pale: 'hsl(19 100% 89%)',
+    pillTint: 'hsl(19 100% 89%)',
+    pillText: 'hsl(18 60% 32%)',
     badgeIcon: GraduationCap,
     badgeText: 'Student',
     heading: 'Sign in to your account',
@@ -58,11 +58,11 @@ export const LOGIN_THEMES: Record<LoginThemeKey, LoginThemeConfig> = {
     Illustration: StudentIllustration,
   },
   admin: {
-    gradient: 'linear-gradient(135deg, #E1EDFC 0%, #F4F8FE 100%)',
-    accent: '#14508F',
-    pale: '#D5E6FA',
-    pillTint: '#D5E6FA',
-    pillText: '#14508F',
+    gradient: 'linear-gradient(135deg, hsl(220 38% 97%) 0%, hsl(220 38% 99%) 100%)',
+    accent: 'hsl(221 51% 16%)',
+    pale: 'hsl(42 100% 91%)',
+    pillTint: 'hsl(42 100% 91%)',
+    pillText: 'hsl(221 51% 16%)',
     badgeIcon: Settings,
     badgeText: 'Admin',
     heading: 'Sign in to your account',
@@ -73,11 +73,11 @@ export const LOGIN_THEMES: Record<LoginThemeKey, LoginThemeConfig> = {
     Illustration: AdminIllustration,
   },
   branch: {
-    gradient: 'linear-gradient(135deg, #F8EEDC 0%, #FDF8EF 100%)',
-    accent: '#A15C16',
-    pale: '#F6E3C4',
-    pillTint: '#F6E3C4',
-    pillText: '#8A4B0F',
+    gradient: 'linear-gradient(135deg, hsl(247 53% 97%) 0%, hsl(247 53% 99%) 100%)',
+    accent: 'hsl(238 44% 30%)',
+    pale: 'hsl(244 100% 92%)',
+    pillTint: 'hsl(244 100% 92%)',
+    pillText: 'hsl(238 44% 30%)',
     badgeIcon: Building2,
     badgeText: 'Branch',
     heading: 'Sign in to your branch',
@@ -101,5 +101,20 @@ export const LOGIN_THEMES: Record<LoginThemeKey, LoginThemeConfig> = {
     passwordPlaceholder: 'Enter your password',
     buttonLabel: 'Open desk',
     Illustration: ModuleDefaultArt,
+  },
+  zedking: {
+    gradient: 'linear-gradient(135deg, hsl(146 33% 96%) 0%, hsl(146 33% 99%) 100%)',
+    accent: 'hsl(162 67% 18%)',
+    pale: 'hsl(141 45% 81%)',
+    pillTint: 'hsl(141 45% 81%)',
+    pillText: 'hsl(162 67% 18%)',
+    badgeIcon: Building2,
+    badgeText: 'Zedking',
+    heading: 'Sign in to your branch',
+    subtitle: 'Manage admissions, student progress, batches and reports.',
+    idPlaceholder: 'Enter your branch ID',
+    passwordPlaceholder: 'Enter your password',
+    buttonLabel: 'Login',
+    Illustration: BranchDefaultArt,
   },
 };

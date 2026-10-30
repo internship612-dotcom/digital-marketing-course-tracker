@@ -24,7 +24,8 @@ export const GetCurrentUserResponse = zod.object({
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
-  "studentId": zod.string().nullish()
+  "studentId": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 
@@ -46,7 +47,8 @@ export const LoginResponse = zod.object({
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
-  "studentId": zod.string().nullish()
+  "studentId": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 
@@ -86,7 +88,8 @@ export const RegisterStudentResponse = zod.object({
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
-  "studentId": zod.string().nullish()
+  "studentId": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 
@@ -116,7 +119,8 @@ export const RegisterAdminResponse = zod.object({
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
-  "studentId": zod.string().nullish()
+  "studentId": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 
@@ -141,7 +145,8 @@ export const LoginSupabaseAdminResponse = zod.object({
   "displayName": zod.string(),
   "email": zod.string().nullish(),
   "module": zod.union([zod.string(),zod.null()]).optional(),
-  "studentId": zod.string().nullish()
+  "studentId": zod.string().nullish(),
+  "branchId": zod.number().int().nullish()
 })
 
 

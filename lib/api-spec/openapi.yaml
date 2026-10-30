@@ -582,6 +582,8 @@ components:
             - type: "null"
         studentId:
           type: ["string", "null"]
+        branchId:
+          type: ["integer", "null"]
     LoginInput:
       type: object
       required: [role, identifier, password]

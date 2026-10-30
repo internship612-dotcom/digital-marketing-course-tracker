@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   getGetCurrentUserQueryKey,
@@ -31,6 +32,7 @@ import {
   ArrowRight,
   BarChart3,
   BookOpen,
+  Box,
   CalendarCheck2,
   Camera,
   Check,
@@ -39,8 +41,10 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock,
+  Copy,
   Eye,
   EyeOff,
+  ExternalLink,
   FileText,
   GitBranch,
   GraduationCap,
@@ -59,15 +63,19 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
   UserCheck,
   UserRound,
   Users,
+  FolderOpen,
   X,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import zedkingLogo from './assets/zedking-logo.png';
+import hascLogo from './assets/hasc logo.jpg';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Button } from '@/components/ui/button';
@@ -75,8 +83,11 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { validateStudentEmail } from '@/lib/email-validation';
 import { LOGIN_THEMES, type LoginThemeKey } from './login-themes';
+import { supabase, verifyAdminPassword } from './lib/supabase';
 import { PANEL_THEME_LABELS, themeForBranch, type PanelTheme } from './themes';
 
 const queryClient = new QueryClient();
@@ -98,9 +109,8 @@ function workspaceRole(pathname: string): Role | null {
     if (segment === '' || KNOWN_ADMIN_SEGMENTS.has(segment)) return 'admin';
     return 'teacher';
   }
-  // Module panels also sit at /<module> on the student/entry path? No — but keep the
-  // original check for standalone module keys.
-  if (modules.some((m) => path === `/${m}`)) return 'teacher';
+  // A bare /<segment> is now a login-code page (/<code>) — never a module key or branch
+  // name — so it resolves neutrally: /auth/me returns whichever session already exists.
   // The entry page carries the student sign-in form, so resolve it as the student
   // workspace — otherwise /auth/me falls back to whichever session happens to exist.
   if (path === '/') return 'student';
@@ -132,16 +142,137 @@ function dashboardPath(role: Role | null | undefined): string {
   return role ? roleRoutes[role] : '/';
 }
 
-const adminModules: { key: Module; number: number; name: string; tagline: string }[] = [
-  { key: 'ai', number: 1, name: 'Artificial Intelligence', tagline: 'Automation, forecasting, and AI-driven insight across your portfolio.' },
-  { key: 'dm', number: 2, name: 'Digital Marketing', tagline: 'Campaigns, reach, and conversions measured in one calm view.' },
-  { key: 'sm', number: 3, name: 'Social Media', tagline: 'Presence, engagement, and community growth at a glance.' },
+// --- Shareable login codes -------------------------------------------------------
+// Branch and module login pages open ONLY at /<login_code>; /<branch name> and
+// /<module key> no longer open anything. A code is 4-24 chars of lowercase letters,
+// digits and dashes, is unique across branches AND modules together, and is never one
+// of the reserved route words. Resolution goes through the Supabase `resolve_login_code`
+// function first, then falls back to the API so local dev works too.
+const LOGIN_CODE_RE = /^[a-z0-9-]{4,24}$/;
+const LOGIN_CODE_RESERVED = new Set([
+  'admin', 'student', 'teacher', 'branch', 'login', 'logout', 'signup', 'signin',
+  'register', 'api', 'assets', 'static', 'dashboard', 'module', 'modules', 'settings',
+  'documents', 'announcements', 'students', 'panel-logins', 'branches', 'project',
+  'profile', 'attendance', 'assessment', 'reports', 'report', 'home', 'catalog', 'healthz',
+]);
+const LOGIN_CODE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+function randomLoginCode(length = 8): string {
+  for (;;) {
+    const values = crypto.getRandomValues(new Uint32Array(length));
+    const code = Array.from(values, (v) => LOGIN_CODE_ALPHABET[v % LOGIN_CODE_ALPHABET.length]).join('');
+    if (!LOGIN_CODE_RESERVED.has(code)) return code;
+  }
+}
+
+function loginCodeError(code: string | null | undefined): string {
+  const clean = (code ?? '').trim().toLowerCase();
+  if (!clean) return 'Enter a login code.';
+  if (!LOGIN_CODE_RE.test(clean)) return 'Use 4-24 lowercase letters, numbers or dashes.';
+  if (LOGIN_CODE_RESERVED.has(clean)) return 'That code is reserved. Choose another.';
+  return '';
+}
+
+function loginPageUrl(code: string | null | undefined): string {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+  return `${window.location.origin}${base}/${(code ?? '').trim().toLowerCase()}`;
+}
+
+type ResolvedLoginCode = { type: 'branch' | 'module'; id: string; name: string; branchName: string | null; logoUrl: string | null };
+
+async function resolveLoginCode(rawCode: string | null | undefined): Promise<ResolvedLoginCode | null> {
+  const code = (rawCode ?? '').trim().toLowerCase();
+  if (!LOGIN_CODE_RE.test(code)) return null;
+  // The app database is the source of truth for which code belongs to which desk, so ask
+  // the API first. Supabase is only the fallback for a deployment where the API is not
+  // reachable; letting it answer first caused module links to open the branch login page
+  // when its copy of the catalog was out of date.
+  try {
+    const res = await fetch(`/api/login-code/${encodeURIComponent(code)}`);
+    if (res.ok) {
+      const row = (await res.json()) as ResolvedLoginCode;
+      if (row && (row.type === 'branch' || row.type === 'module')) return row;
+    }
+  } catch {
+    // Fall through to Supabase.
+  }
+  // Fallback: the SECURITY DEFINER function (no table has to be public).
+  try {
+    const { data, error } = await supabase.rpc('resolve_login_code', { code });
+    if (!error && data) {
+      const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+      if (row && (row.type === 'branch' || row.type === 'module')) {
+        return {
+          type: row.type as 'branch' | 'module',
+          id: String(row.id ?? ''),
+          name: typeof row.name === 'string' ? row.name : '',
+          branchName: typeof row.branch_name === 'string' ? row.branch_name : null,
+          logoUrl: typeof row.logo_url === 'string' ? row.logo_url : null,
+        };
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+// Shown for an unknown code (or an old name-based URL). Reveals nothing about what the
+// code might have been.
+function PageDoesNotExist() {
+  return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">This page does not exist</h1><p className="mt-2 text-sm text-muted-foreground">Check the link, or ask the institute for the current login link.</p><Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
+}
+
+// Reused by every admin form that creates or edits a branch/module.
+function LoginCodeField({ value, onChange, testId }: { value: string | null | undefined; onChange: (next: string) => void; testId?: string }) {
+  const safeValue = value ?? '';
+  const error = loginCodeError(safeValue);
+  return <label className="grid gap-1.5 text-sm font-medium">Login code
+    <span className="flex items-center gap-2">
+      <Input value={safeValue} onChange={(e) => onChange(e.target.value.toLowerCase().replace(/\s+/g, '-'))} placeholder="Enter login code" maxLength={24} autoComplete="off" spellCheck={false} className="font-mono" data-testid={testId} />
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange(randomLoginCode())} className="shrink-0" data-testid={testId ? `${testId}-generate` : undefined}><RefreshCw size={14} /> Generate new</Button>
+    </span>
+    {safeValue.trim() !== '' && error && <span className="text-xs text-destructive" data-testid={testId ? `${testId}-error` : undefined}>{error}</span>}
+  </label>;
+}
+
+// The admin-facing "open / copy" controls, kept together in one small box. The code is
+// shown as plain text; "Open login page" is a real button that opens the link in a new
+// tab; "Copy link" copies the full URL and confirms. For branches, also shows
+// "Open student login" and "Copy student link" for the student portal.
+function LoginLinkActions({ code, testId, fullWidth }: { code: string | null | undefined; testId?: string; fullWidth?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const safeCode = (code ?? '').trim();
+  const url = loginPageUrl(safeCode);
+  const copy = () => {
+    const done = () => { setCopied(true); window.setTimeout(() => setCopied(false), 1800); };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(done).catch(() => undefined);
+    } else {
+      const el = document.createElement('textarea');
+      el.value = url; document.body.appendChild(el); el.select();
+      try { document.execCommand('copy'); done(); } finally { document.body.removeChild(el); }
+    }
+  };
+  return <div className={`${fullWidth ? 'flex w-full' : 'inline-flex max-w-full'} flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5`} data-testid={testId ? `box-login-link-${testId}` : undefined}>
+    <span className="font-mono text-xs font-semibold text-foreground" data-testid={testId ? `text-login-code-${testId}` : undefined}>/{safeCode}</span>
+    <Button asChild variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" data-testid={testId ? `link-open-login-${testId}` : undefined}>
+      <a href={`/${safeCode}`} target="_blank" rel="noreferrer"><ExternalLink size={12} /> Open login page</a>
+    </Button>
+    <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={copy} data-testid={testId ? `button-copy-login-${testId}` : undefined}>{copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy link</>}</Button>
+  </div>;
+}
+
+const adminModules: { key: Module; number: number; name: string; tagline: string; branchId: number }[] = [
+  { key: 'ai', number: 1, name: 'Artificial Intelligence', tagline: 'Automation, forecasting, and AI-driven insight across your portfolio.', branchId: 1 },
+  { key: 'dm', number: 2, name: 'Digital Marketing', tagline: 'Campaigns, reach, and conversions measured in one calm view.', branchId: 1 },
+  { key: 'sm', number: 3, name: 'Social Media', tagline: 'Presence, engagement, and community growth at a glance.', branchId: 1 },
 ];
 
 // Branches and their modules are defined by the admin panel, not hard-coded. The
 // catalog is loaded once for the whole app; while it is loading (or if the call
 // fails) the static three-module default above keeps every screen working.
-type BranchSummary = { id: number; name: string; modules: { id: string; name: string }[]; username?: string | null; plainPassword?: string | null };
+type BranchSummary = { id: number; name: string; logoUrl?: string | null; modules: { id: string; name: string }[]; username?: string | null; plainPassword?: string | null };
 
 const catalogTaglines: Record<string, string> = {
   ai: 'Automation, forecasting, and AI-driven insight across your portfolio.',
@@ -209,6 +340,7 @@ function useCatalogModules(): typeof adminModules {
         number,
         name: mod.name,
         tagline: catalogTaglines[mod.id] ?? `Part of the ${branch.name} branch.`,
+        branchId: branch.id,
       });
     }
   }
@@ -229,8 +361,9 @@ function usePanelTheme(user?: CurrentUser | null): { theme: PanelTheme; label: s
     const name = user.displayName || PANEL_THEME_LABELS.branch;
     return { theme: themeForBranch(name), label: name };
   }
-  const branch = branches?.find((b) => b.modules.some((m) => m.id === user.module));
-  return { theme: themeForBranch(branch?.name), label: branch?.name ?? 'Module desk' };
+  // Module teachers/desks use their own distinct purple theme so they look different
+  // from the branch they belong to.
+  return { theme: 'module', label: 'Module desk' };
 }
 
 // The panel title shown at the top-left of the header, so several panels open in different
@@ -314,15 +447,15 @@ function useCourseDocuments(scope: 'admin' | 'teacher' | 'student' | 'branch') {
 }
 
 // One row per document. Opens in a new tab so the student keeps their place in the portal.
-function DocLink({ scope, kind, doc }: { scope: 'admin' | 'teacher' | 'student' | 'branch'; kind: DocumentKind; doc?: CourseDocument }) {
+function DocLink({ scope, kind, doc, className }: { scope: 'admin' | 'teacher' | 'student' | 'branch'; kind: DocumentKind; doc?: CourseDocument; className?: string }) {
   const meta = documentLabels[kind];
   if (!doc) {
-    return <div className="flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3 text-muted-foreground" data-testid={`doc-${kind}-pending`}>
+    return <div className={`flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3 text-muted-foreground ${className ?? ''}`} data-testid={`doc-${kind}-pending`}>
       <FileText size={18} className="shrink-0" />
       <div className="min-w-0"><p className="text-sm font-semibold">{meta.label}</p><p className="text-xs">Not uploaded yet — it will appear here once the institute adds it.</p></div>
     </div>;
   }
-  return <a href={documentHref(scope, doc)} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 transition-colors hover:border-accent hover:bg-accent/10" data-testid={`doc-${kind}-${doc.module}`}>
+  return <a href={documentHref(scope, doc)} target="_blank" rel="noreferrer" className={`flex items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 transition-colors hover:border-accent hover:bg-accent/10 ${className ?? ''}`} data-testid={`doc-${kind}-${doc.module}`}>
     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-accent/20 text-primary"><FileText size={17} /></span>
     <div className="min-w-0 flex-1"><p className="text-sm font-semibold">{meta.label}</p><p className="text-xs text-muted-foreground">{meta.detail}</p></div>
     <ArrowRight size={16} className="shrink-0 text-primary" />
@@ -439,10 +572,11 @@ function AuthPasswordField({ label, toggleTestId, ...props }: { label: string; t
 // key (and, for a module desk, the branch's module names for the artwork);
 // colours, badge, illustration, heading and subtitle all come from
 // src/login-themes.ts.
-function AuthShell({ theme, moduleNames, currentIndex, heading, subtitle, children }: { theme: LoginThemeKey; moduleNames?: string[]; currentIndex?: number; heading?: string; subtitle?: string; children: ReactNode }) {
+function AuthShell({ theme, moduleNames, currentIndex, heading, subtitle, badgeText, badgeIcon, brandLogo, children }: { theme: LoginThemeKey; moduleNames?: string[]; currentIndex?: number; heading?: string; subtitle?: string; badgeText?: string; badgeIcon?: typeof Box; brandLogo?: string; children: ReactNode }) {
   const t = LOGIN_THEMES[theme];
   const Illustration = t.Illustration;
-  const BadgeIcon = t.badgeIcon;
+  const BadgeIcon = badgeIcon ?? t.badgeIcon;
+  const badge = badgeText ?? t.badgeText;
   const style = { background: t.gradient, '--auth-accent': t.accent, '--auth-pale': t.pale } as React.CSSProperties;
   return (
     <div className="auth-shell" style={style}>
@@ -452,9 +586,9 @@ function AuthShell({ theme, moduleNames, currentIndex, heading, subtitle, childr
       <div className="auth-inner">
         <div className={`auth-art auth-art-${theme}`} aria-hidden="true"><Illustration moduleNames={moduleNames} currentIndex={currentIndex} /></div>
         <div className="auth-card">
-          <img src={zedkingLogo} alt="Zed-Kyng" className="auth-logo" />
+          <img src={brandLogo ?? zedkingLogo} alt={brandLogo ? 'HASC' : 'Zed-Kyng'} className={`auth-logo ${brandLogo ? 'auth-logo-branch' : ''}`} />
           <p className="auth-tracker">COURSE TRACKER</p>
-          <span className="auth-badge" style={{ background: t.pillTint, color: t.pillText }}><BadgeIcon size={15} aria-hidden="true" />{t.badgeText}</span>
+          <span className="auth-badge" style={{ background: t.pillTint, color: t.pillText }}><BadgeIcon size={15} aria-hidden="true" />{badge}</span>
           <h1 className="auth-heading">{heading ?? t.heading}</h1>
           <p className="auth-subtitle">{subtitle ?? t.subtitle}</p>
           <div className="auth-form">{children}</div>
@@ -474,6 +608,40 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
   const [openItem, setOpenItem] = useState('');
   const { theme } = usePanelTheme(user);
   const panel = usePanelTitle(user);
+  // Unread notices: the sidebar item carries a count until the announcements page is opened.
+  // `seen` is a timestamp in localStorage, so the badge is about "new since I last looked",
+  // not a read receipt the server has to track.
+  const [unreadNotices, setUnreadNotices] = useState(0);
+  const announcementsHref = user.role === 'admin' ? '/admin/announcements' : user.role === 'teacher' ? '/teacher/announcements' : user.role === 'branch' ? '/branch/announcements' : '/student/announcements';
+  const announcementsApi = `/api${announcementsHref}`;
+  const seenKey = `ct_notices_seen_${user.role}_${user.displayName ?? ''}`;
+  const onAnnouncements = location.startsWith(announcementsHref);
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      const seen = Number(window.localStorage.getItem(seenKey) ?? 0);
+      void fetch(announcementsApi)
+        .then(async (res) => (res.ok ? (await res.json()) as Announcement[] : null))
+        .then((rows) => {
+          if (!alive || !rows) return;
+          const count = rows.filter((row) => {
+            if (user.role !== 'student' && !row.published) return false;
+            const stamp = Date.parse(row.published ? row.publishedAt ?? row.createdAt : row.createdAt);
+            return Number.isFinite(stamp) && stamp > seen;
+          }).length;
+          setUnreadNotices(count);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [announcementsApi, seenKey, user.role]);
+  useEffect(() => {
+    if (!onAnnouncements) return;
+    window.localStorage.setItem(seenKey, String(Date.now()));
+    setUnreadNotices(0);
+  }, [onAnnouncements, seenKey]);
   useEffect(() => {
     document.title = panel.tab;
     return () => { document.title = 'Course Tracker'; };
@@ -526,7 +694,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
       <div className="mt-12"><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-sidebar-foreground/45">Workspace</p><nav className="mt-3 grid gap-1">{nav.map((item) => {
          const childOpen = openItem === item.href || location === item.href || (item.children?.some((child) => location.startsWith(child.href)) ?? false);
          return <div key={item.href} onMouseEnter={() => setOpenItem(item.href)} onMouseLeave={() => setOpenItem((v) => (v === item.href ? '' : v))} onFocus={() => setOpenItem(item.href)} onBlur={() => setOpenItem((v) => (v === item.href ? '' : v))}>
-           <Link href={item.href} onClick={() => setMobileOpen(false)} className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-semibold transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" data-testid={`link-nav-${user.role}`}><item.icon size={17} />{item.label}</Link>
+           <Link href={item.href} onClick={() => setMobileOpen(false)} className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-semibold transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" data-testid={`link-nav-${user.role}`}><item.icon size={17} /><span className="flex-1">{item.label}</span>{item.href.endsWith('/announcements') && unreadNotices > 0 && <span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-extrabold text-primary" data-testid="badge-unread-announcements">{unreadNotices > 9 ? '9+' : unreadNotices}</span>}</Link>
            {item.children && childOpen && <div className="mt-1 grid gap-1 pl-6">{item.children.map((child) => <Link key={child.href} href={child.href} onClick={() => setMobileOpen(false)} className="flex items-center gap-2.5 rounded-lg bg-sidebar-accent px-3 py-2 text-sm font-semibold text-sidebar-accent-foreground ring-1 ring-sidebar-border transition-colors hover:bg-accent hover:text-primary" data-testid={`link-subnav-${user.role}`}><child.icon size={15} />{child.label}</Link>)}</div>}
          </div>;
         })}</nav></div>
@@ -537,7 +705,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
        </div>
     </aside>
     {mobileOpen && <button className="fixed inset-0 z-30 bg-primary/30 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close menu overlay" data-testid="button-overlay-menu" />}
-    <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border/70 bg-background/90 px-5 backdrop-blur sm:px-8"><div className="flex min-w-0 items-center gap-3"><button className="rounded-md p-2 hover:bg-muted lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-menu"><Menu size={20} /></button><div className="hidden sm:block lg:hidden"><Logo /></div><span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-[0.14em] text-accent-foreground" data-testid="badge-panel-title" title={panel.title}><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span className="hidden truncate sm:inline">{panel.title}</span><span className="truncate sm:hidden">{panel.short}</span></span></div><div className="ml-auto flex shrink-0 items-center gap-3"><span className="hidden font-mono-ui text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:block">Institute desk / 01</span><span className="h-2 w-2 rounded-full bg-accent" title="Workspace connected" /></div></header><main className="mx-auto max-w-[1500px] p-5 sm:p-8">{children}</main></div>
+    <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border/70 bg-background/90 px-5 backdrop-blur sm:px-8"><div className="flex min-w-0 items-center gap-3"><button className="relative rounded-md p-2 hover:bg-muted lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-menu"><Menu size={20} />{unreadNotices > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-destructive ring-2 ring-background" />}</button><div className="hidden sm:block lg:hidden"><Logo /></div><span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-[0.14em] text-accent-foreground" data-testid="badge-panel-title" title={panel.title}><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span className="hidden truncate sm:inline">{panel.title}</span><span className="truncate sm:hidden">{panel.short}</span></span></div><div className="ml-auto flex shrink-0 items-center gap-3"><span className="hidden font-mono-ui text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:block">Institute desk / 01</span><span className="h-2 w-2 rounded-full bg-accent" title="Workspace connected" /></div></header><main className="mx-auto max-w-[1500px] p-5 sm:p-8">{children}</main></div>
   </div>;
 }
 
@@ -554,7 +722,8 @@ type AdminBranch = {
   name: string;
   username: string | null;
   plainPassword: string | null;
-  modules: { id: string; name: string }[];
+  loginCode: string;
+  modules: { id: string; name: string; loginCode: string }[];
 };
 
 function AdminModulesPage() {
@@ -599,7 +768,6 @@ function AdminBranchesPage() {
   const [editUsername, setEditUsername] = useState('');
   const [editPassword, setEditPassword] = useState('');
   const [editPasswordShown, setEditPasswordShown] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [editError, setEditError] = useState('');
   const [editBusy, setEditBusy] = useState(false);
   const [revealedIds, setRevealedIds] = useState<number[]>([]);
@@ -611,9 +779,15 @@ function AdminBranchesPage() {
   const [branchUserId, setBranchUserId] = useState('');
   const [branchPassword, setBranchPassword] = useState('');
   const [branchPasswordShown, setBranchPasswordShown] = useState(false);
+  const [branchLoginCode, setBranchLoginCode] = useState(() => randomLoginCode());
+  const [editLoginCode, setEditLoginCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [warnBranch, setWarnBranch] = useState<{ id: number; name: string } | null>(null);
+  const [pwdAction, setPwdAction] = useState<{ kind: 'edit-branch' | 'delete-branch'; branchId: number; name: string } | null>(null);
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [pwdError, setPwdError] = useState('');
 
   const createBranch = (event: FormEvent) => {
     event.preventDefault();
@@ -623,24 +797,29 @@ function AdminBranchesPage() {
       setError('Password must be at least 6 characters.');
       return;
     }
+    const codeIssue = loginCodeError(branchLoginCode);
+    if (codeIssue) {
+      setError(codeIssue);
+      return;
+    }
     setBusy(true); setError(''); setNotice('');
     fetch('/api/admin/branches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, username: branchUserId.trim() || undefined, password: branchUserId.trim() ? branchPassword : undefined }),
+      body: JSON.stringify({ name, username: branchUserId.trim() || undefined, password: branchUserId.trim() ? branchPassword : undefined, loginCode: branchLoginCode.trim() }),
     })
-      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then((res) => res.json().then((data: { error?: string; id?: number }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error(data?.error ?? 'create failed');
         setNotice(`Branch "${name}" created${branchUserId.trim() ? ` with desk login "${branchUserId.trim()}"` : ''}.`);
-        setBranchName(''); setBranchUserId(''); setBranchPassword('');
+        setBranchName(''); setBranchUserId(''); setBranchPassword(''); setBranchLoginCode(randomLoginCode());
         void refreshBranchCatalog().then(() => loadAdminBranches());
       })
       .catch((err: Error) => setError(err.message === 'create failed' ? 'Could not create that branch.' : err.message))
       .finally(() => setBusy(false));
   };
 
-  const saveEditBranch = (branchId: number) => {
+  const requestSaveEditBranch = (branchId: number) => {
     if (!editName.trim()) {
       setEditError('Enter a name.');
       return;
@@ -649,37 +828,44 @@ function AdminBranchesPage() {
       setEditError('Password must be at least 6 characters.');
       return;
     }
-    setEditBusy(true); setEditError('');
-    fetch(`/api/admin/branches/${branchId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: editName.trim(), username: editUsername.trim() }),
-    })
-      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
-        const done = () => {
-          setEditingId(null); setEditError('');
-          setNotice(`Branch updated.`);
-          void refreshBranchCatalog().then(() => loadAdminBranches());
-        };
-        if (editPassword.trim()) {
-          return fetch(`/api/admin/branches/${branchId}/credential`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: editPassword }),
-          })
-            .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
-            .then(({ ok, data }) => {
-              if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not update password.');
-              done();
-            });
-        }
-        done();
-        return;
-      })
-      .catch((err: Error) => setEditError(err.message))
-      .finally(() => setEditBusy(false));
+    const codeIssue = loginCodeError(editLoginCode);
+    if (codeIssue) {
+      setEditError(codeIssue);
+      return;
+    }
+    setEditError('');
+    setPwdError('');
+    setPwdAction({ kind: 'edit-branch', branchId, name: editName.trim() });
+  };
+
+  const saveEditBranch = async (branchId: number, adminPassword: string) => {
+    setPwdBusy(true); setPwdError('');
+    try {
+      const res = await fetch(`/api/admin/branches/${branchId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editName.trim(), username: editUsername.trim(), loginCode: editLoginCode.trim(), password: adminPassword }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data?.error ?? 'Could not save.');
+      if (editPassword.trim()) {
+        const credRes = await fetch(`/api/admin/branches/${branchId}/credential`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: editPassword, adminPassword }),
+        });
+        const credData = (await credRes.json()) as { error?: string };
+        if (!credRes.ok) throw new Error(credData?.error ?? 'Could not update password.');
+      }
+      setEditingId(null); setEditError('');
+      setNotice('Branch updated.');
+      setPwdAction(null);
+      void refreshBranchCatalog().then(() => loadAdminBranches());
+    } catch (err) {
+      setPwdError(err instanceof Error ? err.message : 'Could not save.');
+    } finally {
+      setPwdBusy(false);
+    }
   };
 
   const confirmReveal = () => {
@@ -699,17 +885,27 @@ function AdminBranchesPage() {
       .finally(() => setConfirmBusy(false));
   };
 
-  const confirmDeleteBranch = (branchId: number) => {
-    setEditBusy(true); setEditError('');
-    fetch(`/api/admin/branches/${branchId}`, { method: 'DELETE' })
+  const deleteBranch = (branchId: number, adminPassword: string) => {
+    setPwdBusy(true); setPwdError('');
+    fetch(`/api/admin/branches/${branchId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: adminPassword }),
+    })
       .then((res) => (res.ok ? undefined : res.json().then((data: { error?: string }) => { throw new Error((data as { error?: string })?.error ?? 'delete failed'); })))
       .then(() => {
-        setDeletingId(null);
+        setPwdAction(null);
         setNotice('Branch deleted.');
         void refreshBranchCatalog().then(() => loadAdminBranches());
       })
-      .catch((err: Error) => setEditError(err.message))
-      .finally(() => setEditBusy(false));
+      .catch((err: Error) => setPwdError(err.message))
+      .finally(() => setPwdBusy(false));
+  };
+
+  const confirmPassword = (password: string) => {
+    if (!pwdAction) return;
+    if (pwdAction.kind === 'edit-branch') saveEditBranch(pwdAction.branchId, password);
+    else if (pwdAction.kind === 'delete-branch') deleteBranch(pwdAction.branchId, password);
   };
 
   return <>
@@ -718,10 +914,10 @@ function AdminBranchesPage() {
       <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Create branch</h3>
       <form onSubmit={createBranch} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <label className="grid gap-1.5 text-sm font-medium">Name
-          <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. HASC" data-testid="input-branch-name" />
+          <Input value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="Enter branch name" data-testid="input-branch-name" />
         </label>
         <label className="grid gap-1.5 text-sm font-medium">User ID
-          <Input value={branchUserId} onChange={(e) => setBranchUserId(e.target.value)} placeholder="e.g. hasc" autoComplete="off" data-testid="input-branch-user-id" />
+          <Input value={branchUserId} onChange={(e) => setBranchUserId(e.target.value)} placeholder="Enter user ID" autoComplete="off" data-testid="input-branch-user-id" />
         </label>
         <label className="grid gap-1.5 text-sm font-medium">Password
           <span className="flex items-center gap-2">
@@ -729,8 +925,11 @@ function AdminBranchesPage() {
             <button type="button" onClick={() => setBranchPasswordShown((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid="button-toggle-branch-password">{branchPasswordShown ? <EyeOff size={15} /> : <Eye size={15} />}</button>
           </span>
         </label>
+        <div className="sm:col-span-2 lg:col-span-2">
+          <LoginCodeField value={branchLoginCode} onChange={setBranchLoginCode} testId="input-branch-login-code" />
+        </div>
         <div className="flex items-end">
-          <Button type="submit" disabled={busy || !branchName.trim()} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
+          <Button type="submit" disabled={busy || !branchName.trim() || !!loginCodeError(branchLoginCode)} data-testid="button-create-branch"><Plus size={15} /> Create branch</Button>
         </div>
       </form>
       {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-create-branch-error">{error}</p>}
@@ -742,10 +941,10 @@ function AdminBranchesPage() {
       {branches == null
         ? [1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)
         : branches.map((branch, index) => (
-          <section key={branch.id} className="relative rounded-xl border border-border bg-card p-5 space-y-4" data-testid={`card-branch-${branch.id}`}>
+          <section key={branch.id} className={`relative rounded-xl border border-border bg-card p-5 space-y-4 ${editingId === branch.id ? 'sm:col-span-2 lg:col-span-3' : ''}`} data-testid={`card-branch-${branch.id}`}>
             <div className="absolute right-3 top-3 flex items-center gap-1">
-              <button type="button" onClick={() => { setEditingId(branch.id); setEditName(branch.name); setEditUsername(branch.username ?? ''); setEditError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit" aria-label="Edit" data-testid={`button-edit-branch-${branch.id}`}><Pencil size={15} /></button>
-              <button type="button" onClick={() => setDeletingId(branch.id)} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete" aria-label="Delete" data-testid={`button-delete-branch-${branch.id}`}><Trash2 size={15} /></button>
+              <button type="button" onClick={() => { setEditingId(branch.id); setEditName(branch.name); setEditUsername(branch.username ?? ''); setEditLoginCode(branch.loginCode ?? ''); setEditError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit" aria-label="Edit" data-testid={`button-edit-branch-${branch.id}`}><Pencil size={15} /></button>
+              <button type="button" onClick={() => setWarnBranch({ id: branch.id, name: branch.name })} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete" aria-label="Delete" data-testid={`button-delete-branch-${branch.id}`}><Trash2 size={15} /></button>
             </div>
             <div className="pr-20">
               <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">{String(index + 1).padStart(2, '0')}</p>
@@ -754,37 +953,27 @@ function AdminBranchesPage() {
                 <Link href={`/admin/branch/${branch.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" data-testid={`link-open-branch-${branch.id}`}>Open <ArrowRight size={12} /></Link>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">{branch.modules.length} module{branch.modules.length === 1 ? '' : 's'} · User ID: {branch.username ?? 'not set'}</p>
-            </div>
-            {editingId === branch.id && (
-              <form onSubmit={(e) => { e.preventDefault(); saveEditBranch(branch.id); }} className="mt-3 grid gap-3 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-branch-${branch.id}`}>
+              {editingId === branch.id && (
+                <form onSubmit={(e) => { e.preventDefault(); requestSaveEditBranch(branch.id); }} className="mt-3 grid gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:grid-cols-2" data-testid={`form-edit-branch-${branch.id}`}>
                 <label className="grid gap-1 text-xs font-medium">Name
                   <Input value={editName} onChange={(e) => setEditName(e.target.value)} data-testid={`input-branch-name-${branch.id}`} />
                 </label>
                 <label className="grid gap-1 text-xs font-medium">User ID
                   <Input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} data-testid={`input-branch-username-${branch.id}`} />
                 </label>
-                <label className="grid gap-1 text-xs font-medium">Password <span className="font-normal text-muted-foreground">(leave empty to keep the current one)</span>
+                <div className="sm:col-span-2"><LoginCodeField value={editLoginCode} onChange={setEditLoginCode} testId={`input-branch-login-code-${branch.id}`} /></div>
+                <label className="grid gap-1 text-xs font-medium sm:col-span-2">Password <span className="font-normal text-muted-foreground">(leave empty to keep the current one)</span>
                   <div className="relative">
                     <Input type={editPasswordShown ? 'text' : 'password'} value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="New password" minLength={6} autoComplete="new-password" data-testid={`input-branch-password-${branch.id}`} />
                     <button type="button" onClick={() => setEditPasswordShown((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid={`button-toggle-branch-password-${branch.id}`}>{editPasswordShown ? <EyeOff size={14} /> : <Eye size={14} />}</button>
                   </div>
                 </label>
-                {editError && <p className="text-xs text-destructive" data-testid={`status-edit-branch-error-${branch.id}`}>{editError}</p>}
-                <div className="flex items-center gap-2">
-                  <Button type="submit" size="sm" disabled={editBusy || !editName.trim()} data-testid={`button-save-branch-edit-${branch.id}`}>Save</Button>
+                {editError && <p className="text-xs text-destructive sm:col-span-2" data-testid={`status-edit-branch-error-${branch.id}`}>{editError}</p>}
+                <div className="flex items-center gap-2 sm:col-span-2">
+                  <Button type="submit" size="sm" disabled={editBusy || !editName.trim() || !!loginCodeError(editLoginCode)} data-testid={`button-save-branch-edit-${branch.id}`}>Save</Button>
                   <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setEditingId(null); setEditError(''); }}>Cancel</button>
                 </div>
               </form>
-            )}
-            {deletingId === branch.id && (
-              <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3" data-testid={`confirm-delete-branch-${branch.id}`}>
-                <p className="text-sm font-semibold text-destructive">Delete branch?</p>
-                <p className="mt-1 text-xs text-muted-foreground">This removes its login and module links. Students already enrolled are kept, but their branch becomes unassigned.</p>
-                <div className="mt-3 flex items-center gap-2">
-                  <Button type="button" size="sm" variant="destructive" onClick={() => confirmDeleteBranch(branch.id)} data-testid={`button-confirm-delete-${branch.id}`}>Delete</Button>
-                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => setDeletingId(null)}>Cancel</button>
-                </div>
-              </div>
             )}
             <div className="mt-4 border-t border-border/70 pt-4 space-y-2">
               <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Desk password</p>
@@ -792,7 +981,9 @@ function AdminBranchesPage() {
                 Password: <b className="text-foreground" data-testid={`text-branch-password-${branch.id}`}>{revealedIds.includes(branch.id) ? (branch.plainPassword ?? '—') : '••••••••'}</b>{' '}
                 <button type="button" onClick={() => { if (revealedIds.includes(branch.id)) { setRevealedIds((ids) => ids.filter((id) => id !== branch.id)); } else { setPendingRevealId(branch.id); setConfirmPwd(''); setConfirmError(''); } }} className="rounded p-1 align-middle text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-${branch.id}`} aria-label={revealedIds.includes(branch.id) ? 'Hide password' : 'Reveal password'}>{revealedIds.includes(branch.id) ? <EyeOff size={13} /> : <Eye size={13} />}</button>
               </p>
+              <LoginLinkActions code={branch.loginCode} testId={`branch-${branch.id}`} fullWidth />
             </div>
+          </div>
           </section>
         ))}
       {pendingRevealId !== null && (
@@ -813,6 +1004,41 @@ function AdminBranchesPage() {
       )}
       {branches != null && branches.length === 0 && <p className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No branches yet — create your first one above.</p>}
     </div>
+    {warnBranch && (
+      <DeleteImpactDialog
+        open
+        kind="branch"
+        id={warnBranch.id}
+        name={warnBranch.name}
+        onCancel={() => setWarnBranch(null)}
+        onContinue={() => {
+          setPwdError('');
+          setPwdAction({ kind: 'delete-branch', branchId: warnBranch.id, name: warnBranch.name });
+          setWarnBranch(null);
+        }}
+      />
+    )}
+    <ConfirmAdminPassword
+      open={pwdAction?.kind === 'edit-branch'}
+      title="Confirm to edit this branch"
+      message={`Enter your admin password to save the changes to “${pwdAction?.name ?? ''}”.`}
+      confirmLabel="Save changes"
+      busy={pwdBusy}
+      externalError={pwdError}
+      onCancel={() => { setPwdAction(null); setPwdError(''); }}
+      onConfirm={confirmPassword}
+    />
+    <ConfirmAdminPassword
+      open={pwdAction?.kind === 'delete-branch'}
+      title="Confirm to delete this branch"
+      message={`Enter your admin password to permanently delete “${pwdAction?.name ?? ''}”.`}
+      confirmLabel="Delete branch"
+      destructive
+      busy={pwdBusy}
+      externalError={pwdError}
+      onCancel={() => { setPwdAction(null); setPwdError(''); }}
+      onConfirm={confirmPassword}
+    />
   </>;
 }
 
@@ -944,7 +1170,7 @@ function AdminBranchLoginCard({ branch, onChanged }: { branch: BranchSummary; on
         </div>
       ) : (
         <form onSubmit={saveCredential} className="mt-3 grid gap-2 sm:max-w-sm" data-testid={`form-branch-credential-${branch.id}`}>
-          <Input value={credUserId} onChange={(e) => setCredUserId(e.target.value)} placeholder="User ID (e.g. hasc)" data-testid={`input-branch-username-${branch.id}`} />
+          <Input value={credUserId} onChange={(e) => setCredUserId(e.target.value)} placeholder="Enter user ID" data-testid={`input-branch-username-${branch.id}`} />
           <div className="flex items-center gap-2">
             <Input type={credShow ? 'text' : 'password'} value={credPassword} onChange={(e) => setCredPassword(e.target.value)} placeholder="Password" className="flex-1" data-testid={`input-branch-password-${branch.id}`} />
             <button type="button" onClick={() => setCredShow((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" data-testid={`button-toggle-branch-password-input-${branch.id}`}>{credShow ? <EyeOff size={15} /> : <Eye size={15} />}</button>
@@ -952,7 +1178,6 @@ function AdminBranchLoginCard({ branch, onChanged }: { branch: BranchSummary; on
           <Button type="submit" size="sm" disabled={busy || !credUserId.trim() || credPassword.length < 6} data-testid={`button-save-branch-login-${branch.id}`}><Plus size={14} /> Create login</Button>
         </form>
       )}
-      <p className="mt-3 text-xs text-muted-foreground">Branch login page: <span className="font-mono font-semibold text-foreground">/{branch.name.toLowerCase().replace(/\s+/g, '-')}</span></p>
       {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid={`status-branch-login-error-${branch.id}`}>{error}</p>}
       {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid={`status-branch-login-success-${branch.id}`}>{notice}</p>}
     </section>
@@ -981,14 +1206,18 @@ function AdminBranchPage() {
   const branchId = Number(params.id);
   const [branches, setBranches] = useState<AdminBranch[] | null>(null);
   const [moduleName, setModuleName] = useState('');
-  const [moduleSlug, setModuleSlug] = useState('');
+  const [moduleLoginCode, setModuleLoginCode] = useState(() => randomLoginCode());
   const [addingModule, setAddingModule] = useState(false);
   const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
   const [editModuleName, setEditModuleName] = useState('');
-  const [deletingModuleId, setDeletingModuleId] = useState<string | null>(null);
+  const [editModuleLoginCode, setEditModuleLoginCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [warnModule, setWarnModule] = useState<{ id: string; name: string } | null>(null);
+  const [pwdAction, setPwdAction] = useState<{ kind: 'edit-module' | 'delete-module'; moduleId?: string; name: string } | null>(null);
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [pwdError, setPwdError] = useState('');
 
   const loadBranches = () => {
     fetch('/api/admin/branches')
@@ -1002,55 +1231,76 @@ function AdminBranchPage() {
   const createModule = (event: FormEvent) => {
     event.preventDefault();
     if (!moduleName.trim() || !branch) return;
+    const codeIssue = loginCodeError(moduleLoginCode);
+    if (codeIssue) { setError(codeIssue); return; }
     setBusy(true); setError(''); setNotice('');
     fetch('/api/admin/modules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branchId: branch.id, name: moduleName.trim(), slug: moduleSlug.trim() }),
+      body: JSON.stringify({ branchId: branch.id, name: moduleName.trim(), loginCode: moduleLoginCode.trim() }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'create failed');
         const created = data as { name?: string; id?: string };
         setNotice(`Module "${created.name ?? moduleName.trim()}" added${created.id ? ` — desk /${created.id}` : ''}.`);
-        setModuleName(''); setModuleSlug(''); setAddingModule(false);
+        setModuleName(''); setModuleLoginCode(randomLoginCode()); setAddingModule(false);
         void refreshBranchCatalog().then(loadBranches);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
   };
 
-  const renameModule = (moduleId: string) => (event: FormEvent) => {
+  const requestRenameModule = (moduleId: string) => (event: FormEvent) => {
     event.preventDefault();
     if (!editModuleName.trim()) return;
-    setBusy(true); setError(''); setNotice('');
+    const codeIssue = loginCodeError(editModuleLoginCode);
+    if (codeIssue) { setError(codeIssue); return; }
+    setError('');
+    setPwdError('');
+    setPwdAction({ kind: 'edit-module', moduleId, name: editModuleName.trim() });
+  };
+
+  const renameModule = (moduleId: string, adminPassword: string) => {
+    setPwdBusy(true); setPwdError('');
     fetch(`/api/admin/modules/${encodeURIComponent(moduleId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: editModuleName.trim() }),
+      body: JSON.stringify({ name: editModuleName.trim(), loginCode: editModuleLoginCode.trim(), password: adminPassword }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
         setEditingModuleId(null);
         setNotice('Module updated.');
+        setPwdAction(null);
         void refreshBranchCatalog().then(loadBranches);
       })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setBusy(false));
+      .catch((err: Error) => setPwdError(err.message))
+      .finally(() => setPwdBusy(false));
   };
 
-  const confirmDeleteModule = (moduleId: string) => {
-    setBusy(true); setError(''); setNotice('');
-    fetch(`/api/admin/modules/${encodeURIComponent(moduleId)}`, { method: 'DELETE' })
+  const deleteModule = (moduleId: string, adminPassword: string) => {
+    setPwdBusy(true); setPwdError('');
+    fetch(`/api/admin/modules/${encodeURIComponent(moduleId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: adminPassword }),
+    })
       .then((res) => (res.ok ? undefined : res.json().then((data: { error?: string }) => { throw new Error((data as { error?: string })?.error ?? 'delete failed'); })))
       .then(() => {
-        setDeletingModuleId(null);
         setNotice('Module deleted.');
+        setPwdAction(null);
         void refreshBranchCatalog().then(loadBranches);
       })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setBusy(false));
+      .catch((err: Error) => setPwdError(err.message))
+      .finally(() => setPwdBusy(false));
+  };
+
+  const confirmPassword = (password: string) => {
+    if (!pwdAction) return;
+    if (pwdAction.kind === 'edit-module') renameModule(pwdAction.moduleId ?? '', password);
+    else if (pwdAction.kind === 'delete-module') deleteModule(pwdAction.moduleId ?? '', password);
   };
 
   if (branches != null && !branch) {
@@ -1061,58 +1311,48 @@ function AdminBranchPage() {
   }
 
   return <>
-    <PageHeader kicker="Admin / branches" title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} />
+    <PageHeader kicker="Admin / branches" title={branch ? branch.name : 'Branch'} detail={branch ? `${branch.modules.length} module${branch.modules.length === 1 ? '' : 's'} in this branch.` : 'Loading…'} action={branch ? <LoginLinkActions code={branch.loginCode} testId={`branch-header-${branch.id}`} /> : undefined} />
     {error && <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-page-error">{error}</p>}
     {notice && <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-page-success">{notice}</p>}
     <section className="rounded-xl border border-border bg-card p-5" data-testid={`card-branch-modules-${branch?.id ?? 'loading'}`}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Modules</h3>
-        <button type="button" onClick={() => { setAddingModule((v) => !v); setModuleName(''); setModuleSlug(''); setError(''); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline" data-testid="button-branch-add-module-toggle"><Plus size={13} /> Add module</button>
+          <button type="button" onClick={() => { setAddingModule((v) => !v); setModuleName(''); setModuleLoginCode(randomLoginCode()); setError(''); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline" data-testid="button-branch-add-module-toggle"><Plus size={13} /> Add module</button>
       </div>
       {addingModule && (
         <form onSubmit={createModule} className="mt-4 flex flex-wrap items-end gap-3" data-testid="form-add-module">
           <label className="grid gap-1.5 text-sm font-medium">Module name
-            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Artificial Intelligence" autoFocus className="w-64" data-testid="input-module-name" />
+            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="Enter module name" autoFocus className="w-64" data-testid="input-module-name" />
           </label>
-          <label className="grid gap-1.5 text-sm font-medium">Desk name (URL)
-            <Input value={moduleSlug} onChange={(e) => setModuleSlug(e.target.value)} placeholder="e.g. ai-lab" className="w-44" data-testid="input-module-slug" />
-          </label>
-          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
-          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleSlug(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
-          <p className="w-full text-xs text-muted-foreground">The desk opens at <span className="font-semibold text-foreground">/admin/branch/{branch?.id ?? '—'}/module/&lt;desk name&gt;</span>. Leave it blank to build it from the module name.</p>
+          <div className="min-w-[16rem] flex-1">
+            <LoginCodeField value={moduleLoginCode} onChange={setModuleLoginCode} testId="input-module-login-code" />
+          </div>
+          <Button type="submit" size="sm" disabled={busy || !moduleName.trim() || !!loginCodeError(moduleLoginCode)} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
+          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleLoginCode(randomLoginCode()); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
         </form>
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(branch?.modules ?? []).map((mod) => (
           <div key={mod.id} className="relative flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
             <div className="absolute right-2 top-2 flex items-center gap-0.5">
-              <button type="button" onClick={() => { setEditingModuleId(mod.id); setEditModuleName(mod.name); setDeletingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit module" aria-label="Edit module" data-testid={`button-edit-module-${mod.id}`}><Pencil size={14} /></button>
-              <button type="button" onClick={() => { setDeletingModuleId(mod.id); setEditingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete module" aria-label="Delete module" data-testid={`button-delete-module-${mod.id}`}><Trash2 size={14} /></button>
+              <button type="button" onClick={() => { setEditingModuleId(mod.id); setEditModuleName(mod.name); setEditModuleLoginCode(mod.loginCode ?? ''); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit module" aria-label="Edit module" data-testid={`button-edit-module-${mod.id}`}><Pencil size={14} /></button>
+              <button type="button" onClick={() => { setWarnModule({ id: mod.id, name: mod.name }); setEditingModuleId(null); setError(''); }} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete module" aria-label="Delete module" data-testid={`button-delete-module-${mod.id}`}><Trash2 size={14} /></button>
             </div>
             <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</span>
             <h3 className="mt-2 pr-12 font-display text-lg font-bold leading-tight">{mod.name}</h3>
-            <p className="mt-0.5 font-mono-ui text-xs text-muted-foreground">Desk: /{mod.id}</p>
-            <Link href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="mt-3 inline-flex w-fit items-center gap-1.5 font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground hover:text-primary" data-testid={`link-open-module-${mod.id}`}>Open module <ArrowRight size={13} /></Link>
+            <div className="mt-2"><LoginLinkActions code={mod.loginCode} testId={`module-${mod.id}`} /></div>
+            <Link href={branch ? `/admin/branch/${branch.id}/module/${mod.id}` : `#`} className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-bold text-foreground hover:border-accent hover:text-primary" data-testid={`link-open-module-${mod.id}`}>Open module <ArrowRight size={13} /></Link>
             {editingModuleId === mod.id && (
-              <form onSubmit={renameModule(mod.id)} className="mt-3 grid gap-2 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-module-${mod.id}`}>
+              <form onSubmit={requestRenameModule(mod.id)} className="mt-3 grid gap-2 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-module-${mod.id}`}>
                 <label className="grid gap-1 text-xs font-medium">Module name
                   <Input value={editModuleName} onChange={(e) => setEditModuleName(e.target.value)} data-testid={`input-module-name-${mod.id}`} />
                 </label>
+                <LoginCodeField value={editModuleLoginCode} onChange={setEditModuleLoginCode} testId={`input-module-login-code-${mod.id}`} />
                 <div className="flex items-center gap-2">
-                  <Button type="submit" size="sm" disabled={busy || !editModuleName.trim()} data-testid={`button-save-module-${mod.id}`}>Save</Button>
+                  <Button type="submit" size="sm" disabled={busy || !editModuleName.trim() || !!loginCodeError(editModuleLoginCode)} data-testid={`button-save-module-${mod.id}`}>Save</Button>
                   <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setEditingModuleId(null); setError(''); }}>Cancel</button>
                 </div>
               </form>
-            )}
-            {deletingModuleId === mod.id && (
-              <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3" data-testid={`confirm-delete-module-${mod.id}`}>
-                <p className="text-sm font-semibold text-destructive">Delete module?</p>
-                <p className="mt-1 text-xs text-muted-foreground">Removes this module from the branch. A module that still has teachers or records cannot be deleted.</p>
-                <div className="mt-3 flex items-center gap-2">
-                  <Button type="button" size="sm" variant="destructive" onClick={() => confirmDeleteModule(mod.id)} disabled={busy} data-testid={`button-confirm-delete-module-${mod.id}`}>Delete</Button>
-                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => setDeletingModuleId(null)}>Cancel</button>
-                </div>
-              </div>
             )}
           </div>
         ))}
@@ -1120,6 +1360,41 @@ function AdminBranchPage() {
         {branches == null && [1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}
       </div>
     </section>
+    {warnModule && (
+      <DeleteImpactDialog
+        open
+        kind="module"
+        id={warnModule.id}
+        name={warnModule.name}
+        onCancel={() => setWarnModule(null)}
+        onContinue={() => {
+          setPwdError('');
+          setPwdAction({ kind: 'delete-module', moduleId: warnModule.id, name: warnModule.name });
+          setWarnModule(null);
+        }}
+      />
+    )}
+    <ConfirmAdminPassword
+      open={pwdAction?.kind === 'edit-module'}
+      title="Confirm to edit this module"
+      message={`Enter your admin password to save the changes to “${pwdAction?.name ?? ''}”.`}
+      confirmLabel="Save changes"
+      busy={pwdBusy}
+      externalError={pwdError}
+      onCancel={() => { setPwdAction(null); setPwdError(''); }}
+      onConfirm={confirmPassword}
+    />
+    <ConfirmAdminPassword
+      open={pwdAction?.kind === 'delete-module'}
+      title="Confirm to delete this module"
+      message={`Enter your admin password to permanently delete “${pwdAction?.name ?? ''}”.`}
+      confirmLabel="Delete module"
+      destructive
+      busy={pwdBusy}
+      externalError={pwdError}
+      onCancel={() => { setPwdAction(null); setPwdError(''); }}
+      onConfirm={confirmPassword}
+    />
   </>;
 }
 
@@ -1242,6 +1517,22 @@ function ModuleDetailPage({ branchId }: { branchId?: number }) {
   const [confirmError, setConfirmError] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [moduleLoginCode, setModuleLoginCode] = useState<string | null>(null);
+
+  // The module's own login link lives on the branches payload; read it so this page can
+  // offer the same "open / copy" controls as the branch screens.
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/admin/branches')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: AdminBranch[]) => {
+        if (!alive) return;
+        const found = data.flatMap((b) => b.modules).find((m) => m.id === moduleKey);
+        setModuleLoginCode(found?.loginCode ?? null);
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [moduleKey]);
 
   // Filter teachers by branch if branchId is provided
   const moduleTeachers = (teachers.data ?? []).filter((t) => t.module === moduleKey);
@@ -1321,124 +1612,9 @@ function ModuleDetailPage({ branchId }: { branchId?: number }) {
   if (!meta) return <PageHeader kicker="Admin / module detail" title="Module not found." detail="That module does not exist." />;
 
   return <>
-    <PageHeader kicker="Admin / module detail" title={meta.name} detail={`Manage and oversee the ${meta.name.toLowerCase()} module.`} />
+    <PageHeader kicker="Admin / module detail" title={meta.name} detail={`Manage and oversee the ${meta.name.toLowerCase()} module.`} action={moduleLoginCode ? <LoginLinkActions code={moduleLoginCode} testId={`module-detail-${moduleKey}`} /> : undefined} />
     {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="banner-module-error">{error}</div>}
     {success && <div className="mb-4 rounded-md bg-accent/10 px-4 py-3 text-sm text-primary" data-testid="banner-module-success">{success}</div>}
-
-    {/* Profiles only — no credentials here. Those live in the login section below. */}
-    <section className="rounded-xl border border-border bg-card p-6" data-testid="teacher-profile-block">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module team</p>
-          <h2 className="mt-1 font-display text-2xl font-bold">Instructors</h2>
-          <p className="mt-2 max-w-md text-sm text-muted-foreground">Who teaches the {moduleShort[moduleKey]} module.</p>
-        </div>
-        <span className="rounded-full bg-muted px-2.5 py-1 font-mono-ui text-[10px] text-muted-foreground" data-testid="count-module-teachers">{moduleTeachers.length} instructor{moduleTeachers.length === 1 ? '' : 's'}</span>
-      </div>
-
-      {teachers.isLoading ? (
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">{[1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />)}</div>
-      ) : moduleTeachers.length === 0 ? (
-        <div className="mt-5"><EmptyState title="Not assigned yet" detail="Create the first login for this module below." icon={GraduationCap} /></div>
-      ) : (
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          {moduleTeachers.map((t) => {
-            const name = t.displayName || t.username;
-            return <div key={t.id} className="flex items-center gap-4 rounded-xl border border-border p-4" data-testid={`row-module-teacher-${t.id}`}>
-              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-accent font-display text-lg font-bold text-primary">{initials(name)}</span>
-              <div className="min-w-0">
-                <p className="truncate text-sm"><span className="text-muted-foreground">Name: </span><span className="font-display text-lg font-bold" data-testid={`text-teacher-name-${t.id}`}>{name}</span></p>
-                <p className="mt-0.5 truncate text-sm"><span className="text-muted-foreground">Designation: </span><span className="font-semibold text-primary" data-testid={`text-teacher-designation-${t.id}`}>{designation}</span></p>
-              </div>
-            </div>;
-          })}
-        </div>
-      )}
-    </section>
-
-    <section className="mt-6 rounded-xl border border-border bg-card p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login access</p>
-          <h2 className="mt-1 font-display text-2xl font-bold">Teacher logins</h2>
-          <p className="mt-2 max-w-md text-sm text-muted-foreground">Pick any name, user ID and password. Seeing a password, changing it or deleting a login asks for your admin password.</p>
-        </div>
-        {!showForm && <Button onClick={() => { setForm({ displayName: '', username: '', password: '' }); setShowForm(true); setShowPwd(false); }} data-testid="button-create-login"><Plus size={16} /> Create Login</Button>}
-      </div>
-
-      {showForm && (
-        <form onSubmit={handleCreate} className="mt-5 grid max-w-lg gap-4 border-t border-border pt-5" data-testid="form-create-login">
-          <Field label="Name" value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} placeholder="e.g. Ajay" minLength={2} required data-testid="input-login-name" />
-          <Field label="User ID" value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} placeholder="e.g. ajay.ai" minLength={3} required data-testid="input-login-username" />
-          <div className="relative">
-            <Field label="Password" type={showPwd ? 'text' : 'password'} value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} minLength={6} required data-testid="input-login-password" />
-            <button type="button" onClick={() => setShowPwd((v) => !v)} className="absolute right-2 top-[34px] rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid="button-toggle-pwd">
-              {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-          <p className="text-xs text-muted-foreground">Designation is set automatically: <span className="font-semibold text-primary">{designation}</span></p>
-          <div className="flex gap-2">
-            <Button type="submit" disabled={create.isPending} data-testid="button-submit-login">{create.isPending ? 'Saving…' : 'Create Login'}</Button>
-            <Button type="button" variant="outline" onClick={() => { setShowForm(false); setForm({ displayName: '', username: '', password: '' }); setShowPwd(false); }} data-testid="button-cancel-login">Cancel</Button>
-          </div>
-        </form>
-      )}
-
-      {justCreated && (
-        <div className="mt-5 rounded-lg border border-accent/50 bg-accent/10 p-4" data-testid="banner-created-creds">
-          <div className="flex items-start justify-between gap-3">
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Login created — save these details now</p>
-            <button type="button" onClick={() => { setJustCreated(null); setJustCreatedShown(false); }} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Dismiss" data-testid="button-dismiss-created"><X size={14} /></button>
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            <div className="text-sm"><span className="text-muted-foreground">Name: </span><span className="font-semibold" data-testid="created-name">{justCreated.displayName}</span></div>
-            <div className="truncate text-sm"><span className="text-muted-foreground">User ID: </span><span className="font-mono-ui font-semibold" data-testid="created-username">{justCreated.username}</span></div>
-            <div className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">Password: </span>
-              <span className="font-mono-ui font-semibold" data-testid="created-password">{justCreatedShown ? justCreated.password : '••••••••'}</span>
-              <button type="button" onClick={() => setJustCreatedShown((v) => !v)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={justCreatedShown ? 'Hide password' : 'See password'} data-testid="button-eye-created">{justCreatedShown ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {!teachers.isLoading && moduleTeachers.length > 0 && (
-        <div className="mt-5 grid gap-3 border-t border-border pt-5">
-          {moduleTeachers.map((t) => {
-            const isRevealed = revealedIds.includes(t.id);
-            const name = t.displayName || t.username;
-            return <div key={t.id} className="rounded-xl border border-border p-4" data-testid={`row-module-login-${t.id}`}>
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-                <p className="min-w-[8rem] truncate text-sm font-semibold" data-testid={`text-login-owner-${t.id}`}>{name}</p>
-                <p className="truncate font-mono-ui text-xs"><span className="text-muted-foreground">User ID: </span><span className="font-bold text-foreground" data-testid={`text-teacher-username-${t.id}`}>{t.username}</span></p>
-                <p className="flex items-center gap-2 font-mono-ui text-xs"><span className="text-muted-foreground">Password: </span>
-                  <span className="font-bold text-foreground" data-testid={`text-teacher-password-${t.id}`}>{isRevealed ? (t.plainPassword ?? '—') : '••••••••'}</span>
-                  <button type="button" onClick={() => { if (isRevealed) { setRevealedIds((ids) => ids.filter((id) => id !== t.id)); return; } setPending({ type: 'reveal', teacher: t }); }} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={isRevealed ? 'Hide password' : 'See password'} data-testid={`button-eye-teacher-${t.id}`}>{isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                </p>
-                <div className="ml-auto flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => { if (pwdEditId === t.id) { closePwdEdit(); return; } setPending({ type: 'password', teacher: t }); }} disabled={update.isPending} data-testid={`button-change-password-${t.id}`}><KeyRound size={14} /> Change password</Button>
-                  <Button variant="outline" size="sm" onClick={() => setPending({ type: 'delete', teacher: t })} disabled={remove.isPending} data-testid={`button-delete-teacher-${t.id}`}><Trash2 size={14} /> Delete</Button>
-                </div>
-              </div>
-
-              {pwdEditId === t.id && (
-                <form onSubmit={(e) => handleChangePassword(e, t)} className="mt-4 grid max-w-sm gap-3 border-t border-border pt-4" data-testid={`form-change-password-${t.id}`}>
-                  <div className="relative">
-                    <Field label="New password" type={newPwdShown ? 'text' : 'password'} value={newPwd} onChange={(e) => setNewPwd(e.target.value)} minLength={6} autoFocus required data-testid={`input-new-password-${t.id}`} />
-                    <button type="button" onClick={() => setNewPwdShown((v) => !v)} className="absolute right-2 top-[34px] rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid={`button-toggle-new-password-${t.id}`}>
-                      {newPwdShown ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" disabled={update.isPending || newPwd.length < 6} data-testid={`button-save-password-${t.id}`}>{update.isPending ? 'Saving…' : 'Save password'}</Button>
-                    <Button type="button" size="sm" variant="outline" onClick={closePwdEdit} data-testid={`button-cancel-password-${t.id}`}>Cancel</Button>
-                  </div>
-                </form>
-              )}
-            </div>;
-          })}
-        </div>
-      )}
-    </section>
 
     {pending && (
       <div className="fixed inset-0 z-50 grid place-items-center bg-primary/30 p-4" data-testid="modal-admin-confirm">
@@ -1543,6 +1719,7 @@ type DayStatus = {
   date: string;
   sunday: boolean;
   event: { date: string; title: string } | null;
+  classCancellation: { date: string; reason: string } | null;
   totalStudents: number;
   eligible: number;
   present: number;
@@ -1618,6 +1795,11 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
             <p className="mt-1 font-display text-xl font-bold text-amber-900">{status.event.title}</p>
             <p className="mt-1 text-xs text-amber-800">No attendance is counted on this day for any module, and it is left out of everyone&apos;s percentage.</p>
           </div>
+          : status.classCancellation != null ? <div className="mt-4 rounded-lg border border-amber-400/70 bg-amber-50 p-4" data-testid={`${testId}-class-cancelled`}>
+            <p className="font-mono-ui text-[10px] uppercase tracking-wider text-amber-700">Class not held</p>
+            <p className="mt-1 text-sm font-medium text-amber-900">{status.classCancellation.reason}</p>
+            <p className="mt-1 text-xs text-amber-800">Attendance for this module is not counted on this day.</p>
+          </div>
           : status.sunday ? <div className="mt-4 rounded-lg bg-muted/50 p-4" data-testid={`${testId}-sunday`}>
             <p className="font-display text-xl font-bold text-muted-foreground">Sunday</p>
             <p className="mt-1 text-xs text-muted-foreground">Not a teaching day, so nothing was marked and nothing is counted.</p>
@@ -1630,14 +1812,14 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
 
       {/* Wide: the four buckets sit beside the headline, vertically centred against it
           rather than hanging off the top. */}
-      {status != null && status.event == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 self-center sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
+      {status != null && status.event == null && status.classCancellation == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 self-center sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
         {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-3 text-center" data-testid={`${testId}-${tile.key}`}>
           <p className={`font-display text-2xl font-bold ${tile.tone}`}>{tile.value}</p>
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
         </div>)}
       </div>}
     </div>
-    {status != null && status.event == null && !status.sunday && <p className="mt-4 text-xs text-muted-foreground lg:mt-3">
+    {status != null && status.event == null && status.classCancellation == null && !status.sunday && <p className="mt-4 text-xs text-muted-foreground lg:mt-3">
       {status.totalStudents} on the roster{status.eligible < status.totalStudents ? `, ${status.totalStudents - status.eligible} not in a course on this day` : ''}. {status.unmarked > 0 ? `${status.unmarked} still to mark.` : 'Everyone has been marked.'}
     </p>}
   </div>;
@@ -1846,6 +2028,7 @@ function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: Register
 // One institute-wide non-teaching day. Written once by whichever desk noticed it first and
 // shown to all three, because the institute closes as a whole.
 type CalendarEvent = { date: string; title: string; type: string };
+type ClassCancellation = { date: string; reason: string };
 
 function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   // `today` re-reads the clock so a tab left open overnight rolls onto the new day by
@@ -1871,6 +2054,10 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   const [eventTitle, setEventTitle] = useState('');
   const [eventBusy, setEventBusy] = useState(false);
   const [eventError, setEventError] = useState('');
+  const [classCancellation, setClassCancellation] = useState<ClassCancellation | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [cancellationBusy, setCancellationBusy] = useState(false);
+  const [cancellationError, setCancellationError] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -1883,6 +2070,20 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
         setEventTitle(found?.title ?? '');
       })
       .catch(() => { if (alive) setEvent(null); });
+    return () => { alive = false; };
+  }, [date, reloadToken]);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/teacher/attendance/class-cancellation?date=${date}`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!alive || !ok) return;
+        const found = data as ClassCancellation | null;
+        setClassCancellation(found);
+        setCancellationReason(found?.reason ?? '');
+      })
+      .catch(() => undefined);
     return () => { alive = false; };
   }, [date, reloadToken]);
 
@@ -1913,6 +2114,33 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       .then((res) => { if (res.ok) { setEvent(null); setEventTitle(''); setReloadToken((v) => v + 1); } else setEventError('Could not remove that event.'); })
       .catch(() => setEventError('Could not remove that event.'))
       .finally(() => setEventBusy(false));
+  };
+
+  const saveClassCancellation = () => {
+    const reason = cancellationReason.trim();
+    if (!reason) { setCancellationError("Write why this module's class was not held."); return; }
+    setCancellationBusy(true); setCancellationError('');
+    fetch('/api/teacher/attendance/class-cancellation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, reason }),
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, status: res.status, data })))
+      .then(({ ok, status, data }) => {
+        if (!ok) throw new Error((data as { error?: string }).error ?? `Could not save this reason (error ${status}).`);
+        setClassCancellation(data as ClassCancellation);
+        setReloadToken((v) => v + 1);
+      })
+      .catch((error) => setCancellationError(error instanceof Error ? error.message : 'Could not save this reason.'))
+      .finally(() => setCancellationBusy(false));
+  };
+
+  const clearClassCancellation = () => {
+    setCancellationBusy(true); setCancellationError('');
+    fetch(`/api/teacher/attendance/class-cancellation/${date}`, { method: 'DELETE' })
+      .then((res) => { if (!res.ok) throw new Error('Could not remove this cancellation.'); setClassCancellation(null); setCancellationReason(''); setReloadToken((v) => v + 1); })
+      .catch((error) => setCancellationError(error instanceof Error ? error.message : 'Could not remove this cancellation.'))
+      .finally(() => setCancellationBusy(false));
   };
 
   useEffect(() => {
@@ -1981,7 +2209,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark Attendance"
       detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
-      action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
+      action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || classCancellation != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
     />
 
     <section className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2023,7 +2251,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
           className="sm:max-w-sm"
-          placeholder={event ? 'Change what it says' : 'e.g. PTM, Diwali holiday, exam'}
+          placeholder={event ? 'Change event title' : 'Enter event title'}
           value={eventTitle}
           onChange={(e) => setEventTitle(e.target.value)}
           disabled={sunday || eventBusy}
@@ -2040,15 +2268,44 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
     {event != null && rows != null && <p className="mb-5 rounded-xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 text-sm text-amber-900" data-testid="status-event-day">{longDate(date)} is marked as <strong>{event.title}</strong>. No attendance is being taken and the day is excluded from everyone&apos;s percentage. Remove the event above if that is wrong.</p>}
 
+    {event == null && <section className={`mb-5 rounded-xl border p-4 ${classCancellation ? 'border-amber-400/60 bg-amber-50/60' : 'border-dashed border-border bg-card'}`} data-testid="panel-class-cancellation">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">This module&apos;s class</p>
+          {classCancellation
+            ? <p className="mt-1 text-sm font-medium text-amber-900" data-testid="text-class-cancellation">Class not held: {classCancellation.reason}</p>
+            : <p className="mt-1 text-sm text-muted-foreground">If this module&apos;s class did not happen, write why. No attendance will be taken for this module on this date.</p>}
+        </div>
+        {classCancellation && <Button type="button" size="sm" variant="outline" onClick={clearClassCancellation} disabled={cancellationBusy} data-testid="button-clear-class-cancellation">Remove</Button>}
+      </div>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Input
+          className="sm:max-w-xl"
+          placeholder="Enter why the class was not held"
+          value={cancellationReason}
+          onChange={(e) => setCancellationReason(e.target.value)}
+          maxLength={1000}
+          disabled={sunday || event != null || cancellationBusy}
+          data-testid="input-class-cancellation-reason"
+          aria-label="Reason this module's class was not held"
+        />
+        <Button type="button" onClick={saveClassCancellation} disabled={sunday || event != null || cancellationBusy || !cancellationReason.trim()} data-testid="button-save-class-cancellation">
+          {cancellationBusy ? 'Saving…' : classCancellation ? 'Update reason' : 'Class not held'}
+        </Button>
+      </div>
+      {sunday && <p className="mt-2 text-xs text-muted-foreground">Sunday is already a day off.</p>}
+      {cancellationError && <p className="mt-2 text-xs text-destructive" data-testid="status-class-cancellation-error">{cancellationError}</p>}
+    </section>}
+
+    {classCancellation && event == null && rows != null && <p className="mb-5 rounded-xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 text-sm text-amber-900" data-testid="status-class-cancelled-day">{longDate(date)}: this module&apos;s class was not held because <strong>{classCancellation.reason}</strong>. No attendance is counted for this module today.</p>}
+
     {!sunday && event == null && rows != null && all.length > 0 && eligible.length === 0 && <p className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="status-none-eligible">
       Nobody can be marked on {longDate(date)} — every student&apos;s joining date is later than this, so their course has not started yet. Each row below shows the date it opens from.
     </p>}
 
-    {!sunday && event == null && rows != null && eligible.length > 0 && <p className="mb-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-all-locked">This register has been filled in before. Everything you see came back from the saved records — tick a different box and save to change it.</p>}
-
     {/* The search box and the table are hidden while an event stands, so there is nothing to
         fill in and no Save button to press. */}
-    {event == null && <>
+    {event == null && classCancellation == null && <>
     <div className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="relative w-full sm:max-w-md">
         <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
@@ -2292,8 +2549,8 @@ function TeacherStudentListPage({ user }: { user: CurrentUser }) {
   </>;
 }
 
-type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null };
-type ReportModule = { module: Module; present: number; absent: number; total: number; percentage: number; recorded: boolean; projects: ProjectMark[] };
+type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null; projectLink: string | null };
+type ReportModule = { module: Module; present: number; absent: number; total: number; percentage: number; recorded: boolean; cancelledClasses?: { date: string; reason: string }[]; projects: ProjectMark[] };
 type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; events?: { date: string; title: string }[]; modules: ReportModule[] };
 type StudentReport = {
   joinedOn: string | null;
@@ -2381,6 +2638,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
   const scoped = moduleFilter ? shownModules[0] : null;
   const present = scoped ? scoped.present : selected.present;
   const absent = scoped ? scoped.absent : selected.absent;
+  const total = scoped ? scoped.total : selected.total;
   const percentage = scoped ? scoped.percentage : selected.percentage;
   const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
   const eventCount = selected.events?.length ?? 0;
@@ -2408,12 +2666,12 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         <div className="rounded-lg border border-border p-4" data-testid="tile-month-present">
           <p className="text-xs font-medium text-muted-foreground">Present</p>
           <p className="mt-1 font-display text-3xl font-bold text-primary">{present}</p>
-          <p className="text-xs text-muted-foreground">of {selected.total} days</p>
+          <p className="text-xs text-muted-foreground">of {total} days</p>
         </div>
         <div className="rounded-lg border border-border p-4" data-testid="tile-month-absent">
           <p className="text-xs font-medium text-muted-foreground">Absent</p>
           <p className="mt-1 font-display text-3xl font-bold text-destructive">{absent}</p>
-          <p className="text-xs text-muted-foreground">of {selected.total} days</p>
+          <p className="text-xs text-muted-foreground">of {total} days</p>
         </div>
       </div>
 
@@ -2425,11 +2683,18 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
           <span className="text-xs text-muted-foreground">{item.present} present · {item.absent} absent · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span></span>
         </div>)}
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{selected.total}</strong> teaching days{range ? ` (${range})` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month of enrolment, so the first covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
+      <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{total}</strong> teaching days{range ? ` (${range})` : ''}{scopeLabel ? ` for ${scopeLabel}` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month of enrolment, so the first covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
       {/* Name each event day, so a shorter denominator is never a mystery. */}
       {eventCount > 0 && <ul className="mt-2 flex flex-wrap gap-2" data-testid="list-month-events">
         {selected.events?.map((ev) => <li key={ev.date} className="rounded-full border border-amber-400/70 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800">{shortDate(ev.date)} · {ev.title}</li>)}
       </ul>}
+      {shownModules.some((item) => item.cancelledClasses?.length) && <div className="mt-3 grid gap-2" data-testid="list-month-cancelled-classes">
+        {shownModules.flatMap((item) => (item.cancelledClasses ?? []).map((cancelled) => (
+          <p key={`${item.module}-${cancelled.date}`} className="rounded-lg border border-amber-400/50 bg-amber-50/60 px-3 py-2 text-xs text-amber-900">
+            {moduleNames[item.module]} class not held on {shortDate(cancelled.date)}: {cancelled.reason}
+          </p>
+        )))}
+      </div>}
     </section>
 
     <section className={`mt-6 rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>
@@ -2449,11 +2714,18 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         {shownModules.map((item) => <div key={item.module} className="rounded-lg border border-border p-4" data-testid={`card-marks-${item.module}`}>
           <p className="font-semibold">{moduleNames[item.module]}</p>
           <div className="mt-3 grid gap-2">
-            {item.projects.map((project) => <div key={project.project} className="flex items-center justify-between gap-2 text-sm">
+            {item.projects.map((project) => <div key={project.project} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
               <span className="min-w-0 text-muted-foreground">Project {project.project}{project.projectName ? <span className="block truncate text-xs font-medium text-foreground">{project.projectName}</span> : null}</span>
-              {project.marks == null
-                ? <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">Not marked</span>
-                : <span className={`rounded-md px-2 py-1 font-mono-ui text-xs font-medium ${project.marks >= 70 ? 'bg-accent/25 text-primary' : 'bg-destructive/10 text-destructive'}`} data-testid={`marks-${item.module}-${project.project}`}>{project.marks}/100</span>}
+              <div className="flex items-center gap-2">
+                {project.marks == null
+                  ? <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">Not marked</span>
+                  : <span className={`rounded-md px-2 py-1 font-mono-ui text-xs font-medium ${project.marks >= 70 ? 'bg-accent/25 text-primary' : 'bg-destructive/10 text-destructive'}`} data-testid={`marks-${item.module}-${project.project}`}>{project.marks}/100</span>}
+                {project.projectLink && (
+                  <a href={project.projectLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline" data-testid={`project-link-${item.module}-${project.project}`}>
+                    <ExternalLink size={12} /> Open
+                  </a>
+                )}
+              </div>
             </div>)}
             {item.projects.some((project) => project.feedback) && <p className="mt-1 text-xs text-muted-foreground">{item.projects.filter((project) => project.feedback).map((project) => `P${project.project}: ${project.feedback}`).join(' · ')}</p>}
           </div>
@@ -2572,19 +2844,38 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
     readImageAsDataUrl(file, (dataUrl) => setImage(dataUrl), () => {});
   };
 
-  return <article className={`rounded-xl border border-border bg-card ${!editing ? 'cursor-pointer' : ''}`} onClick={toggleFromArticle} data-testid={`notice-${notice.id}`}>
-    <div className="flex items-start gap-2 p-4">
+  const autoBody = (notice.authorName ?? '').startsWith('Auto:');
+  const auto = autoBody;
+  const displayBody = (notice.body || '')
+    .split('\n')
+    .filter((line) => !line.includes('/api/student/documents/'))
+    .join('\n')
+    .replace(/Project Plan: open it with the Project Plan button below\.?/gi, '')
+    .replace(/Project Guidelines: open them with the Project Guidelines button below\.?/gi, '')
+    .replace(/^\s*\n+/, '')
+    .trim();
+
+  return <article className={`group relative rounded-2xl border border-border bg-card shadow-sm transition-shadow ${!editing ? 'cursor-pointer hover:border-primary/30 hover:shadow-lg' : ''}`} onClick={toggleFromArticle} data-testid={`notice-${notice.id}`}>
+    <div className={`h-1 w-full ${notice.published ? 'bg-gradient-to-r from-primary via-primary/60 to-accent' : 'bg-gradient-to-r from-amber-400 via-amber-300 to-transparent'}`} />
+    <div className="flex items-start gap-2 p-4 sm:p-5">
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpenDialog((v) => !v); }} aria-expanded={expanded || openDialog} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
-        <ChevronDown size={18} className={`mt-0.5 shrink-0 text-primary transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        <span className="min-w-0">
-          <span className="block font-display text-lg font-bold leading-snug">{notice.title || 'Untitled notice'}</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">
-            {notice.published ? `Published ${noticeDate(notice.publishedAt)}` : `Draft · written ${noticeDate(notice.createdAt)}`}
-            {notice.authorName ? ` · ${notice.authorName}` : ''}
-            {notice.image ? ' · Image attached' : ''}
+        <span className={`mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl ${notice.published ? 'bg-accent text-primary' : 'bg-amber-100 text-amber-700'}`}>
+          {auto ? <Sparkles size={18} /> : <Megaphone size={17} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="block font-display text-lg font-bold leading-snug group-hover:text-primary">{notice.title || 'Untitled notice'}</span>
+            {auto && <span className="rounded-full border border-primary/20 bg-accent px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-accent-foreground">Auto</span>}
+          </span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${notice.published ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{notice.published ? 'Published' : 'Draft'}</span>
+            <span>{notice.published ? noticeDate(notice.publishedAt) : `written ${noticeDate(notice.createdAt)}`}</span>
+            {notice.authorName ? <span className="truncate">· {notice.authorName}</span> : null}
+            {notice.image ? <span>· image</span> : null}
           </span>
         </span>
       </button>
+      <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-primary"><ChevronDown size={18} className={`transition-transform ${expanded || openDialog ? 'rotate-180' : ''}`} /></span>
       {children}
     </div>
 
@@ -2615,24 +2906,36 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
           </div>
         </div>
       : null}
-    {openDialog && !editing && (
-      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-primary/40 p-4 backdrop-blur-sm sm:p-8" role="dialog" aria-modal="true" data-testid={`notice-dialog-${notice.id}`} onClick={() => setOpenDialog(false)}>
-        <div className="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-start justify-between gap-4">
-            <h3 className="font-display text-2xl font-bold leading-snug" data-testid={`notice-dialog-title-${notice.id}`}>{notice.title || 'Notice'}</h3>
-            <button type="button" onClick={() => setOpenDialog(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close" data-testid={`button-close-notice-x-${notice.id}`}><X size={17} /></button>
+    {openDialog && !editing && createPortal(
+      <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-primary/50 p-4 backdrop-blur-sm sm:p-8" role="dialog" aria-modal="true" data-testid={`notice-dialog-${notice.id}`} onClick={() => setOpenDialog(false)}>
+        <div className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className={`px-6 py-5 ${notice.published ? 'bg-gradient-to-br from-accent via-accent/70 to-background' : 'bg-gradient-to-br from-amber-100 via-amber-50 to-background'}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className={`mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl ${notice.published ? 'bg-primary text-primary-foreground' : 'bg-amber-500 text-white'}`}>
+                  {auto ? <Sparkles size={20} /> : <Megaphone size={18} />}
+                </span>
+                <div className="min-w-0">
+                  <h3 className="font-display text-2xl font-bold leading-snug" data-testid={`notice-dialog-title-${notice.id}`}>{notice.title || 'Notice'}</h3>
+                  <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${notice.published ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{notice.published ? 'Published' : 'Draft'}</span>
+                    <span>{notice.published ? noticeDate(notice.publishedAt) : `written ${noticeDate(notice.createdAt)}`}</span>
+                    {notice.authorName ? <span>· {notice.authorName}</span> : null}
+                  </p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setOpenDialog(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close" data-testid={`button-close-notice-x-${notice.id}`}><X size={17} /></button>
+            </div>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {notice.published ? `Published ${noticeDate(notice.publishedAt)}` : `Draft · written ${noticeDate(notice.createdAt)}`}
-            {notice.authorName ? ` · ${notice.authorName}` : ''}
-          </p>
-          {notice.body && <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground" data-testid={`notice-dialog-body-${notice.id}`}>{notice.body}</p>}
-          {notice.image && <img src={notice.image} alt="Announcement" className="mt-4 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-dialog-image-${notice.id}`} />}
-          <div className="mt-6 flex justify-end">
-            <Button type="button" variant="outline" size="sm" onClick={() => setOpenDialog(false)} data-testid={`button-close-notice-${notice.id}`}>Close</Button>
+          <div className="px-6 pb-6 pt-4">
+            {displayBody && <p className="whitespace-pre-wrap text-base leading-7 text-foreground/90" data-testid={`notice-dialog-body-${notice.id}`}>{displayBody}</p>}
+            {notice.image && <img src={notice.image} alt="Announcement" className="mt-4 max-h-80 rounded-lg border border-border object-contain" data-testid={`notice-dialog-image-${notice.id}`} />}
+            <div className="mt-6 flex justify-end">
+              <Button type="button" variant="outline" size="sm" onClick={() => setOpenDialog(false)} data-testid={`button-close-notice-${notice.id}`}>Close</Button>
+            </div>
           </div>
         </div>
-      </div>
+      </div>, document.body
     )}
   </article>;
 }
@@ -2674,7 +2977,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const isBranch = scope === 'branch';
   const base = `/api/${scope}/announcements`;
   const [notices, setNotices] = useState<Announcement[] | null>(null);
-  const [module, setModule] = useState<Module>(user.module ?? 'ai');
+  const [module, setModule] = useState<Module | null>(() => isAdmin || isBranch ? null : user.module ?? 'ai');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -2744,8 +3047,6 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       .finally(() => setBusy(false));
   };
 
-  const published = (notices ?? []).filter((n) => n.published);
-  const drafts = (notices ?? []).filter((n) => !n.published);
   // The teacher API already scopes to their module; this stops the UI drawing empty
   // headings for the two modules they can neither read nor write.
   const catalog = useCatalogModules();
@@ -2759,24 +3060,24 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
     return source ? source.modules.some((mod) => mod.id === m.key) : false;
   });
   const pickableModules = isAdmin || isBranch ? branchModules : catalog;
+  const hasTargetSelection = isAdmin || isBranch
+    ? selectedBranch != null && module != null && branchModules.some((item) => item.key === module)
+    : module != null;
+  const shownNotices = isAdmin || isBranch
+    ? hasTargetSelection ? (notices ?? []).filter((n) => n.module === module) : []
+    : notices;
+  const published = (shownNotices ?? []).filter((n) => n.published);
+  const drafts = (shownNotices ?? []).filter((n) => !n.published);
   const visibleModules = isAdmin || isBranch
-    ? branchModules
+    ? hasTargetSelection ? catalog.filter((m) => m.key === module) : []
     : catalog.filter((m) => m.key === (user.module ?? 'ai'));
-
-  // A branch module picker needs a concrete default once the catalog loads: unlike a
-  // teacher, the branch's desk does not own exactly one module.
-  useEffect(() => {
-    if (isBranch && branchModules.length > 0 && !branchModules.some((m) => m.key === module)) {
-      setModule(branchModules[0].key as Module);
-    }
-  }, [isBranch, branchModules, module]);
 
   return <>
     <PageHeader
       kicker={isAdmin ? 'Admin / announcements' : isBranch ? `Branch / ${user.displayName}` : `Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Announcements"
       detail={isAdmin
-        ? 'Every notice across all three modules. Write one for any module, or take down something a module owner posted.'
+        ? 'Notices for the module you pick below. Write one for that module, or take down something a module owner posted.'
         : isBranch
           ? `Notices for ${user.displayName} and its modules only. Publish one and it appears on the branch's students' portal straight away.`
           : `Notices for ${user.module ? moduleNames[user.module] : 'your module'} only. Publish one and it appears on your students' portal straight away.`} />
@@ -2785,9 +3086,9 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       <p className="text-xs font-semibold text-primary">New notice</p>
       <h2 className="mt-1 font-display text-2xl font-bold">Write an announcement</h2>
       <div className="mt-5 grid gap-3">
-        {isAdmin && branchList.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} onChange={(e) => { const next = e.target.value; setBranch(next); const sel = branchList.find((b) => String(b.id) === next); if (sel?.modules[0]) setModule(sel.modules[0].id as Module); }} data-testid="select-notice-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
-        {(isAdmin ? selectedBranch != null : isBranch ? branchModules.length > 0 : false) && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module} onChange={(e) => setModule(e.target.value as Module)} data-testid="select-notice-module">{pickableModules.length === 0 && <option value="">— no modules —</option>}{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
-        <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="e.g. Class timings changed for next week" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
+        {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} disabled={branchList.length === 0} onChange={(e) => { setBranch(e.target.value); setModule(null); }} data-testid="select-notice-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
+        {(isAdmin ? selectedBranch != null : isBranch ? branchModules.length > 0 : false) && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module ?? ''} onChange={(e) => setModule(e.target.value ? e.target.value as Module : null)} data-testid="select-notice-module"><option value="">— Select module —</option>{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
+        <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="Enter notice title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
         <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
           const file = announcementImageFile(e);
           if (file) { e.preventDefault(); setImage(null); readImageAsDataUrl(file, setImage, setError); }
@@ -2811,19 +3112,20 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-notice-error">{error}</p>}
       {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-notice-success">{notice}</p>}
       <div className="mt-4 flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => create(false)} disabled={busy} data-testid="button-save-draft">Save as draft</Button>
-        <Button type="button" size="sm" onClick={() => create(true)} disabled={busy} data-testid="button-publish-notice">{busy ? 'Saving…' : <><Megaphone size={15} /> Publish</>}</Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => create(false)} disabled={busy || !hasTargetSelection} data-testid="button-save-draft">Save as draft</Button>
+        <Button type="button" size="sm" onClick={() => create(true)} disabled={busy || !hasTargetSelection} data-testid="button-publish-notice">{busy ? 'Saving…' : <><Megaphone size={15} /> Publish</>}</Button>
       </div>
     </section>
 
     <section className="mt-8">
       <div className="mb-5">
         <h2 className="font-display text-2xl font-bold">All notices</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{published.length} published · {drafts.length} {drafts.length === 1 ? 'draft' : 'drafts'}. Click a title to read it; drafts stay off the student portal until you publish them.</p>
+        <p className="mt-1 text-sm text-muted-foreground">{hasTargetSelection ? `${published.length} published · ${drafts.length} ${drafts.length === 1 ? 'draft' : 'drafts'}. Click a title to read it; drafts stay off the student portal until you publish them.` : 'Choose a branch and module to view notices.'}</p>
       </div>
-      {notices == null ? <div className="grid gap-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
+      {(isAdmin || isBranch) && !hasTargetSelection ? <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">Choose a branch and module to view notices.</p>
+        : notices == null ? <div className="grid gap-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
         : <NoticesByModule
-            notices={notices}
+            notices={shownNotices ?? []}
             modules={visibleModules}
             emptyDetail="Nothing written for this module yet."
             renderRow={(item) => <NoticeRow
@@ -2845,8 +3147,13 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
 
 // What students see: every published notice, newest first.
 function StudentAnnouncementsPage() {
+  const { data: user } = useCurrentUser();
+  const branches = useBranches();
+  const catalog = useCatalogModules();
   const [notices, setNotices] = useState<Announcement[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const branchId = user?.branchId ?? branches?.find((branch) => branch.name === 'Zedking')?.id;
+  const branchModules = branchId == null ? [] : catalog.filter((module) => module.branchId === branchId);
 
   const load = () => {
     setFailed(false);
@@ -2858,10 +3165,11 @@ function StudentAnnouncementsPage() {
   useEffect(() => { load(); }, []);
 
   return <>
-    <PageHeader kicker="Student / announcements" title="Announcements" detail="Notices from your three modules, kept apart. Click a title to read the whole notice." />
+    <PageHeader kicker="Student / announcements" title="Announcements" detail="Notices from your branch's modules, kept apart. Click a title to read the whole notice." />
     {failed ? <ErrorState retry={load} />
-      : notices == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <NoticesByModule notices={notices} emptyDetail="No announcements from this module yet." />}
+      : notices == null || user == null || branches == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
+      : branchModules.length === 0 ? <EmptyState title="No modules yet" detail="Your branch has no modules to show." icon={BookOpen} />
+      : <NoticesByModule notices={notices} modules={branchModules} emptyDetail="No announcements from this module yet." />}
   </>;
 }
 
@@ -2944,38 +3252,267 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
   </>;
 }
 
-// Placeholder, same as the module information page — the brief, the deliverables and
-// the submission rules will be filled in later.
+// Student project page — per module: left column has Project Plan (open) + Project Guidelines (open),
+// right column has a single "Upload Project" box that opens a dialog to pick which of the 12 projects,
+// enter a name and a link. The 12 projects are two per month across six months: cycle = (month-1)*2 + project.
 function StudentProjectPage() {
+  const { data: user } = useCurrentUser();
   const { docs, failed } = useCourseDocuments('student');
   const catalog = useCatalogModules();
+  const [submissions, setSubmissions] = useState<Record<string, Record<number, { projectName: string; projectLink: string; submittedAt: string; marks: number | null }>>>({});
+
+  // Filter modules to only those in the student's branch
+  const myModules = user?.branchId
+    ? catalog.filter((m) => m.branchId === user.branchId)
+    : [];
+
   const find = (module: Module, kind: DocumentKind) => docs?.find((d) => d.module === module && d.kind === kind);
-  return <>
-    <PageHeader kicker="Student / project" title="Project" detail="The project plan and the guidelines for each module. Open one to read it in full." />
-    {failed ? <ErrorState />
-      : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <div className="grid gap-4">{catalog.map((meta) => (
-          <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-docs-${meta.key}`}>
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
-            <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
-            <div className="mt-4 grid gap-2.5">
-              <DocLink scope="student" kind="project_plan" doc={find(meta.key, 'project_plan')} />
-              <DocLink scope="student" kind="project_guidelines" doc={find(meta.key, 'project_guidelines')} />
+
+  // Fetch student's project submissions on mount
+  useEffect(() => {
+    if (!user?.studentId) return;
+    fetch('/api/student/project-submissions')
+      .then((res) => res.json())
+      .then((data) => {
+        const subs: Record<string, Record<number, { projectName: string; projectLink: string; submittedAt: string; marks: number | null }>> = {};
+        for (const row of data) {
+          if (!subs[row.module]) subs[row.module] = {};
+          subs[row.module][row.cycle] = {
+            projectName: row.projectName,
+            projectLink: row.projectLink,
+            submittedAt: row.submittedAt,
+            marks: row.marks ?? null,
+          };
+        }
+        setSubmissions(subs);
+      })
+      .catch(() => undefined);
+  }, [user?.studentId]);
+
+  const [openDialog, setOpenDialog] = useState<{ module: Module; cycle: number } | null>(null);
+  const [dialogName, setDialogName] = useState('');
+  const [dialogLink, setDialogLink] = useState('');
+  const [dialogError, setDialogError] = useState('');
+  const [dialogSaving, setDialogSaving] = useState(false);
+
+  const openUploadDialog = (module: Module, cycle: number) => {
+    setOpenDialog({ module, cycle });
+    setDialogName('');
+    setDialogLink('');
+    setDialogError('');
+  };
+
+  const closeUploadDialog = () => {
+    setOpenDialog(null);
+    setDialogName('');
+    setDialogLink('');
+    setDialogError('');
+  };
+
+  const handleSaveSubmission = async () => {
+    if (!openDialog) return;
+    const { module, cycle } = openDialog;
+    const name = dialogName.trim();
+    const link = dialogLink.trim();
+
+    if (!name) { setDialogError('Give your project a name.'); return; }
+    if (name.length > 100) { setDialogError('Name must be 100 characters or less.'); return; }
+    if (!link) { setDialogError('Enter the link to your project.'); return; }
+    if (link.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
+    let parsed: URL;
+    try { parsed = new URL(link); } catch { setDialogError('That does not look like a link. It should start with http:// or https://'); return; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') { setDialogError('The link must start with http:// or https://.'); return; }
+
+    setDialogSaving(true);
+    setDialogError('');
+    try {
+      const res = await fetch('/api/student/project-submission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ module, cycle, projectName: name, projectLink: link }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
+      setSubmissions((prev) => {
+        const next = { ...prev };
+        if (!next[module]) next[module] = {};
+        next[module][cycle] = { projectName: data.projectName, projectLink: data.projectLink, submittedAt: data.submittedAt, marks: data.marks };
+        return next;
+      });
+      closeUploadDialog();
+    } catch (e: unknown) {
+      setDialogError(e instanceof Error ? e.message : 'Failed to save project');
+    } finally {
+      setDialogSaving(false);
+    }
+  };
+
+  const getProjectLabel = (cycle: number) => {
+    const month = Math.ceil(cycle / 2);
+    const projectNum = cycle % 2 === 1 ? 1 : 2;
+    return `Month ${month} — Project ${projectNum}`;
+  };
+
+  const PROJECT_CYCLES = 12;
+
+  return (
+    <>
+      <PageHeader kicker="Student / project" title="My Projects" detail="View project plans, guidelines, and upload your project links." />
+      {failed ? (
+        <ErrorState />
+      ) : myModules.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border p-8 text-center text-muted-foreground">
+          You are not enrolled in any modules yet.
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {myModules.map((meta) => (
+            <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
+              <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
+              <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {/* LEFT COLUMN: Project Plan + Guidelines stacked */}
+                <div className="space-y-4">
+                  {/* Project Plan */}
+                  <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-plan-${meta.key}`}>
+                    <DocLink scope="student" kind="project_plan" doc={find(meta.key, 'project_plan')} className="w-full" />
+                  </div>
+                  {/* Guidelines */}
+                  <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-guidelines-${meta.key}`}>
+                    <DocLink scope="student" kind="project_guidelines" doc={find(meta.key, 'project_guidelines')} className="w-full" />
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: Upload Project box */}
+                <div className="rounded-lg border border-border bg-muted/40 p-4 flex flex-col gap-4" data-testid={`upload-project-${meta.key}`}>
+                  <div className="flex items-center gap-2">
+                    <LinkIcon size={18} className="text-primary" />
+                    <span className="font-medium text-sm">Upload Project</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
+                  </p>
+                  {(() => {
+                    const moduleSubs = submissions[meta.key] || {};
+                    const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
+                    if (submittedCycles.length > 0) {
+                      return (
+                        <div className="space-y-2">
+                          {submittedCycles.map((c) => {
+                            const sub = moduleSubs[c];
+                            const isGraded = sub.marks != null;
+                            return (
+                              <div key={c} className="rounded-md border border-border bg-background p-3 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-medium text-sm">{getProjectLabel(c)}</span>
+                                  {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
+                                </div>
+                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1.5 truncate text-sm text-primary underline" title={sub.projectName} data-testid={`open-submitted-project-${meta.key}-${c}`}>
+                                  <span className="truncate">{sub.projectName}</span><ExternalLink size={13} className="shrink-0" />
+                                </a>
+                                <p className="text-xs text-muted-foreground">Submitted {new Date(sub.submittedAt).toLocaleDateString()}</p>
+                              </div>
+                            );
+                          })}
+                          <Button variant="outline" size="sm" onClick={() => openUploadDialog(meta.key, submittedCycles[submittedCycles.length - 1] + 1 > PROJECT_CYCLES ? PROJECT_CYCLES : submittedCycles[submittedCycles.length - 1] + 1)} className="w-full">
+                            Upload Another Project
+                          </Button>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
+                          {dialogSaving ? 'Opening…' : 'Upload Project'}
+                        </Button>
+                      );
+                    }
+                  })()}
+                </div>
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      {/* Upload Project Dialog */}
+      <Dialog open={openDialog !== null} onOpenChange={(open) => !open && closeUploadDialog()}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload Project</DialogTitle>
+            <DialogDescription>
+              Select which of your 12 projects this is, give it a name, and paste the link.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-1.5">
+              <label htmlFor="project-cycle" className="text-sm font-medium">Project</label>
+              <Select value={openDialog ? String(openDialog.cycle) : ''} onValueChange={(v) => openDialog && setOpenDialog({ ...openDialog, cycle: Number(v) })}>
+                <SelectTrigger id="project-cycle">
+                  <SelectValue placeholder="Select project" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: PROJECT_CYCLES }, (_, i) => i + 1).map((c) => (
+                    <SelectItem key={c} value={String(c)}>
+                      {getProjectLabel(c)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          </section>
-        ))}</div>}
-  </>;
+            <div className="space-y-1.5">
+              <label htmlFor="project-name" className="text-sm font-medium">Project Name</label>
+              <Input
+                id="project-name"
+                value={dialogName}
+                onChange={(e) => setDialogName(e.target.value)}
+                placeholder="Enter project name"
+                maxLength={100}
+                disabled={dialogSaving}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="project-link" className="text-sm font-medium">Project Link</label>
+              <Input
+                id="project-link"
+                type="url"
+                value={dialogLink}
+                onChange={(e) => setDialogLink(e.target.value)}
+                placeholder="https://..."
+                maxLength={500}
+                disabled={dialogSaving}
+              />
+              {dialogError && <p className="text-sm text-destructive" role="alert">{dialogError}</p>}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeUploadDialog} disabled={dialogSaving}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveSubmission} disabled={dialogSaving}>
+              {dialogSaving ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 function StudentModulesPage() {
+  const { data: user } = useCurrentUser();
+  const branches = useBranches();
   const { docs, failed } = useCourseDocuments('student');
   const catalog = useCatalogModules();
+  const branchId = user?.branchId ?? branches?.find((branch) => branch.name === 'Zedking')?.id;
+  const myModules = branchId == null ? [] : catalog.filter((module) => module.branchId === branchId);
   const find = (module: Module) => docs?.find((d) => d.module === module && d.kind === 'syllabus');
   return <>
-    <PageHeader kicker="Student / module information" title="Module information" detail="What each of your three modules covers. Open a syllabus to read it in full." />
+    <PageHeader kicker="Student / module information" title="Module information" detail="What your branch's modules cover. Open a syllabus to read it in full." />
     {failed ? <ErrorState />
-      : docs == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-40 animate-pulse rounded-xl bg-muted" />)}</div>
-      : <div className="grid gap-4">{catalog.map((meta) => (
+      : docs == null || user == null || branches == null || branchId == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-40 animate-pulse rounded-xl bg-muted" />)}</div>
+      : myModules.length === 0 ? <EmptyState title="No modules yet" detail="Your branch has no modules to show." icon={BookOpen} />
+      : <div className="grid gap-4">{myModules.map((meta) => (
           <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`module-info-${meta.key}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
             <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
@@ -3146,7 +3683,7 @@ type StudentProfileForm = { fullName: string; fathersName: string; course: strin
 
 function JoiningDateField({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
   return <label className="grid gap-1.5 text-sm font-medium">Joining date
-    <input type="date" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={value} onChange={(e) => onChange(e.target.value)} data-testid="input-student-doj" aria-label="Joining date" />
+    <input type="date" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={value} onChange={(e) => onChange(e.target.value)} required data-testid="input-student-doj" aria-label="Joining date" />
   </label>;
 }
 
@@ -3154,7 +3691,7 @@ function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate, showBr
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const branches = useBranches();
-  const emptyForm = { fullName: '', fathersName: '', course: 'Digital Marketing with AI', dateOfJoining: '', contactNumber: '', guardianContact: '', address: '', email: '', password: '', confirmPassword: '' };
+  const emptyForm = { fullName: '', fathersName: '', course: '', dateOfJoining: '', contactNumber: '', guardianContact: '', address: '', email: '', password: '', confirmPassword: '' };
   const [form, setForm] = useState(emptyForm);
   const [branchId, setBranchId] = useState<string>('');
   // The photo is held here and attached straight after the record exists, because the
@@ -3180,6 +3717,8 @@ function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate, showBr
     event.preventDefault();
     setNotice('');
     setError('');
+    if (showBranch && !branchId) { setError('Choose a branch.'); return; }
+    if (!form.course.trim() || !form.address.trim() || !form.guardianContact.trim()) { setError('Complete all required fields.'); return; }
     if (form.password.trim() !== form.confirmPassword.trim()) { setError('The passwords do not match.'); return; }
     if (!form.dateOfJoining) { setError('Choose the joining date — day, month and year.'); return; }
     const joining = new Date(`${form.dateOfJoining}T00:00:00Z`);
@@ -3221,7 +3760,24 @@ function StudentEnrolForm({ kicker, total, creating, photoBase, onCreate, showBr
         </div>
       </div>
       {photoError && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-new-student-photo-error">{photoError}</p>}
-      <form onSubmit={handleEnroll} className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><div className="xl:col-span-1"><Field label="Full name" value={form.fullName} onChange={updateForm('fullName')} minLength={2} required data-testid="input-student-full-name" /></div><div className="xl:col-span-1"><Field label="Father&apos;s name" value={form.fathersName} onChange={updateForm('fathersName')} minLength={2} required data-testid="input-student-fathers-name" /></div><label className="grid gap-1.5 text-sm font-medium">Course<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={form.course} onChange={updateForm('course')} data-testid="select-student-course"><option>Digital Marketing with AI</option></select></label>{showBranch && branches && branches.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branchId} onChange={(e) => setBranchId(e.target.value)} data-testid="select-student-branch"><option value="">— select branch —</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}<JoiningDateField value={form.dateOfJoining} onChange={(iso) => setForm((v) => ({ ...v, dateOfJoining: iso }))} /><Field label="Contact number" value={form.contactNumber} onChange={updateForm('contactNumber')} minLength={6} maxLength={12} required data-testid="input-student-contact" /><Field label="Parent / guardian contact" value={form.guardianContact} onChange={updateForm('guardianContact')} maxLength={12} placeholder="Optional" data-testid="input-student-guardian-contact" /><Field label="Email address" type="email" value={form.email} onChange={updateForm('email')} required data-testid="input-student-email" /><div className="sm:col-span-2 xl:col-span-3"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Optional — house, street, city, pin code" value={form.address} onChange={(ev) => setForm((v) => ({ ...v, address: ev.target.value }))} data-testid="input-student-address" /></label></div><PasswordField label="Password" value={form.password} onChange={updateForm('password')} minLength={6} required data-testid="input-student-password" toggleTestId="button-toggle-enrol-pwd" /><PasswordField label="Confirm password" value={form.confirmPassword} onChange={updateForm('confirmPassword')} minLength={6} required data-testid="input-student-confirm-password" toggleTestId="button-toggle-enrol-confirm-pwd" /><div className="flex items-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => { const next = randomPassword(); setForm((v) => ({ ...v, password: next, confirmPassword: next })); }} className="h-9" data-testid="button-generate-password"><KeyRound size={14} /> Generate</Button></div><div className="flex items-end sm:col-span-2 xl:col-span-3"><Button type="submit" disabled={creating} data-testid="button-save-student">{creating ? 'Enrolling…' : <><Plus size={15} /> Enroll student</>}</Button></div></form>{error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-enroll-error">{error}</p>}{notice && <p className="mt-3 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-enroll-success">{notice}</p>}</section></>;
+      <form onSubmit={handleEnroll} className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div><Field label="Full name" value={form.fullName} onChange={updateForm('fullName')} minLength={2} placeholder="Enter full name" required data-testid="input-student-full-name" /></div>
+        <div><Field label="Father's name" value={form.fathersName} onChange={updateForm('fathersName')} minLength={2} placeholder="Enter father's name" required data-testid="input-student-fathers-name" /></div>
+        <Field label="Course" value={form.course} onChange={updateForm('course')} minLength={2} placeholder="Enter course name" required data-testid="input-student-course" />
+        {showBranch && branches && branches.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branchId} onChange={(e) => setBranchId(e.target.value)} required data-testid="select-student-branch"><option value="">Select branch</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}
+        <JoiningDateField value={form.dateOfJoining} onChange={(iso) => setForm((v) => ({ ...v, dateOfJoining: iso }))} />
+        <Field label="Contact number" value={form.contactNumber} onChange={updateForm('contactNumber')} minLength={6} maxLength={12} placeholder="Enter contact number" required data-testid="input-student-contact" />
+        <Field label="Parent / guardian contact" value={form.guardianContact} onChange={updateForm('guardianContact')} minLength={6} maxLength={12} placeholder="Enter parent or guardian contact" required data-testid="input-student-guardian-contact" />
+        <Field label="Email address" type="email" value={form.email} onChange={updateForm('email')} placeholder="Enter email address" required data-testid="input-student-email" />
+        <div className="sm:col-span-2 xl:col-span-3"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Enter full address" value={form.address} onChange={(ev) => setForm((v) => ({ ...v, address: ev.target.value }))} minLength={5} required data-testid="input-student-address" /></label></div>
+        <PasswordField label="Password" value={form.password} onChange={updateForm('password')} minLength={6} placeholder="Enter password" required data-testid="input-student-password" toggleTestId="button-toggle-enrol-pwd" />
+        <PasswordField label="Confirm password" value={form.confirmPassword} onChange={updateForm('confirmPassword')} minLength={6} placeholder="Confirm password" required data-testid="input-student-confirm-password" toggleTestId="button-toggle-enrol-confirm-pwd" />
+        <div className="flex items-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => { const next = randomPassword(); setForm((v) => ({ ...v, password: next, confirmPassword: next })); }} className="h-9" data-testid="button-generate-password"><KeyRound size={14} /> Generate</Button></div>
+        <div className="flex items-end sm:col-span-2 xl:col-span-3"><Button type="submit" disabled={creating} data-testid="button-save-student">{creating ? 'Enrolling…' : <><Plus size={15} /> Enroll student</>}</Button></div>
+      </form>
+      {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-enroll-error">{error}</p>}
+      {notice && <p className="mt-3 rounded-md bg-accent/15 px-3 py-2 text-sm font-medium text-primary" data-testid="status-enroll-success">{notice}</p>}
+    </section></>;
 }
 
 function AdminStudentsPage() {
@@ -3369,7 +3925,7 @@ function readSquarePhoto(file: File, size = 320): Promise<string> {
   });
 }
 
-const emptyProfileForm: StudentProfileForm = { fullName: '', fathersName: '', course: 'Digital Marketing with AI', dateOfJoining: '', contactNumber: '', guardianContact: '', email: '', address: '' };
+const emptyProfileForm: StudentProfileForm = { fullName: '', fathersName: '', course: '', dateOfJoining: '', contactNumber: '', guardianContact: '', email: '', address: '' };
 
 function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' }) {
   const params = useParams<{ id: string }>();
@@ -3460,7 +4016,7 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' })
     setProfileForm({
       fullName: student?.fullName ?? '',
       fathersName: student?.fathersName ?? '',
-      course: student?.course ?? 'Digital Marketing with AI',
+      course: student?.course ?? '',
       dateOfJoining: student?.dateOfJoining ?? '',
       contactNumber: student?.contactNumber ?? '',
       guardianContact: student?.guardianContact ?? '',
@@ -3475,6 +4031,7 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' })
   const saveProfile = (event: FormEvent) => {
     event.preventDefault();
     setProfileError(''); setProfileNotice('');
+    if (!profileForm.course.trim() || !profileForm.address.trim() || !profileForm.guardianContact.trim()) { setProfileError('Complete all required fields.'); return; }
     if (!profileForm.dateOfJoining) { setProfileError('Choose the joining date.'); return; }
     const joining = new Date(`${profileForm.dateOfJoining}T00:00:00Z`);
     if (Number.isNaN(joining.getTime()) || joining.toISOString().slice(0, 10) !== profileForm.dateOfJoining) { setProfileError('That joining date does not exist. Check the day against the month.'); return; }
@@ -3526,12 +4083,12 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' })
         {editing ? <form onSubmit={saveProfile} className="mt-6 grid gap-3 sm:grid-cols-2" data-testid="form-edit-student-profile">
           <Field label="Full name" value={profileForm.fullName} onChange={(e) => setProfileForm((v) => ({ ...v, fullName: e.target.value }))} minLength={2} required data-testid="input-edit-full-name" />
           <Field label="Father&apos;s name" value={profileForm.fathersName} onChange={(e) => setProfileForm((v) => ({ ...v, fathersName: e.target.value }))} minLength={2} required data-testid="input-edit-fathers-name" />
-          <label className="grid gap-1.5 text-sm font-medium">Course<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={profileForm.course} onChange={(e) => setProfileForm((v) => ({ ...v, course: e.target.value }))} data-testid="select-edit-course"><option>Digital Marketing with AI</option></select></label>
+          <Field label="Course" value={profileForm.course} onChange={(e) => setProfileForm((v) => ({ ...v, course: e.target.value }))} minLength={2} placeholder="Enter course name" required data-testid="input-edit-course" />
           <JoiningDateField value={profileForm.dateOfJoining} onChange={(iso) => setProfileForm((v) => ({ ...v, dateOfJoining: iso }))} />
           <Field label="Contact number" value={profileForm.contactNumber} onChange={(e) => setProfileForm((v) => ({ ...v, contactNumber: e.target.value }))} minLength={6} maxLength={12} required data-testid="input-edit-contact" />
-          <Field label="Parent / guardian contact" value={profileForm.guardianContact} onChange={(e) => setProfileForm((v) => ({ ...v, guardianContact: e.target.value }))} maxLength={12} placeholder="Optional" data-testid="input-edit-guardian-contact" />
+          <Field label="Parent / guardian contact" value={profileForm.guardianContact} onChange={(e) => setProfileForm((v) => ({ ...v, guardianContact: e.target.value }))} minLength={6} maxLength={12} placeholder="Enter parent or guardian contact" required data-testid="input-edit-guardian-contact" />
           <div className="sm:col-span-2"><Field label="Email address" type="email" value={profileForm.email} onChange={(e) => setProfileForm((v) => ({ ...v, email: e.target.value }))} required data-testid="input-edit-email" /></div>
-          <div className="sm:col-span-2"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Optional — house, street, city, pin code" value={profileForm.address} onChange={(ev) => setProfileForm((v) => ({ ...v, address: ev.target.value }))} data-testid="input-edit-address" /></label></div>
+          <div className="sm:col-span-2"><label className="grid gap-1.5 text-sm font-medium">Address<Textarea rows={2} placeholder="Enter full address" value={profileForm.address} onChange={(ev) => setProfileForm((v) => ({ ...v, address: ev.target.value }))} minLength={5} required data-testid="input-edit-address" /></label></div>
           <div className="flex items-center gap-2">
             <Button type="submit" size="sm" disabled={profileSaving} data-testid="button-save-student-profile">{profileSaving ? 'Saving…' : 'Save changes'}</Button>
             <Button type="button" size="sm" variant="outline" onClick={cancelEdit} disabled={profileSaving} data-testid="button-cancel-student-profile">Cancel</Button>
@@ -3628,6 +4185,256 @@ function PanelShell({ title, subtitle, onClose, testId, children }: { title: str
       {children}
     </div>
   </div>;
+}
+
+// Shared gate in front of a sensitive branch/module change (edit or delete). It verifies
+// the admin's own password on the client through a throwaway Supabase client — so the
+// live session is never replaced or signed out — and hands the entered password back to
+// the caller, which also sends it to the API so the server can re-check it before acting.
+// The password lives only in local state for the lifetime of the dialog.
+//
+// Attempts are counted in module scope, not component state, so closing and reopening the
+// dialog cannot reset the tally: five wrong tries in a row close the dialog and lock any
+// further attempt for 60 seconds.
+const ADMIN_PASSWORD_MAX_ATTEMPTS = 5;
+const ADMIN_PASSWORD_LOCK_MS = 60_000;
+let adminPasswordFailures = 0;
+let adminPasswordLockUntil = 0;
+
+function ConfirmAdminPassword({
+  open,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  destructive,
+  busy,
+  externalError,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  message: React.ReactNode;
+  confirmLabel?: string;
+  destructive?: boolean;
+  busy?: boolean;
+  externalError?: string;
+  onCancel: () => void;
+  onConfirm: (password: string) => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!open) return;
+    setPassword('');
+    setError('');
+    setChecking(false);
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [open]);
+
+  if (!open) return null;
+
+  const remaining = Math.max(0, Math.ceil((adminPasswordLockUntil - now) / 1000));
+  const locked = remaining > 0;
+  const shown = Boolean(busy) || checking;
+
+  const submit = async () => {
+    if (locked || shown) return;
+    if (!password) {
+      setError('Enter your admin password.');
+      return;
+    }
+    setChecking(true);
+    setError('');
+    const ok = await verifyAdminPassword(password);
+    if (ok) {
+      adminPasswordFailures = 0;
+      adminPasswordLockUntil = 0;
+      setChecking(false);
+      onConfirm(password);
+      return;
+    }
+    adminPasswordFailures += 1;
+    setChecking(false);
+    if (adminPasswordFailures >= ADMIN_PASSWORD_MAX_ATTEMPTS) {
+      adminPasswordFailures = 0;
+      adminPasswordLockUntil = Date.now() + ADMIN_PASSWORD_LOCK_MS;
+      onCancel();
+      return;
+    }
+    setError('Incorrect password.');
+  };
+
+  return (
+    <PanelShell title={title} subtitle="Admin confirmation" onClose={onCancel} testId="panel-confirm-admin-password">
+      <div className="text-sm text-muted-foreground" data-testid="text-confirm-admin-password-message">{message}</div>
+      {locked ? (
+        <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive" data-testid="status-admin-password-locked">
+          Too many incorrect attempts. Try again in {remaining}s.
+        </p>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+          className="mt-4 grid gap-3"
+        >
+          <PasswordField
+            label="Admin password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoFocus
+            required
+            autoComplete="current-password"
+            data-testid="input-confirm-admin-password"
+            toggleTestId="button-toggle-confirm-admin-password"
+          />
+          {(error || externalError) && (
+            <p className="text-xs text-destructive" data-testid="status-confirm-admin-password-error">{error || externalError}</p>
+          )}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={shown} data-testid="button-cancel-confirm-admin-password">
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              variant={destructive ? 'destructive' : 'default'}
+              disabled={shown || !password}
+              data-testid="button-submit-confirm-admin-password"
+            >
+              {shown ? 'Verifying…' : confirmLabel}
+            </Button>
+          </div>
+        </form>
+      )}
+    </PanelShell>
+  );
+}
+
+// The warning that comes first on a delete: it lists what will be removed (with real
+// counts from the delete-impact endpoint) and refuses to continue until the admin types
+// the exact branch/module name. Only then does it hand off to the password gate.
+type DeleteImpact = {
+  type: 'branch' | 'module';
+  name: string;
+  modules?: number;
+  students?: number;
+  teachers?: number;
+  attendance: number;
+  assessments: number;
+  documents?: number;
+};
+
+function DeleteImpactDialog({
+  open,
+  kind,
+  id,
+  name,
+  onCancel,
+  onContinue,
+}: {
+  open: boolean;
+  kind: 'branch' | 'module';
+  id: number | string;
+  name: string;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  const [impact, setImpact] = useState<DeleteImpact | null>(null);
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setTyped('');
+    setImpact(null);
+    const url =
+      kind === 'branch'
+        ? `/api/admin/branches/${id}/delete-impact`
+        : `/api/admin/modules/${encodeURIComponent(String(id))}/delete-impact`;
+    let alive = true;
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (alive && data) setImpact(data as DeleteImpact);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [open, kind, id]);
+
+  if (!open) return null;
+
+  const matches = typed.trim() === name;
+  const lines: string[] = [];
+  if (impact) {
+    if (kind === 'branch') {
+      lines.push(`${impact.modules ?? 0} module${(impact.modules ?? 0) === 1 ? '' : 's'}`);
+      lines.push(`${impact.students ?? 0} student record${(impact.students ?? 0) === 1 ? '' : 's'} kept, unassigned from this branch`);
+    } else if (impact.teachers) {
+      lines.push(`${impact.teachers} teacher login${impact.teachers === 1 ? '' : 's'}`);
+    }
+    lines.push(`${impact.attendance} attendance row${impact.attendance === 1 ? '' : 's'}`);
+    lines.push(`${impact.assessments} assessment row${impact.assessments === 1 ? '' : 's'}`);
+    if (kind === 'module' && impact.documents) {
+      lines.push(`${impact.documents} course file${impact.documents === 1 ? '' : 's'}`);
+    }
+  }
+
+  return (
+    <PanelShell
+      title={`Delete ${kind === 'branch' ? 'branch' : 'module'} “${name}”?`}
+      subtitle="This cannot be undone"
+      onClose={onCancel}
+      testId="panel-delete-impact"
+    >
+      <div className="grid gap-3 text-sm text-muted-foreground">
+        <p>Deleting <span className="font-semibold text-foreground">{name}</span> will remove:</p>
+        {impact ? (
+          <ul className="list-disc space-y-1 pl-5" data-testid="list-delete-impact">
+            {lines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>Loading what will be removed…</p>
+        )}
+        <label className="grid gap-1.5">
+          <span className="text-xs font-medium text-foreground">
+            Type <span className="font-semibold">{name}</span> to confirm
+          </span>
+          <Input
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            autoFocus
+            data-testid="input-delete-confirm-name"
+          />
+        </label>
+        <div className="flex items-center justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onCancel} data-testid="button-cancel-delete-impact">
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={!matches}
+            onClick={onContinue}
+            data-testid="button-continue-delete-impact"
+          >
+            Continue
+          </Button>
+        </div>
+      </div>
+    </PanelShell>
+  );
 }
 
 function AdminSettingsPage() {
@@ -3765,6 +4572,26 @@ function StudentAuthPage() {
   const login = useLogin();
   const [message, setMessage] = useState('');
   const [signInForm, setSignInForm] = useState({ identifier: '', password: '' });
+  const branchCode = new URLSearchParams(window.location.search).get('branch');
+  const [branchLogin, setBranchLogin] = useState<{ status: 'idle' | 'loading' | 'ready' | 'missing'; branchName: string | null }>(() =>
+    branchCode ? { status: 'loading', branchName: null } : { status: 'idle', branchName: null },
+  );
+
+  useEffect(() => {
+    if (!branchCode) {
+      setBranchLogin({ status: 'idle', branchName: null });
+      return;
+    }
+    let alive = true;
+    setBranchLogin({ status: 'loading', branchName: null });
+    void resolveLoginCode(branchCode).then((branch) => {
+      if (!alive) return;
+      setBranchLogin(branch?.type === 'branch'
+        ? { status: 'ready', branchName: branch.name }
+        : { status: 'missing', branchName: null });
+    });
+    return () => { alive = false; };
+  }, [branchCode]);
 
   const handleSignIn = (event: FormEvent) => {
     event.preventDefault();
@@ -3775,7 +4602,11 @@ function StudentAuthPage() {
     });
   };
 
-  return <AuthShell theme="student">
+  if (branchLogin.status === 'loading') return <LoadingScreen label="Opening student sign in" />;
+  if (branchLogin.status === 'missing') return <PageDoesNotExist />;
+  const brandLogo = branchLogin.branchName && branchLogin.branchName.trim().toLowerCase() !== 'zedking' ? hascLogo : undefined;
+
+  return <AuthShell theme="student" brandLogo={brandLogo}>
     <form onSubmit={handleSignIn}>
       <AuthField label="Email" icon={UserRound} type="email" value={signInForm.identifier} onChange={(e) => setSignInForm({ ...signInForm, identifier: e.target.value })} placeholder={LOGIN_THEMES.student.idPlaceholder} autoComplete="email" required data-testid="input-student-identifier" />
       <AuthPasswordField label="Password" value={signInForm.password} onChange={(e) => setSignInForm({ ...signInForm, password: e.target.value })} placeholder={LOGIN_THEMES.student.passwordPlaceholder} autoComplete="current-password" required data-testid="input-student-password" toggleTestId="button-toggle-student-pwd" />
@@ -3801,7 +4632,7 @@ function Protected({ role, children }: { role: Role; children: ReactNode }) {
   useEffect(() => {
     if (role === 'admin') { if (adminSession.ready && !adminSession.admin) setLocation('/admin'); return; }
     // Send them to this workspace's own sign-in, never to another role's dashboard.
-    if (!isLoading && (!user || user.role !== role)) setLocation(role === 'teacher' ? '/admin/ai' : '/');
+    if (!isLoading && (!user || user.role !== role)) setLocation('/');
   }, [isLoading, user, role, adminSession, setLocation]);
   if (role === 'admin') {
     if (!adminSession.ready) return <LoadingScreen label="Opening your workspace" />;
@@ -3819,6 +4650,8 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Use Zedking theme for Zedking branch, otherwise branch theme — matches panel
+  const loginTheme = branch.name.trim().toLowerCase() === 'zedking' ? 'zedking' : 'branch';
   const handleSignIn = (event: FormEvent) => {
     event.preventDefault();
     setError('');
@@ -3838,16 +4671,16 @@ function BranchLoginPage({ branch }: { branch: { id: number; name: string; usern
       .finally(() => setLoading(false));
   };
   if (branch) {
-    return <AuthShell theme="branch">
+    return <AuthShell theme={loginTheme as LoginThemeKey}>
       <form onSubmit={handleSignIn}>
-        <AuthField label="User ID" icon={UserRound} type="text" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder={LOGIN_THEMES.branch.idPlaceholder} autoComplete="username" required data-testid="input-branch-login-username" />
-        <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES.branch.passwordPlaceholder} autoComplete="current-password" required data-testid="input-branch-login-password" toggleTestId="button-toggle-branch-login-pwd" />
+        <AuthField label="User ID" icon={UserRound} type="text" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder={LOGIN_THEMES[loginTheme as LoginThemeKey].idPlaceholder} autoComplete="username" required data-testid="input-branch-login-username" />
+        <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES[loginTheme as LoginThemeKey].passwordPlaceholder} autoComplete="current-password" required data-testid="input-branch-login-password" toggleTestId="button-toggle-branch-login-pwd" />
         {error && <p className="auth-error" data-testid="status-branch-login-error">{error}</p>}
-        <button type="submit" className="auth-button" disabled={loading} data-testid="button-submit-branch-login">{loading ? 'Signing in…' : LOGIN_THEMES.branch.buttonLabel} <ArrowRight size={18} /></button>
+        <button type="submit" className="auth-button" disabled={loading} data-testid="button-submit-branch-login">{loading ? 'Signing in…' : LOGIN_THEMES[loginTheme as LoginThemeKey].buttonLabel} <ArrowRight size={18} /></button>
       </form>
     </AuthShell>;
   }
-  return <AuthShell theme="branch" heading="Branch desk not found." subtitle="That page isn’t one of the branches this institute runs. Check the spelling, or contact the institute admin.">
+  return <AuthShell theme={loginTheme as LoginThemeKey} heading="Branch desk not found." subtitle="That page isn’t one of the branches this institute runs. Check the spelling, or contact the institute admin.">
     <Link href="/" className="auth-button" data-testid="link-branch-missing-home">Back to home</Link>
   </AuthShell>;
 }
@@ -3885,7 +4718,6 @@ function BranchPage() {
   const { overview, failed, reload } = useBranchOverview();
   const [addingModule, setAddingModule] = useState(false);
   const [moduleName, setModuleName] = useState('');
-  const [moduleSlug, setModuleSlug] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -3897,14 +4729,14 @@ function BranchPage() {
     fetch('/api/branch/modules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: moduleName.trim(), slug: moduleSlug.trim() }),
+      body: JSON.stringify({ name: moduleName.trim() }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'Could not add the module.');
         const created = data as { name?: string; id?: string };
         setNotice(`Module "${created.name ?? moduleName.trim()}" added${created.id ? ` — desk /${created.id}` : ''}.`);
-        setModuleName(''); setModuleSlug(''); setAddingModule(false);
+        setModuleName(''); setAddingModule(false);
         void refreshBranchCatalog().then(reload);
       })
       .catch((err: Error) => setError(err.message))
@@ -3916,21 +4748,17 @@ function BranchPage() {
     <section>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl font-bold">Modules</h2>
-        {!addingModule && <Button size="sm" onClick={() => { setAddingModule(true); setModuleName(''); setModuleSlug(''); setError(''); }} data-testid="button-branch-add-module-toggle"><Plus size={15} /> Add module</Button>}
+        {!addingModule && <Button size="sm" onClick={() => { setAddingModule(true); setModuleName(''); setError(''); }} data-testid="button-branch-add-module-toggle"><Plus size={15} /> Add module</Button>}
       </div>
       {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-add-error">{error}</p>}
       {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-branch-add-success">{notice}</p>}
       {addingModule && (
         <form onSubmit={createModule} className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4" data-testid="form-add-module">
           <label className="grid gap-1.5 text-sm font-medium">Module name
-            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="e.g. Artificial Intelligence" autoFocus className="w-64" data-testid="input-module-name" />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">Desk name (URL)
-            <Input value={moduleSlug} onChange={(e) => setModuleSlug(e.target.value)} placeholder="e.g. ai-lab" className="w-44" data-testid="input-module-slug" />
+            <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="Enter module name" autoFocus className="w-64" data-testid="input-module-name" />
           </label>
           <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
-          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleSlug(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
-          <p className="w-full text-xs text-muted-foreground">The desk opens at <span className="font-semibold text-foreground">/branch/module/&lt;desk name&gt;</span>. Leave it blank to build it from the module name.</p>
+          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
         </form>
       )}
       <div className="mt-4 grid gap-4 md:grid-cols-3">
@@ -3939,7 +4767,6 @@ function BranchPage() {
           <Link key={mod.id} href={`/branch/module/${mod.id}`} className="rounded-xl border border-border bg-card p-5 transition-colors hover:border-accent hover:bg-accent/5" data-testid={`card-branch-module-${mod.id}`}>
             <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
             <h3 className="mt-1 font-display text-lg font-bold">{mod.name}</h3>
-            <p className="mt-1 font-mono-ui text-xs text-muted-foreground">Desk: /{mod.id}</p>
             <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary"><ArrowRight size={14} /> Open</span>
           </Link>
         ))}
@@ -4110,8 +4937,8 @@ function BranchModuleDetailPage() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mt-5 grid max-w-lg gap-4 border-t border-border pt-5" data-testid="form-create-login">
-          <Field label="Name" value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} placeholder="e.g. Ajay" minLength={2} required data-testid="input-login-name" />
-          <Field label="User ID" value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} placeholder="e.g. ajay.ai" minLength={3} required data-testid="input-login-username" />
+          <Field label="Name" value={form.displayName} onChange={(e) => setForm((v) => ({ ...v, displayName: e.target.value }))} placeholder="Enter name" minLength={2} required data-testid="input-login-name" />
+          <Field label="User ID" value={form.username} onChange={(e) => setForm((v) => ({ ...v, username: e.target.value }))} placeholder="Enter user ID" minLength={3} required data-testid="input-login-username" />
           <div className="relative">
             <Field label="Password" type={showPwd ? 'text' : 'password'} value={form.password} onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))} minLength={6} required data-testid="input-login-password" />
             <button type="button" onClick={() => setShowPwd((v) => !v)} className="absolute right-2 top-[34px] rounded p-1 text-muted-foreground hover:text-foreground" tabIndex={-1} data-testid="button-toggle-pwd">
@@ -4319,7 +5146,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:panel"><TopLevelPanelRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:code"><LoginCodeRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -4380,6 +5207,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const cycle = project === '' ? null : (month - 1) * 2 + project;
+  const [projectLinks, setProjectLinks] = useState<Record<string, string>>({});
 
   const load = useCallback(async (target: number) => {
     setLoading(true); setError('');
@@ -4397,10 +5225,17 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
 
   useEffect(() => {
     setNotice('');
-    // No project is picked for the teacher: marks overwrite silently, so that choice has to
-    // be deliberate before a single row is editable.
     if (cycle == null) { setRows({}); setSaved({}); return; }
     void load(cycle);
+    // Fetch project links from the new project-submissions endpoint for this cycle
+    fetch(`/api/teacher/project-submissions?cycle=${cycle}`)
+      .then((res) => res.json())
+      .then((data: { studentId: string; projectLink: string }[]) => {
+        const links: Record<string, string> = {};
+        for (const row of data) links[row.studentId] = row.projectLink;
+        setProjectLinks(links);
+      })
+      .catch(() => undefined);
   }, [cycle, load]);
 
   const all = students.data ?? [];
@@ -4462,58 +5297,68 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
         <h2 className="font-display text-2xl font-bold">Month {month} · Project {project}</h2>
         <span className="text-xs text-muted-foreground">{shown.length} student{shown.length === 1 ? '' : 's'}</span>
       </div>
+
       {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
         : shown.length === 0 ? <EmptyState title="No matching students" detail={all.length === 0 ? 'Nobody is enrolled yet.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
-          : <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] border-collapse text-left text-sm" data-testid="table-assessment">
-              <thead>
-                <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <th className="py-2 pr-3 font-semibold">#</th>
-                  <th className="py-2 pr-3 font-semibold">Student ID</th>
-                  <th className="py-2 pr-3 font-semibold">Name</th>
-                  <th className="py-2 pr-3 font-semibold">Marks</th>
-                  <th className="py-2 pr-3 font-semibold">Feedback</th>
-                  <th className="py-2 font-semibold">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((student, index) => {
-                  const row = draft(student.id);
-                  const isSaved = saved[student.id] === true;
-                  const setCell = (patch: Partial<{ marks: string; feedback: string }>) =>
-                    setRows((v) => ({ ...v, [student.id]: { ...row, ...patch } }));
-                  return <tr key={student.id} className="border-b border-border/60">
-                    <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
-                    <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
-                    <td className="py-2 pr-3">
-                      <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <Input ref={(node) => { marksBox.current[student.id] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
-                    </td>
-                    <td className="py-2 pr-3">
-                      <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
-                    </td>
-                    <td className="py-2">
-                      <span className="flex items-center gap-2">
-                        <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
-                        {isSaved && <>
-                          <span className="text-[11px] font-medium text-emerald-700">Saved</span>
-                          <Button type="button" size="sm" variant="ghost" onClick={() => {
-                            // The box was never locked, so Edit only needs to say "this row is
-                            // open again" and put the caret in it.
-                            setSaved((v) => ({ ...v, [student.id]: false }));
-                            setNotice(`Editing ${student.id} — type the new marks and press Update.`);
-                            marksBox.current[student.id]?.focus();
-                          }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
-                        </>}
-                      </span>
-                    </td>
-                  </tr>;
-                })}
-              </tbody>
-            </table>
-          </div>}
+        : <div className="overflow-x-auto">
+          <table className="w-full min-w-[900px] border-collapse text-left text-sm" data-testid="table-assessment">
+            <thead>
+              <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                <th className="py-2 pr-3 font-semibold">#</th>
+                <th className="py-2 pr-3 font-semibold">Student ID</th>
+                <th className="py-2 pr-3 font-semibold">Name</th>
+                <th className="py-2 pr-3 font-semibold">Project Link</th>
+                <th className="py-2 pr-3 font-semibold">Marks</th>
+                <th className="py-2 pr-3 font-semibold">Feedback</th>
+                <th className="py-2 font-semibold">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((student, index) => {
+                const row = draft(student.id);
+                const isSaved = saved[student.id] === true;
+                const setCell = (patch: Partial<{ marks: string; feedback: string }>) =>
+                  setRows((v) => ({ ...v, [student.id]: { ...row, ...patch } }));
+                const link = projectLinks[student.id];
+                return <tr key={student.id} className="border-b border-border/60">
+                  <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
+                  <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
+                  <td className="py-2 pr-3">
+                    <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
+                  </td>
+                  <td className="py-2 pr-3">
+                    {link ? (
+                      <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid={`project-link-${student.id}`}>
+                        <ExternalLink size={14} /> View Project
+                      </a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not uploaded</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3">
+                    <Input ref={(node) => { marksBox.current[student.id] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
+                  </td>
+                  <td className="py-2 pr-3">
+                    <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
+                  </td>
+                  <td className="py-2">
+                    <span className="flex items-center gap-2">
+                      <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
+                      {isSaved && <>
+                        <span className="text-[11px] font-medium text-emerald-700">Saved</span>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => {
+                          setSaved((v) => ({ ...v, [student.id]: false }));
+                          setNotice(`Editing ${student.id} — type the new marks and press Update.`);
+                          marksBox.current[student.id]?.focus();
+                        }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
+                      </>}
+                    </span>
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>}
     </section>}
 
     {error && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-assessment-error">{error}</p>}
@@ -4536,7 +5381,7 @@ function TeacherPageFromRoute() {
   return user ? <TeacherPage user={user} /> : null;
 }
 
-function ModulePanel({ panel }: { panel: Module }) {
+function ModulePanel({ panel, loginAllowed = true }: { panel: Module; loginAllowed?: boolean }) {
   const { data: user, isLoading } = useCurrentUser();
   const [, setLocation] = useLocation();
   const login = useLogin();
@@ -4547,6 +5392,9 @@ function ModulePanel({ panel }: { panel: Module }) {
 
   if (isLoading) return <LoadingScreen label="Opening your workspace" />;
   if (user?.role === 'teacher' && user.module === panel) return <Shell user={user}><TeacherPage user={user} /></Shell>;
+  // /admin/<module> is a legacy URL: an already-signed-in module owner still reaches
+  // their desk, but anyone else gets the 404 — the login form now lives only at /<code>.
+  if (!loginAllowed) return <PageDoesNotExist />;
 
   const handleSignIn = (event: FormEvent) => {
     event.preventDefault();
@@ -4554,7 +5402,7 @@ function ModulePanel({ panel }: { panel: Module }) {
     login.mutate({ data: { role: 'teacher', identifier, password } }, {
       onSuccess: (signInUser) => {
         queryClient.setQueryData(currentUserQueryKey('teacher'), signInUser);
-        setLocation(signInUser.module && signInUser.module !== panel ? `/admin/${signInUser.module}` : `/admin/${panel}`);
+        setLocation('/teacher');
       },
       onError: () => setError('These credentials are not valid for this panel.'),
     });
@@ -4576,12 +5424,18 @@ function ModulePanel({ panel }: { panel: Module }) {
     illustrationIndex = 0;
   }
 
-  return <AuthShell theme="module" moduleNames={illustrationNames} currentIndex={illustrationIndex}>
+  // A module desk keeps its own identity: the purple module theme and the module-name
+  // badge, not the branch's green/indigo skin. Otherwise /<module-code> is
+  // indistinguishable from the branch login page.
+  const loginTheme: LoginThemeKey = 'module';
+  const moduleTitle = branchModules.find((m) => m.id === panel)?.name ?? moduleNames[panel] ?? panel;
+
+  return <AuthShell theme={loginTheme} moduleNames={illustrationNames} currentIndex={illustrationIndex} heading={`Sign in to your ${moduleTitle} desk`} subtitle="Access and manage your module workspace." badgeText={moduleTitle} badgeIcon={Box}>
     <form onSubmit={handleSignIn}>
-      <AuthField label="Owner ID" icon={UserRound} type="text" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder={LOGIN_THEMES.module.idPlaceholder} autoComplete="username" required data-testid={`input-panel-identifier-${panel}`} />
-      <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES.module.passwordPlaceholder} autoComplete="current-password" required data-testid={`input-panel-password-${panel}`} toggleTestId={`button-toggle-panel-pwd-${panel}`} />
+      <AuthField label="Owner ID" icon={UserRound} type="text" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder={LOGIN_THEMES[loginTheme as LoginThemeKey].idPlaceholder} autoComplete="username" required data-testid={`input-panel-identifier-${panel}`} />
+      <AuthPasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={LOGIN_THEMES[loginTheme as LoginThemeKey].passwordPlaceholder} autoComplete="current-password" required data-testid={`input-panel-password-${panel}`} toggleTestId={`button-toggle-panel-pwd-${panel}`} />
       {error && <p className="auth-error" data-testid={`status-panel-error-${panel}`}>{error}</p>}
-      <button type="submit" className="auth-button" disabled={login.isPending} data-testid={`button-panel-login-${panel}`}>{login.isPending ? 'Signing in…' : LOGIN_THEMES.module.buttonLabel} <ArrowRight size={18} /></button>
+      <button type="submit" className="auth-button" disabled={login.isPending} data-testid={`button-panel-login-${panel}`}>{login.isPending ? 'Signing in…' : LOGIN_THEMES[loginTheme as LoginThemeKey].buttonLabel} <ArrowRight size={18} /></button>
     </form>
   </AuthShell>;
 }
@@ -4591,8 +5445,8 @@ function ModulePanelRoute() {
   const raw = (params.panel ?? '').toLowerCase();
   const catalog = useCatalogModules();
   const valid = catalog.some((m) => m.key === raw) || (modules as readonly string[]).includes(raw);
-  if (!valid) return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Panel not found</h1><Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
-  return <ModulePanel panel={raw as Module} />;
+  if (!valid) return <PageDoesNotExist />;
+  return <ModulePanel panel={raw as Module} loginAllowed={false} />;
 }
 
 function AdminBranchModuleRoute() {
@@ -4615,16 +5469,25 @@ function AdminBranchModuleReportRoute() {
   return <AdminModuleReportPage branchId={branchId} />;
 }
 
-function TopLevelPanelRoute() {
-  const params = useParams<{ panel: string }>();
-  const raw = (params.panel ?? '').toLowerCase();
-  const catalog = useCatalogModules();
-  const branches = useBranches();
-  // A bare /<key> is either a module panel (teacher desk) or a branch's login page.
-  if (catalog.some((m) => m.key === raw) || (modules as readonly string[]).includes(raw)) return <ModulePanel panel={raw as Module} />;
-  const branch = branches?.find((b) => b.name.toLowerCase() === raw || b.name.toLowerCase().replace(/\s+/g, '-') === raw || (b.username ?? '').toLowerCase() !== '' && b.username?.toLowerCase() === raw);
-  if (branch) return <BranchLoginPage branch={branch} />;
-  return <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Panel not found</h1><Link href="/" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>;
+// The only entry point for branch and module logins: a shared, random /<code>. The code
+// is resolved through the Supabase function (falling back to the API), and an unknown or
+// retired code shows the same plain 404 — never a name.
+function LoginCodeRoute() {
+  const params = useParams<{ code: string }>();
+  const raw = (params.code ?? '').toLowerCase();
+  const [state, setState] = useState<{ status: 'loading' | 'found' | 'missing'; data: ResolvedLoginCode | null }>({ status: 'loading', data: null });
+  useEffect(() => {
+    let alive = true;
+    setState({ status: 'loading', data: null });
+    void resolveLoginCode(raw).then((data) => {
+      if (alive) setState({ status: data ? 'found' : 'missing', data });
+    });
+    return () => { alive = false; };
+  }, [raw]);
+  if (state.status === 'loading') return <LoadingScreen label="Opening your workspace" />;
+  if (state.status === 'missing' || !state.data) return <PageDoesNotExist />;
+  if (state.data.type === 'branch') return <BranchLoginPage branch={{ id: Number(state.data.id), name: state.data.name }} />;
+  return <ModulePanel panel={state.data.id as Module} />;
 }
 
 function StudentPageFromRoute() {
@@ -4642,4 +5505,5 @@ function App() {
 }
 
 export default App;
+
 

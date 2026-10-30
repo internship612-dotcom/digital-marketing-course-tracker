@@ -465,6 +465,52 @@
   --sidebar-foreground: var(--sidebar-text);
 }
 
+/* MODULE DESK — deep violet sidebar, lilac page, purple accents. Deliberately
+   different from the branch portal so a module link never looks like a branch. */
+[data-theme='module'] {
+  --bg: 270 45% 97%;
+  --surface: 0 0% 100%;
+  --sidebar-bg: 265 48% 20%;
+  --sidebar-text: 270 40% 94%;
+  --text: 265 25% 16%;
+  --text-muted: 265 14% 42%;
+  --border: 268 24% 89%;
+  --primary: 265 55% 32%;
+  --primary-hover: 265 55% 39%;
+  --primary-foreground: 270 80% 94%;
+  --accent: 270 80% 92%;
+  --accent-foreground: 265 55% 32%;
+  --secondary: 270 38% 94%;
+  --secondary-foreground: 265 25% 16%;
+  --muted: 270 35% 95%;
+  --input: 268 22% 82%;
+  --ring: 265 70% 52%;
+  --sidebar-border: 265 38% 30%;
+  --sidebar-accent: 265 42% 27%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-primary: 270 80% 88%;
+  --sidebar-primary-foreground: 265 48% 20%;
+  --destructive: 1 71% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --chart-1: 265 70% 52%;
+  --chart-2: 265 48% 20%;
+  --chart-3: 187 58% 43%;
+  --chart-4: 1 71% 54%;
+  --chart-5: 38 92% 54%;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --card-border: var(--border);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --popover-border: var(--border);
+  --muted-foreground: var(--text-muted);
+  --sidebar: var(--sidebar-bg);
+  --sidebar-foreground: var(--sidebar-text);
+}
+
 /* STUDENT — warm charcoal sidebar, off-white page, coral/peach accents. */
 [data-theme='student'] {
   --bg: 38 44% 96%;
@@ -532,7 +578,9 @@
    ========================================================================== */
 .auth-shell {
   position: relative;
-  min-height: 100vh;
+  overflow: clip;
+  height: 100dvh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -625,6 +673,7 @@
 }
 
 .auth-logo { max-width: 200px; height: auto; }
+.auth-logo-branch { width: 200px; height: 100px; object-fit: cover; object-position: center; background: #FFFFFF; }
 .auth-tracker {
   margin-top: 6px;
   font-size: 12px;
@@ -730,6 +779,22 @@
 @media (max-width: 480px) {
   .auth-art { width: 170px; height: 170px; }
   .auth-card { padding: 24px; }
+}
+
+@media (max-height: 760px) {
+  .auth-shell { padding: 12px; }
+  .auth-inner { gap: 16px; }
+  .auth-art { width: 180px; height: 180px; margin-left: 0; }
+  .auth-card { padding: 20px; }
+  .auth-heading { margin-top: 12px; }
+  .auth-subtitle { margin-bottom: 14px; }
+}
+
+@media (max-height: 680px) {
+  .auth-shell { padding: 12px; }
+  .auth-art { display: flex; width: 120px; height: 120px; margin-left: 0; }
+  .auth-inner { gap: 12px; }
+  .auth-card { max-height: calc(100dvh - 24px); overflow-y: auto; }
 }
 
 @layer base {

@@ -16,7 +16,7 @@
  * To add a theme: add a `[data-theme='x']` block to `src/index.css`, then add 'x'
  * to `PanelTheme` and `PANEL_THEME_LABELS` below. No component changes needed.
  */
-export type PanelTheme = 'admin' | 'zedking' | 'branch' | 'student';
+export type PanelTheme = 'admin' | 'zedking' | 'branch' | 'student' | 'module';
 
 /** The badge shown at the top of a panel when a more specific name is not known. */
 export const PANEL_THEME_LABELS: Record<PanelTheme, string> = {
@@ -24,6 +24,7 @@ export const PANEL_THEME_LABELS: Record<PanelTheme, string> = {
   zedking: 'Zedking',
   branch: 'Branch',
   student: 'Student',
+  module: 'Module',
 };
 
 /** The one branch that gets its own theme; every other branch shares `branch`. */

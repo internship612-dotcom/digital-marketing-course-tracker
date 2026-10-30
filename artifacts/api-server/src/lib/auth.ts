@@ -361,7 +361,7 @@ async function sessionContext(
         email: student.email,
         module: null,
         studentId: student.id,
-        branchId: null,
+        branchId: student.branchId,
       }
     : null;
 }
@@ -451,6 +451,7 @@ export function publicUser(context: AuthContext) {
     email: context.email,
     module: context.module,
     studentId: context.studentId,
+    branchId: context.branchId,
   };
 }
 

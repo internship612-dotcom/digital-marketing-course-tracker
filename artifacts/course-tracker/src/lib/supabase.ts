@@ -31,3 +31,32 @@ export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON
 export function isAdminEmail(email: string | null | undefined): boolean {
   return (email ?? '').toLowerCase() === ADMIN_EMAIL;
 }
+
+// Confirm the signed-in admin's OWN password without disturbing the live session.
+// A throwaway client is created with persistSession and autoRefreshToken off, so the
+// password grant it performs is held only in that object's memory — the admin's real
+// session in `supabase` above is never replaced or signed out, whatever the outcome.
+// The password is used for this one call and is never stored, logged or rendered.
+export async function verifyAdminPassword(password: string): Promise<boolean> {
+  const email = await adminEmailForVerification();
+  if (!email || !password) return false;
+  const ephemeral = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  try {
+    const { data, error } = await ephemeral.auth.signInWithPassword({ email, password });
+    return !error && Boolean(data?.session);
+  } catch {
+    return false;
+  }
+}
+
+async function adminEmailForVerification(): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user?.email) return data.session.user.email;
+  } catch {
+    /* private mode / no session — fall through to the known admin address */
+  }
+  return ADMIN_EMAIL;
+}

@@ -33,6 +33,8 @@ export interface CurrentUser {
   module?: Module | null;
   /** @nullable */
   studentId?: string | null;
+  /** @nullable */
+  branchId?: number | null;
 }
 
 export interface LoginInput {
