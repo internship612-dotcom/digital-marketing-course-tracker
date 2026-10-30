@@ -3319,9 +3319,6 @@ function StudentProjectPage() {
     if (name.length > 100) { setDialogError('Name must be 100 characters or less.'); return; }
     if (!link) { setDialogError('Enter the link to your project.'); return; }
     if (link.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
-    let parsed: URL;
-    try { parsed = new URL(link); } catch { setDialogError('That does not look like a link. It should start with http:// or https://'); return; }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') { setDialogError('The link must start with http:// or https://.'); return; }
 
     setDialogSaving(true);
     setDialogError('');
@@ -3475,7 +3472,7 @@ function StudentProjectPage() {
               <label htmlFor="project-link" className="text-sm font-medium">Project Link</label>
               <Input
                 id="project-link"
-                type="url"
+                type="text"
                 value={dialogLink}
                 onChange={(e) => setDialogLink(e.target.value)}
                 placeholder="https://..."
@@ -4711,16 +4708,25 @@ type BranchOverview = {
   attendancePending: number;
   assessmentMarked: number;
   assessmentPending: number;
-  modules: { id: string; name: string; attendanceMarked: number; assessmentMarked: number }[];
+  modules: { id: string; name: string; loginCode: string; attendanceMarked: number; assessmentMarked: number }[];
 };
 
 function BranchPage() {
   const { overview, failed, reload } = useBranchOverview();
   const [addingModule, setAddingModule] = useState(false);
   const [moduleName, setModuleName] = useState('');
+  const [moduleLoginCode, setModuleLoginCode] = useState(() => randomLoginCode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
+  const [editModuleName, setEditModuleName] = useState('');
+  const [editModuleLoginCode, setEditModuleLoginCode] = useState('');
+  const [pwdAction, setPwdAction] = useState<{ kind: 'edit-module' | 'delete-module'; moduleId: string; name: string } | null>(null);
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [pwdError, setPwdError] = useState('');
+  const [pwdPassword, setPwdPassword] = useState('');
+  const isZedking = overview?.branchName?.trim().toLowerCase() === 'zedking';
 
   const createModule = (event: FormEvent) => {
     event.preventDefault();
@@ -4729,18 +4735,125 @@ function BranchPage() {
     fetch('/api/branch/modules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: moduleName.trim() }),
+      body: JSON.stringify({ name: moduleName.trim(), loginCode: moduleLoginCode.trim() }),
     })
       .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error((data as { error?: string })?.error || 'Could not add the module.');
         const created = data as { name?: string; id?: string };
         setNotice(`Module "${created.name ?? moduleName.trim()}" added${created.id ? ` — desk /${created.id}` : ''}.`);
-        setModuleName(''); setAddingModule(false);
+        setModuleName(''); setModuleLoginCode(randomLoginCode()); setAddingModule(false);
         void refreshBranchCatalog().then(reload);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
+  };
+
+  const confirmBranchPassword = (password: string) => {
+    if (!pwdAction) return;
+    setPwdBusy(true); setPwdError('');
+    void fetch('/api/branch/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('The branch password is incorrect.');
+        if (pwdAction.kind === 'edit-module') {
+          setError(''); setNotice('');
+          void fetch(`/api/branch/modules/${encodeURIComponent(pwdAction.moduleId)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: editModuleName.trim(), loginCode: editModuleLoginCode.trim(), branchPassword: password }),
+          })
+            .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+            .then(({ ok, data }) => {
+              if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
+              setEditingModuleId(null);
+              setPwdAction(null);
+              setNotice('Module updated.');
+              void refreshBranchCatalog().then(reload);
+            })
+            .catch((err) => setPwdError(err instanceof Error ? err.message : 'Could not save.'))
+            .finally(() => setPwdBusy(false));
+        } else if (pwdAction.kind === 'delete-module') {
+          void fetch(`/api/branch/modules/${encodeURIComponent(pwdAction.moduleId)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ branchPassword: password }),
+          })
+            .then(async (res) => {
+              if (!res.ok) {
+                const d = await res.json();
+                throw new Error((d as { error?: string })?.error ?? 'delete failed');
+              }
+            })
+            .then(() => {
+              setNotice('Module deleted.');
+              setPwdAction(null);
+              void refreshBranchCatalog().then(reload);
+            })
+            .catch((err) => setPwdError(err instanceof Error ? err.message : 'Could not delete module.'))
+            .finally(() => setPwdBusy(false));
+        }
+        setPwdError(''); setPwdBusy(false); setPwdAction(null);
+      })
+      .catch((err) => setPwdError(err instanceof Error ? err.message : 'The branch password is incorrect.'))
+      .finally(() => { if (pwdAction) setPwdBusy(false); });
+  };
+
+  const requestEditModule = (moduleId: string, name: string, loginCode: string) => {
+    if (isZedking) {
+      setEditModuleName(name);
+      setEditModuleLoginCode(loginCode ?? '');
+      setPwdAction({ kind: 'edit-module', moduleId, name });
+      return;
+    }
+    setEditingModuleId(moduleId);
+    setEditModuleName(name);
+    setEditModuleLoginCode(loginCode ?? '');
+    setError('');
+  };
+
+  const saveEditModule = (moduleId: string) => {
+    setError(''); setNotice('');
+    void fetch(`/api/branch/modules/${encodeURIComponent(moduleId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editModuleName.trim(), loginCode: editModuleLoginCode.trim() }),
+    })
+      .then((res) => res.json().then((data: { error?: string }) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error((data as { error?: string })?.error ?? 'Could not save.');
+        setEditingModuleId(null);
+        setNotice('Module updated.');
+        void refreshBranchCatalog().then(reload);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Could not save.'));
+  };
+
+  const deleteModule = (moduleId: string) => {
+    if (isZedking) {
+      const mod = (overview?.modules ?? []).find((m) => m.id === moduleId);
+      setPwdAction({ kind: 'delete-module', moduleId, name: mod?.name ?? '' });
+      return;
+    }
+    setError(''); setNotice('');
+    void fetch(`/api/branch/modules/${encodeURIComponent(moduleId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error((d as { error?: string })?.error ?? 'delete failed');
+        }
+      })
+      .then(() => {
+        setNotice('Module deleted.');
+        void refreshBranchCatalog().then(reload);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Could not delete module.'));
   };
 
   return <>
@@ -4757,23 +4870,63 @@ function BranchPage() {
           <label className="grid gap-1.5 text-sm font-medium">Module name
             <Input value={moduleName} onChange={(e) => setModuleName(e.target.value)} placeholder="Enter module name" autoFocus className="w-64" data-testid="input-module-name" />
           </label>
-          <Button type="submit" size="sm" disabled={busy || !moduleName.trim()} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
-          <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+          <div className="min-w-[16rem] flex-1">
+            <LoginCodeField value={moduleLoginCode} onChange={setModuleLoginCode} testId="input-module-login-code" />
+          </div>
+          <div className="ml-auto flex gap-2">
+            <Button type="submit" size="sm" disabled={busy || !moduleName.trim() || !!loginCodeError(moduleLoginCode)} data-testid="button-add-module-save">{busy ? 'Adding…' : 'Add module'}</Button>
+            <button type="button" onClick={() => { setAddingModule(false); setModuleName(''); setModuleLoginCode(randomLoginCode()); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel</button>
+          </div>
         </form>
       )}
       <div className="mt-4 grid gap-4 md:grid-cols-3">
-        {overview == null && !failed && [1, 2, 3].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}
+        {overview == null && !failed && [1, 2, 3].map((i) => <div key={i} className="h-44 animate-pulse rounded-xl bg-card" />)}
         {(overview?.modules ?? []).map((mod) => (
-          <Link key={mod.id} href={`/branch/module/${mod.id}`} className="rounded-xl border border-border bg-card p-5 transition-colors hover:border-accent hover:bg-accent/5" data-testid={`card-branch-module-${mod.id}`}>
-            <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</p>
-            <h3 className="mt-1 font-display text-lg font-bold">{mod.name}</h3>
-            <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary"><ArrowRight size={14} /> Open</span>
-          </Link>
+          <div key={mod.id} className="relative flex flex-col rounded-lg border border-border bg-background p-4 transition hover:border-accent/60" data-testid={`card-branch-module-${mod.id}`}>
+            <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module</span>
+            <h3 className="mt-2 pr-12 font-display text-lg font-bold leading-tight">{mod.name}</h3>
+            <div className="mt-2"><LoginLinkActions code={mod.loginCode ?? ''} testId={`module-${mod.id}`} /></div>
+            <Link href={`/branch/module/${mod.id}`} className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-bold text-foreground hover:border-accent hover:text-primary" data-testid={`link-open-module-${mod.id}`}>Open module <ArrowRight size={13} /></Link>
+            <div className="absolute right-2 top-2 flex items-center gap-0.5">
+              <button type="button" onClick={() => requestEditModule(mod.id, mod.name, mod.loginCode ?? '')} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit module" aria-label="Edit module" data-testid={`button-edit-branch-module-${mod.id}`}><Pencil size={14} /></button>
+              <button type="button" onClick={() => deleteModule(mod.id)} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Delete module" aria-label="Delete module" data-testid={`button-delete-branch-module-${mod.id}`}><Trash2 size={14} /></button>
+            </div>
+            {editingModuleId === mod.id && !isZedking && (
+              <form onSubmit={(e) => { e.preventDefault(); saveEditModule(mod.id); }} className="mt-3 grid gap-2 rounded-lg border border-border bg-muted/40 p-3" data-testid={`form-edit-branch-module-${mod.id}`}>
+                <label className="grid gap-1 text-xs font-medium">Module name
+                  <Input value={editModuleName} onChange={(e) => setEditModuleName(e.target.value)} data-testid={`input-branch-module-name-${mod.id}`} />
+                </label>
+                <LoginCodeField value={editModuleLoginCode} onChange={setEditModuleLoginCode} testId={`input-branch-module-login-code-${mod.id}`} />
+                <div className="flex items-center gap-2">
+                  <Button type="submit" size="sm" disabled={busy || !editModuleName.trim() || !!loginCodeError(editModuleLoginCode)} data-testid={`button-save-branch-module-${mod.id}`}>Save</Button>
+                  <button type="button" className="text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={() => { setEditingModuleId(null); setError(''); }}>Cancel</button>
+                </div>
+              </form>
+            )}
+          </div>
         ))}
         {overview != null && overview.modules.length === 0 && <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground md:col-span-3">No modules in this branch yet — add the first one above.</p>}
       </div>
     </section>
     {failed && <p className="mt-8 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-branch-error">Could not load the branch.</p>}
+
+    {pwdAction && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-primary/30 p-4" data-testid="modal-branch-module-confirm">
+        <div className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-lg">
+          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch verification</p>
+          <h3 className="mt-1 font-display text-xl font-bold">{pwdAction.kind === 'edit-module' ? 'Edit module' : 'Delete module'}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{pwdAction.kind === 'edit-module' ? `Enter your branch password to save changes to “${pwdAction.name}”.` : `This permanently removes the module “${pwdAction.name}”. Enter your branch password to confirm.`}</p>
+          <form onSubmit={(e) => { e.preventDefault(); confirmBranchPassword(pwdPassword); }} className="mt-4 grid gap-3">
+            <PasswordField label="Branch password" value={pwdPassword} onChange={(e) => setPwdPassword(e.target.value)} autoFocus required data-testid="input-branch-module-confirm-password" toggleTestId="button-toggle-branch-module-confirm-pwd" />
+            {pwdError && <p className="text-xs text-destructive" data-testid="status-branch-module-confirm-error">{pwdError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => { setPwdPassword(''); setPwdError(''); setPwdAction(null); }} disabled={pwdBusy} data-testid="button-cancel-branch-module-confirm">Cancel</Button>
+              <Button type="submit" size="sm" variant={pwdAction.kind === 'delete-module' ? 'destructive' : 'default'} disabled={pwdBusy || !pwdPassword} data-testid="button-submit-branch-module-confirm">{pwdBusy ? 'Verifying…' : pwdAction.kind === 'delete-module' ? 'Delete module' : 'Save changes'}</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
   </>;
 }
 
@@ -4805,6 +4958,11 @@ function BranchModuleDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
+  const [pending, setPending] = useState<{ type: 'reveal' | 'delete' | 'password' | 'create'; teacher?: Teacher } | null>(null);
+  const isZedking = overview?.branchName?.trim().toLowerCase() === 'zedking';
 
   const designation = `${moduleShort[moduleKey] ?? ''} Instructor`;
 
@@ -4856,6 +5014,7 @@ function BranchModuleDetailPage() {
   };
 
   const handleReveal = (teacher: Teacher) => {
+    if (isZedking) { setPending({ type: 'reveal', teacher }); return; }
     setRevealedIds((v) => [...v, teacher.id]);
   };
 
@@ -4886,6 +5045,49 @@ function BranchModuleDetailPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not delete login.');
     }
+  };
+
+  const verifyBranchPassword = () => {
+    if (!pending || !confirmPwd) return;
+    setConfirmBusy(true); setConfirmError('');
+    void fetch('/api/branch/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: confirmPwd }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('The branch password is incorrect.');
+        setError(''); setSuccess('');
+        if (pending.type === 'reveal' && pending.teacher) {
+          const t = pending.teacher;
+          setRevealedIds((ids) => (ids.includes(t.id) ? ids : [...ids, t.id]));
+        } else if (pending.type === 'password' && pending.teacher) {
+          const t = pending.teacher;
+          setPwdEditId(t.id); setNewPwd(''); setNewPwdShown(false);
+        } else if (pending.type === 'delete' && pending.teacher) {
+          const t = pending.teacher;
+          fetch(`/api/branch/modules/${moduleKey}/teachers/${t.id}`, {
+            method: 'DELETE',
+          })
+            .then((res) => {
+              if (!res.ok) throw new Error('Failed to delete login');
+              refresh();
+              setRevealedIds((ids) => ids.filter((id) => id !== t.id));
+              setPwdEditId((id) => (id === t.id ? null : id));
+              setSuccess(`Login for ${t.displayName || t.username} deleted.`);
+            })
+            .catch((err) => setError(err instanceof Error ? err.message : 'Could not delete login.'))
+            .finally(() => { setConfirmPwd(''); setConfirmError(''); setPending(null); setConfirmBusy(false); });
+          return;
+        } else if (pending.type === 'create') {
+          setForm({ displayName: '', username: '', password: '' });
+          setShowForm(true);
+          setShowPwd(false);
+        }
+        setConfirmPwd(''); setConfirmError(''); setPending(null);
+      })
+      .catch((err) => setConfirmError(err instanceof Error ? err.message : 'The branch password is incorrect.'))
+      .finally(() => { if (pending?.type !== 'delete') setConfirmBusy(false); });
   };
 
   if (!meta) return <><PageHeader kicker="Branch / module" title="Module not found." detail="That module does not exist." /></>;
@@ -4932,7 +5134,7 @@ function BranchModuleDetailPage() {
           <h2 className="mt-1 font-display text-2xl font-bold">Teacher logins</h2>
           <p className="mt-2 max-w-md text-sm text-muted-foreground">Pick any name, user ID and password. The login lets the teacher sign in to their module desk.</p>
         </div>
-        {!showForm && <Button onClick={() => { setForm({ displayName: '', username: '', password: '' }); setShowForm(true); setShowPwd(false); }} data-testid="button-create-login"><Plus size={16} /> Create Login</Button>}
+        {!showForm && <Button onClick={() => { if (isZedking) { setPending({ type: 'create' }); } else { setForm({ displayName: '', username: '', password: '' }); setShowForm(true); setShowPwd(false); } }} data-testid="button-create-login"><Plus size={16} /> Create Login</Button>}
       </div>
 
       {showForm && (
@@ -4984,8 +5186,8 @@ function BranchModuleDetailPage() {
                   <button type="button" onClick={() => { if (isRevealed) { setRevealedIds((ids) => ids.filter((id) => id !== t.id)); return; } handleReveal(t); }} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={isRevealed ? 'Hide password' : 'See password'} data-testid={`button-eye-teacher-${t.id}`}>{isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}</button>
                 </p>
                 <div className="ml-auto flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => { if (pwdEditId === t.id) { closePwdEdit(); return; } setPwdEditId(t.id); setNewPwd(''); setNewPwdShown(false); }} data-testid={`button-change-password-${t.id}`}><KeyRound size={14} /> Change password</Button>
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(t)} data-testid={`button-delete-teacher-${t.id}`}><Trash2 size={14} /> Delete</Button>
+                  <Button variant="outline" size="sm" onClick={() => { if (isZedking) { setPending({ type: 'password', teacher: t }); } else { if (pwdEditId === t.id) { closePwdEdit(); return; } setPwdEditId(t.id); setNewPwd(''); setNewPwdShown(false); } }} data-testid={`button-change-password-${t.id}`}><KeyRound size={14} /> Change password</Button>
+                  <Button variant="outline" size="sm" onClick={() => { if (isZedking) { setPending({ type: 'delete', teacher: t }); } else { handleDelete(t); } }} data-testid={`button-delete-teacher-${t.id}`}><Trash2 size={14} /> Delete</Button>
                 </div>
               </div>
 
@@ -5010,6 +5212,24 @@ function BranchModuleDetailPage() {
     </section>
 
     <BranchModuleStatusSection moduleKey={moduleKey} />
+
+    {pending && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-primary/30 p-4" data-testid="modal-branch-confirm">
+        <div className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-lg">
+          <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Branch verification</p>
+          <h3 className="mt-1 font-display text-xl font-bold">{pending.type === 'reveal' ? 'See teacher password' : pending.type === 'password' ? 'Change teacher password' : pending.type === 'delete' ? 'Delete teacher login' : 'Create teacher login'}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{pending.type === 'reveal' ? `Enter your branch password to see the password for ${pending.teacher?.displayName || pending.teacher?.username}.` : pending.type === 'password' ? `Enter your branch password to set a new password for ${pending.teacher?.displayName || pending.teacher?.username}.` : pending.type === 'delete' ? `This permanently removes the login for ${pending.teacher?.displayName || pending.teacher?.username}. Enter your branch password to confirm.` : `Enter your branch password to create a new teacher login.`}</p>
+          <form onSubmit={(e) => { e.preventDefault(); verifyBranchPassword(); }} className="mt-4 grid gap-3">
+            <PasswordField label="Branch password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} autoFocus required data-testid="input-branch-confirm-password" toggleTestId="button-toggle-branch-confirm-pwd" />
+            {confirmError && <p className="text-xs text-destructive" data-testid="status-branch-confirm-error">{confirmError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => { setConfirmPwd(''); setConfirmError(''); setPending(null); }} disabled={confirmBusy} data-testid="button-cancel-branch-confirm">Cancel</Button>
+              <Button type="submit" size="sm" variant={pending.type === 'delete' ? 'destructive' : 'default'} disabled={confirmBusy || !confirmPwd} data-testid="button-submit-branch-confirm">{confirmBusy ? 'Verifying…' : pending.type === 'delete' ? 'Delete login' : pending.type === 'create' ? 'Create login' : 'Confirm'}</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
   </>;
 }
 

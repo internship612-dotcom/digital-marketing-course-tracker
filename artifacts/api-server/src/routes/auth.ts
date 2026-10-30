@@ -439,4 +439,30 @@ router.post(
   },
 );
 
+router.post(
+  "/branch/verify-password",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (!req.auth) {
+      res.status(401).json({ error: "Please sign in to continue." });
+      return;
+    }
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!password) {
+      res.status(400).json({ error: "Enter your password to continue." });
+      return;
+    }
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, Number(req.auth.branchId)))
+      .limit(1);
+    if (!branch || !branch.passwordHash || !(await verifyPassword(password, branch.passwordHash))) {
+      res.status(400).json({ error: "The password is incorrect." });
+      return;
+    }
+    res.sendStatus(204);
+  },
+);
+
 export default router;

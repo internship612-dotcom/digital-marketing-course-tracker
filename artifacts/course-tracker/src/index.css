@@ -607,8 +607,8 @@
 
 .auth-art {
   flex-shrink: 0;
-  width: 300px;
-  height: 300px;
+  width: 340px;
+  height: 340px;
   border-radius: 50%;
   overflow: hidden;
   margin-left: 40px;
@@ -774,17 +774,17 @@
    this circle, so they follow it on every breakpoint. */
 @media (max-width: 900px) {
   .auth-inner { flex-direction: column; gap: 24px; }
-  .auth-art { margin-left: 0; width: 220px; height: 220px; }
+  .auth-art { margin-left: 0; width: 300px; height: 300px; }
 }
 @media (max-width: 480px) {
-  .auth-art { width: 170px; height: 170px; }
+  .auth-art { width: 260px; height: 260px; }
   .auth-card { padding: 24px; }
 }
 
 @media (max-height: 760px) {
   .auth-shell { padding: 12px; }
   .auth-inner { gap: 16px; }
-  .auth-art { width: 180px; height: 180px; margin-left: 0; }
+  .auth-art { width: 280px; height: 280px; margin-left: 0; }
   .auth-card { padding: 20px; }
   .auth-heading { margin-top: 12px; }
   .auth-subtitle { margin-bottom: 14px; }
@@ -792,7 +792,7 @@
 
 @media (max-height: 680px) {
   .auth-shell { padding: 12px; }
-  .auth-art { display: flex; width: 120px; height: 120px; margin-left: 0; }
+  .auth-art { width: 220px; height: 220px; margin-left: 0; }
   .auth-inner { gap: 12px; }
   .auth-card { max-height: calc(100dvh - 24px); overflow-y: auto; }
 }

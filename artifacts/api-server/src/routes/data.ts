@@ -78,6 +78,7 @@ import {
   normalizeEmail,
   requireRole,
   supabasePasswordGrant,
+  verifyPassword,
 } from "../lib/auth";
 import { logger } from "../lib/logger";
 
@@ -3043,15 +3044,6 @@ function validateProjectLink(raw: string): { ok: true; url: string } | { ok: fal
   if (link.length > PROJECT_LINK_MAX) {
     return { ok: false, error: `That link is ${link.length} characters. Please keep it under ${PROJECT_LINK_MAX}.` };
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(link);
-  } catch {
-    return { ok: false, error: "That does not look like a link. It should start with http:// or https://" };
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return { ok: false, error: "The link must start with http:// or https://." };
-  }
   return { ok: true, url: link };
 }
 
@@ -3812,7 +3804,7 @@ router.get(
       .from(studentsTable)
       .where(eq(studentsTable.branchId, req.auth.branchId));
     const totalStudents = studentRows.length;
-    const perModule: { id: string; name: string; attendanceMarked: number; assessmentMarked: number }[] = [];
+    const perModule: { id: string; name: string; loginCode: string; attendanceMarked: number; assessmentMarked: number }[] = [];
     const attendanceTouched = new Set<string>();
     const assessmentTouched = new Set<string>();
     for (const mod of modules) {
@@ -3829,6 +3821,7 @@ router.get(
       perModule.push({
         id: mod.id,
         name: mod.name,
+        loginCode: mod.loginCode ?? "",
         attendanceMarked: attenRows.length,
         assessmentMarked: assessRows.length,
       });
@@ -5285,6 +5278,112 @@ router.post(
       return;
     }
     res.status(result.status).json({ error: result.error });
+  },
+);
+
+// Rename or change login code of a branch module. Zedking requires its desk password.
+router.patch(
+  "/branch/modules/:module",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const moduleId = req.params.module as string;
+    const body = req.body as { name?: unknown; loginCode?: unknown; branchPassword?: unknown };
+
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, req.auth.branchId))
+      .limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    const isZedking = branch.name.trim().toLowerCase() === "zedking";
+    if (isZedking) {
+      const bp = typeof body.branchPassword === "string" ? body.branchPassword : "";
+      if (!bp || !branch.passwordHash || !(await verifyPassword(bp, branch.passwordHash))) {
+        res.status(401).json({ error: "Confirm your branch password to continue." });
+        return;
+      }
+    }
+
+    const updates: { name?: string; loginCode?: string } = {};
+    if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
+    if (typeof body.loginCode === "string" && body.loginCode.trim()) {
+      const code = await resolveRequestedLoginCode(body.loginCode, { moduleId });
+      if ("error" in code) {
+        res.status(code.status).json({ error: code.error });
+        return;
+      }
+      updates.loginCode = code.code;
+    }
+    if (!updates.name && !updates.loginCode) {
+      res.status(400).json({ error: "Enter a module name or login code." });
+      return;
+    }
+    const [module] = await db
+      .select()
+      .from(modulesCatalog)
+      .where(and(eq(modulesCatalog.id, moduleId), eq(modulesCatalog.branchId, req.auth.branchId)))
+      .limit(1);
+    if (!module) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    const [updated] = await db
+      .update(modulesCatalog)
+      .set(updates)
+      .where(eq(modulesCatalog.id, moduleId))
+      .returning();
+    res.json(updated);
+  },
+);
+
+// Delete a branch module. Zedking requires its desk password.
+router.delete(
+  "/branch/modules/:module",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const moduleId = req.params.module as string;
+    const body = req.body as { branchPassword?: unknown };
+
+    const [branch] = await db
+      .select()
+      .from(branchesTable)
+      .where(eq(branchesTable.id, req.auth.branchId))
+      .limit(1);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    const isZedking = branch.name.trim().toLowerCase() === "zedking";
+    if (isZedking) {
+      const bp = typeof body.branchPassword === "string" ? body.branchPassword : "";
+      if (!bp || !branch.passwordHash || !(await verifyPassword(bp, branch.passwordHash))) {
+        res.status(401).json({ error: "Confirm your branch password to continue." });
+        return;
+      }
+    }
+
+    const [module] = await db
+      .select()
+      .from(modulesCatalog)
+      .where(and(eq(modulesCatalog.id, moduleId), eq(modulesCatalog.branchId, req.auth.branchId)))
+      .limit(1);
+    if (!module) {
+      res.status(404).json({ error: "Module not found." });
+      return;
+    }
+    await db.delete(modulesCatalog).where(eq(modulesCatalog.id, moduleId));
+    res.sendStatus(204);
   },
 );
 
