@@ -3295,8 +3295,6 @@ function StudentProjectPage() {
   const [dialogLink, setDialogLink] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [dialogSaving, setDialogSaving] = useState(false);
-  const [viewProjects, setViewProjects] = useState(false);
-  const [viewProjectsFilter, setViewProjectsFilter] = useState<string | null>(null);
 
   const openUploadDialog = (module: Module, cycle: number) => {
     setOpenDialog({ module, cycle });
@@ -3402,7 +3400,7 @@ function StudentProjectPage() {
 
   return (
     <>
-      <PageHeader kicker="Student / project" title="My Projects" detail="View project plans, guidelines, and upload your project links." action={<Button size="sm" onClick={() => setViewProjects(true)} data-testid="button-view-uploaded-projects"><FileText size={14} /> View Uploaded Projects</Button>} />
+      <PageHeader kicker="Student / project" title="My Projects" detail="View project plans, guidelines, and upload your project links." />
       {failed ? (
         <ErrorState />
       ) : myModules.length === 0 ? (
@@ -3411,40 +3409,90 @@ function StudentProjectPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {myModules.map((meta) => (
-            <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
-              <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
-              <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
+          {myModules.map((meta) => {
+            const moduleSubs = submissions[meta.key] || {};
+            const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
+            return (
+              <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
+                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
+                <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {/* LEFT COLUMN: Project Plan + Guidelines stacked */}
-                <div className="space-y-4">
-                  {/* Project Plan */}
-                  <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-plan-${meta.key}`}>
-                    <DocLink scope="student" kind="project_plan" doc={find(meta.key, 'project_plan')} className="w-full" />
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {/* LEFT COLUMN: Project Plan + Guidelines stacked */}
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-plan-${meta.key}`}>
+                      <DocLink scope="student" kind="project_plan" doc={find(meta.key, 'project_plan')} className="w-full" />
+                    </div>
+                    <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-guidelines-${meta.key}`}>
+                      <DocLink scope="student" kind="project_guidelines" doc={find(meta.key, 'project_guidelines')} className="w-full" />
+                    </div>
                   </div>
-                  {/* Guidelines */}
-                  <div className="rounded-lg border border-border bg-background p-4" data-testid={`project-guidelines-${meta.key}`}>
-                    <DocLink scope="student" kind="project_guidelines" doc={find(meta.key, 'project_guidelines')} className="w-full" />
+
+                  {/* RIGHT COLUMN: Upload Project box + uploaded list */}
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-border bg-muted/40 p-4 flex flex-col gap-4">
+                      <div className="flex items-center gap-2">
+                        <LinkIcon size={18} className="text-primary" />
+                        <span className="font-medium text-sm">Upload Project</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
+                      </p>
+                      <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
+                        {dialogSaving ? 'Opening…' : 'Upload Project'}
+                      </Button>
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-background p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Archive size={18} className="text-primary" />
+                        <h3 className="font-display text-lg font-bold">Uploaded Projects</h3>
+                      </div>
+                      {submittedCycles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
+                      ) : (
+                        <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                          {submittedCycles.map((c) => {
+                            const sub = moduleSubs[c];
+                            const isGraded = sub.marks != null;
+                            const linkUrl = sub.projectLink || '';
+                            const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
+                            return (
+                              <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
+                                  {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
+                                  {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
+                                </div>
+                                <div className="min-h-[2.5rem]">
+                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
+                                    {sub.projectName}
+                                  </a>
+                                </div>
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <span>ID: {user?.studentId ?? '-'}</span>
+                                  <span>•</span>
+                                  <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
+                                </div>
+                                <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
+                                    Open Link <ExternalLink size={12} />
+                                  </a>
+                                  <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
+                                    <Trash2 size={12} />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-
-                {/* RIGHT COLUMN: Upload Project box */}
-                <div className="rounded-lg border border-border bg-muted/40 p-4 flex flex-col gap-4" data-testid={`upload-project-${meta.key}`}>
-                  <div className="flex items-center gap-2">
-                    <LinkIcon size={18} className="text-primary" />
-                    <span className="font-medium text-sm">Upload Project</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
-                  </p>
-                  <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
-                    {dialogSaving ? 'Opening…' : 'Upload Project'}
-                  </Button>
-                </div>
-              </div>
-            </section>
-          ))}
+              </section>
+            );
+          })}
         </div>
       )}
 
@@ -3506,87 +3554,6 @@ function StudentProjectPage() {
               {dialogSaving ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      
-      {/* View Uploaded Projects Dialog */}
-      <Dialog open={viewProjects} onOpenChange={setViewProjects}>
-        <DialogContent className="max-w-4xl w-full p-0">
-          <DialogHeader className="p-5 bg-background">
-            <div className="flex items-center justify-between">
-              <div>
-                <DialogTitle>Uploaded Projects</DialogTitle>
-                <DialogDescription>All your submitted project links across modules.</DialogDescription>
-              </div>
-              <div className="flex gap-2">
-                <Button variant={viewProjectsFilter === null ? 'default' : 'outline'} size="sm" onClick={() => setViewProjectsFilter(null)} data-testid="button-view-all-projects">All</Button>
-                {myModules.map((meta) => (
-                  <Button key={meta.key} variant={viewProjectsFilter === meta.key ? 'default' : 'outline'} size="sm" onClick={() => setViewProjectsFilter(meta.key)} data-testid={`button-view-${meta.key}-projects`}>
-                    {meta.name}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </DialogHeader>
-          <div className="p-5">
-            <div className="space-y-4">
-              {myModules.map((meta) => {
-                if (viewProjectsFilter && meta.key !== viewProjectsFilter) return null;
-                const moduleSubs = submissions[meta.key] || {};
-                const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
-                return (
-                  <section key={meta.key} className="rounded-xl border border-border bg-card p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Archive size={18} className="text-primary" />
-                      <h3 className="font-display text-lg font-bold">{meta.name}</h3>
-                    </div>
-                    {submittedCycles.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
-                    ) : (
-                      <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                        {submittedCycles.map((c) => {
-                          const sub = moduleSubs[c];
-                          const isGraded = sub.marks != null;
-                          const linkUrl = sub.projectLink || '';
-                          const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
-                          return (
-                            <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
-                                {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
-                                {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
-                              </div>
-                              <div className="min-h-[2.5rem]">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
-                                  {sub.projectName}
-                                </a>
-                              </div>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <span>ID: {user?.studentId ?? '-'}</span>
-                                <span>•</span>
-                                <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
-                              </div>
-                              <div className="flex items-center justify-between pt-2 border-t border-border/50">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
-                                  Open Link <ExternalLink size={12} />
-                                </a>
-                                <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
-                                  <Trash2 size={12} />
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-            </div>
-          </div>
-          <div className="border-t border-border bg-muted/50 p-3 flex justify-end">
-            <Button variant="outline" onClick={() => setViewProjects(false)}>Close</Button>
-          </div>
         </DialogContent>
       </Dialog>
 
