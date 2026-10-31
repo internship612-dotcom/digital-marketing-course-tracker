@@ -3414,8 +3414,15 @@ function StudentProjectPage() {
             const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
             return (
               <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
-                <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
-                <h2 className="mt-1 font-display text-2xl font-bold">{meta.name}</h2>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                  <div>
+                    <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
+                    <h2 className="mt-0 font-display text-lg font-bold">{meta.name}</h2>
+                  </div>
+                  <Button size="sm" onClick={() => openUploadDialog(meta.key, 1)} disabled={dialogSaving}>
+                    {dialogSaving ? 'Saving…' : 'Upload Project'}
+                  </Button>
+                </div>
 
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   {/* LEFT COLUMN: Project Plan + Guidelines stacked */}
@@ -3428,66 +3435,51 @@ function StudentProjectPage() {
                     </div>
                   </div>
 
-                  {/* RIGHT COLUMN: Upload Project box + uploaded list */}
-                  <div className="space-y-4">
-                    <div className="rounded-lg border border-border bg-muted/40 p-4 flex flex-col gap-4">
-                      <div className="flex items-center gap-2">
-                        <LinkIcon size={18} className="text-primary" />
-                        <span className="font-medium text-sm">Upload Project</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
-                      </p>
-                      <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
-                        {dialogSaving ? 'Opening…' : 'Upload Project'}
-                      </Button>
+                  {/* RIGHT COLUMN: Uploaded Projects list */}
+                  <div className="rounded-lg border border-border bg-background p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Archive size={18} className="text-primary" />
+                      <h3 className="font-display text-lg font-bold">Uploaded Projects</h3>
                     </div>
-
-                    <div className="rounded-lg border border-border bg-background p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Archive size={18} className="text-primary" />
-                        <h3 className="font-display text-lg font-bold">Uploaded Projects</h3>
-                      </div>
-                      {submittedCycles.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
-                      ) : (
-                        <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                          {submittedCycles.map((c) => {
-                            const sub = moduleSubs[c];
-                            const isGraded = sub.marks != null;
-                            const linkUrl = sub.projectLink || '';
-                            const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
-                            return (
-                              <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
-                                  {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
-                                  {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
-                                </div>
-                                <div className="min-h-[2.5rem]">
-                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
-                                    {sub.projectName}
-                                  </a>
-                                </div>
-                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                  <span>ID: {user?.studentId ?? '-'}</span>
-                                  <span>•</span>
-                                  <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
-                                </div>
-                                <div className="flex items-center justify-between pt-2 border-t border-border/50">
-                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
-                                    Open Link <ExternalLink size={12} />
-                                  </a>
-                                  <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
-                                    <Trash2 size={12} />
-                                  </Button>
-                                </div>
+                    {submittedCycles.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
+                    ) : (
+                      <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                        {submittedCycles.map((c) => {
+                          const sub = moduleSubs[c];
+                          const isGraded = sub.marks != null;
+                          const linkUrl = sub.projectLink || '';
+                          const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
+                          return (
+                            <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
+                                {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
+                                {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                              <div className="min-h-[2.5rem]">
+                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
+                                  {sub.projectName}
+                                </a>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <span>ID: {user?.studentId ?? '-'}</span>
+                                <span>•</span>
+                                <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
+                              </div>
+                              <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
+                                  Open Link <ExternalLink size={12} />
+                                </a>
+                                <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
+                                  <Trash2 size={12} />
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>
