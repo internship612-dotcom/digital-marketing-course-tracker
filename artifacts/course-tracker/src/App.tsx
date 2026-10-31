@@ -3295,7 +3295,7 @@ function StudentProjectPage() {
   const [dialogLink, setDialogLink] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [dialogSaving, setDialogSaving] = useState(false);
-  const [viewProjects, setViewProjects] = useState(false);
+  const [uploadedVisible, setUploadedVisible] = useState<Record<string, boolean>>({});
 
   const openUploadDialog = (module: Module, cycle: number) => {
     setOpenDialog({ module, cycle });
@@ -3309,6 +3309,10 @@ function StudentProjectPage() {
     setDialogName('');
     setDialogLink('');
     setDialogError('');
+  };
+
+  const toggleUploaded = (module: Module) => {
+    setUploadedVisible((prev) => ({ ...prev, [module]: !prev[module] }));
   };
 
   const deleteProject = (module: Module, cycle: number) => {
@@ -3401,7 +3405,7 @@ function StudentProjectPage() {
 
   return (
     <>
-      <PageHeader kicker="Student / project" title="My Projects" detail="View project plans, guidelines, and upload your project links." action={<Button size="sm" onClick={() => setViewProjects(true)} data-testid="button-view-uploaded-projects"><FileText size={14} /> View Uploaded Projects</Button>} />
+      <PageHeader kicker="Student / project" title="My Projects" detail="View project plans, guidelines, and upload your project links." />
       {failed ? (
         <ErrorState />
       ) : myModules.length === 0 ? (
@@ -3419,6 +3423,9 @@ function StudentProjectPage() {
                   <Archive size={18} className="text-primary" />
                   <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
                   <h2 className="mt-0 font-display text-xl font-bold">{meta.name}</h2>
+                  <Button size="sm" onClick={() => toggleUploaded(meta.key)} data-testid={`button-view-uploaded-${meta.key}`}>
+                    {uploadedVisible[meta.key] ? 'Hide Uploaded' : 'View Uploaded Projects'}
+                  </Button>
                 </div>
 
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -3447,56 +3454,59 @@ function StudentProjectPage() {
                   </div>
 
                   {/* RIGHT COLUMN BOTTOM: Uploaded Projects list */}
-                  <div className="rounded-lg border border-border bg-background p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Archive size={18} className="text-primary" />
-                      <h3 className="font-display text-lg font-bold">Uploaded Projects</h3>
-                    </div>
-                    {submittedCycles.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
-                    ) : (
-                      <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                        {submittedCycles.map((c) => {
-                          const sub = moduleSubs[c];
-                          const isGraded = sub.marks != null;
-                          const linkUrl = sub.projectLink || '';
-                          const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
-                          return (
-                            <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
-                                {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
-                                {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
-                              </div>
-                              <div className="min-h-[2.5rem]">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
-                                  {sub.projectName}
-                                </a>
-                              </div>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <span>ID: {user?.studentId ?? '-'}</span>
-                                <span>•</span>
-                                <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
-                              </div>
-                              <div className="flex items-center justify-between pt-2 border-t border-border/50">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
-                                  Open Link <ExternalLink size={12} />
-                                </a>
-                                <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
-                                  <Trash2 size={12} />
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
+                  {uploadedVisible[meta.key] && (
+                    <div className="rounded-lg border border-border bg-background p-4 mt-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Archive size={18} className="text-primary" />
+                        <h3 className="font-display text-lg font-bold">Uploaded Projects</h3>
                       </div>
-                    )}
-                  </div>
-                </div>
-              </section>
-            );
-          })}
-        </div>
+                      {submittedCycles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
+                      ) : (
+                        <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                          {submittedCycles.map((c) => {
+                            const sub = moduleSubs[c];
+                            const isGraded = sub.marks != null;
+                            const linkUrl = sub.projectLink || '';
+                            const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
+                            return (
+                              <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
+                                  {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
+                                  {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
+                                </div>
+                                <div className="min-h-[2.5rem]">
+                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
+                                    {sub.projectName}
+                                  </a>
+                                </div>
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <span>ID: {user?.studentId ?? '-'}</span>
+                                  <span>•</span>
+                                  <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
+                                </div>
+                                <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
+                                    Open Link <ExternalLink size={12} />
+                                  </a>
+                                  <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
+                                    <Trash2 size={12} />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+            </div>
+            </section>
+          )
+        })
+      }
+      </div>
       )}
 
       {/* Upload Project Dialog */}
@@ -3557,74 +3567,6 @@ function StudentProjectPage() {
               {dialogSaving ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* View Uploaded Projects Dialog */}
-      <Dialog open={viewProjects} onOpenChange={setViewProjects}>
-        <DialogContent className="max-w-4xl w-full p-0">
-          <DialogHeader className="p-5 bg-background">
-            <DialogTitle>Uploaded Projects</DialogTitle>
-            <DialogDescription>All your submitted project links across modules.</DialogDescription>
-          </DialogHeader>
-          <div className="p-5">
-            <div className="space-y-4">
-              {myModules.map((meta) => {
-                const moduleSubs = submissions[meta.key] || {};
-                const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
-                return (
-                  <section key={meta.key} className="rounded-xl border border-border bg-card p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Archive size={18} className="text-primary" />
-                      <h3 className="font-display text-lg font-bold">{meta.name}</h3>
-                    </div>
-                    {submittedCycles.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No projects uploaded yet.</p>
-                    ) : (
-                      <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                        {submittedCycles.map((c) => {
-                          const sub = moduleSubs[c];
-                          const isGraded = sub.marks != null;
-                          const linkUrl = sub.projectLink || '';
-                          const isVideo = /(youtu\.be\/|youtube\.com\/|vimeo\.com\/|\.mp4|\.mov|\.avi|\.webm)/i.test(linkUrl);
-                          return (
-                            <div key={c} className="rounded-lg border border-border bg-background p-3 flex flex-col gap-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-medium text-sm truncate">{getProjectLabel(c)}</span>
-                                {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
-                                {isVideo && <span className="rounded-full bg-blue-100 text-blue-700 text-xs px-2 py-0.5 font-medium">Video</span>}
-                              </div>
-                              <div className="min-h-[2.5rem]">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline" title={sub.projectName}>
-                                  {sub.projectName}
-                                </a>
-                              </div>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <span>ID: {user?.studentId ?? '-'}</span>
-                                <span>•</span>
-                                <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
-                              </div>
-                              <div className="flex items-center justify-between pt-2 border-t border-border/50">
-                                <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
-                                  Open Link <ExternalLink size={12} />
-                                </a>
-                                <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-view-project-${meta.key}-${c}`}>
-                                  <Trash2 size={12} />
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-            </div>
-          </div>
-          <div className="border-t border-border bg-muted/50 p-3 flex justify-end">
-            <Button variant="outline" onClick={() => setViewProjects(false)}>Close</Button>
-          </div>
         </DialogContent>
       </Dialog>
 
