@@ -3146,6 +3146,54 @@ router.post(
   },
 );
 
+// Student deletes their own project submission (only if not yet graded).
+router.delete(
+  "/student/project-submission",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    const studentId = req.auth?.studentId ?? null;
+    if (!studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const body = req.body as { module?: unknown; cycle?: unknown };
+    const module = typeof body.module === "string" ? body.module : "";
+    const cycle = typeof body.cycle === "number" ? body.cycle : Number(body.cycle);
+
+    if (!module || !Number.isInteger(cycle) || cycle < 1 || cycle > PROJECT_CYCLES) {
+      res.status(400).json({ error: "Choose which of your projects this is." });
+      return;
+    }
+    const ownModules = await studentModuleKeys(studentId);
+    if (!ownModules.includes(module)) {
+      res.status(403).json({ error: "That module is not part of your course." });
+      return;
+    }
+    // Cannot delete after grading.
+    const [graded] = await db
+      .select({ marks: assessmentsTable.marks })
+      .from(assessmentsTable)
+      .where(and(
+        eq(assessmentsTable.studentId, studentId),
+        eq(assessmentsTable.module, module),
+        eq(assessmentsTable.cycle, cycle),
+      ))
+      .limit(1);
+    if (graded?.marks != null) {
+      res.status(409).json({ error: "Your teacher has already marked this project, so it cannot be deleted." });
+      return;
+    }
+    await db
+      .delete(projectSubmissionsTable)
+      .where(and(
+        eq(projectSubmissionsTable.studentId, studentId),
+        eq(projectSubmissionsTable.module, module),
+        eq(projectSubmissionsTable.cycle, cycle),
+      ));
+    res.sendStatus(204);
+  },
+);
+
 // Everything the student has submitted, each row carrying whether it has since been graded.
 // The left join is what lets the Project page show "Submitted" vs "Graded" from one call.
 router.get(
