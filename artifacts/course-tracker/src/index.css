@@ -600,23 +600,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 64px;
+  gap: 0;
   width: 100%;
-  max-width: 1000px;
+  max-width: 560px;
 }
 
 .auth-art {
-  flex-shrink: 0;
-  width: 340px;
-  height: 340px;
-  border-radius: 50%;
-  overflow: hidden;
-  margin-left: 40px;
-  background: var(--auth-pale, #eef2f7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
+  display: none;
 }
 .auth-art svg {
   width: 100%;
