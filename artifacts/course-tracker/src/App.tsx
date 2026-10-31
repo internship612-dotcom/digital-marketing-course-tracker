@@ -3420,9 +3420,11 @@ function StudentProjectPage() {
             return (
               <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
                 <div className="flex items-center justify-between gap-2 mb-3">
-                  <Archive size={18} className="text-primary" />
-                  <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
-                  <h2 className="mt-0 font-display text-xl font-bold">{meta.name}</h2>
+                  <div className="flex items-center gap-2">
+                    <Archive size={18} className="text-primary" />
+                    <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
+                    <h2 className="mt-0 font-display text-xl font-bold">{meta.name}</h2>
+                  </div>
                   <Button size="sm" onClick={() => toggleUploaded(meta.key)} data-testid={`button-view-uploaded-${meta.key}`}>
                     View Uploaded Projects
                   </Button>
