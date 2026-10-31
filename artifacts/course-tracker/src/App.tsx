@@ -3333,6 +3333,7 @@ function StudentProjectPage() {
     if (name.length > 100) { setDialogError('Name must be 100 characters or less.'); return; }
     if (!link) { setDialogError('Enter the link to your project.'); return; }
     if (link.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
+    if (!/^https?:\/\//i.test(link)) { setDialogError('Link must start with http:// or https://'); return; }
 
     setDialogSaving(true);
     setDialogError('');
