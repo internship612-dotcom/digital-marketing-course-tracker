@@ -3296,13 +3296,13 @@ function StudentProjectPage() {
   const [dialogError, setDialogError] = useState('');
   const [dialogSaving, setDialogSaving] = useState(false);
   const [viewProjects, setViewProjects] = useState(false);
+  const [viewProjectsFilter, setViewProjectsFilter] = useState<string | null>(null);
 
   const openUploadDialog = (module: Module, cycle: number) => {
     setOpenDialog({ module, cycle });
     setDialogName('');
     setDialogLink('');
     setDialogError('');
-    setFileInput(null);
   };
 
   const closeUploadDialog = () => {
@@ -3310,7 +3310,6 @@ function StudentProjectPage() {
     setDialogName('');
     setDialogLink('');
     setDialogError('');
-    setFileInput(null);
   };
 
   const deleteProject = (module: Module, cycle: number) => {
@@ -3326,12 +3325,11 @@ function StudentProjectPage() {
     const { module, cycle } = openDialog;
     const name = dialogName.trim();
     const link = dialogLink.trim();
-    const finalLink = link || (fileInput ? fileInput.name : '');
 
     if (!name) { setDialogError('Give your project a name.'); return; }
     if (name.length > 100) { setDialogError('Name must be 100 characters or less.'); return; }
-    if (!finalLink) { setDialogError('Enter the link to your project or upload a file.'); return; }
-    if (finalLink.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
+    if (!link) { setDialogError('Enter the link to your project.'); return; }
+    if (link.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
 
     setDialogSaving(true);
     setDialogError('');
@@ -3339,7 +3337,7 @@ function StudentProjectPage() {
       const res = await fetch('/api/student/project-submission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ module, cycle, projectName: name, projectLink: finalLink }),
+        body: JSON.stringify({ module, cycle, projectName: name, projectLink: link }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -3368,13 +3366,6 @@ function StudentProjectPage() {
   const [deletePwd, setDeletePwd] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-
-  const [fileInput, setFileInput] = useState<File | null>(null);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setFileInput(file);
-  };
 
   const confirmDeleteProject = () => {
     if (!deleteConfirm) return;
@@ -3506,17 +3497,6 @@ function StudentProjectPage() {
               />
               {dialogError && <p className="text-sm text-destructive" role="alert">{dialogError}</p>}
             </div>
-            <div className="space-y-1.5">
-              <label htmlFor="project-file" className="text-sm font-medium">Upload File (optional)</label>
-              <input
-                id="project-file"
-                type="file"
-                onChange={handleFileChange}
-                disabled={dialogSaving}
-                className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-hover hover:file:bg-primary-hover"
-              />
-              {fileInput && <p className="text-xs text-muted-foreground">Selected: {fileInput.name}</p>}
-            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeUploadDialog} disabled={dialogSaving}>
@@ -3533,12 +3513,25 @@ function StudentProjectPage() {
       <Dialog open={viewProjects} onOpenChange={setViewProjects}>
         <DialogContent className="max-w-4xl w-full p-0">
           <DialogHeader className="p-5 bg-background">
-            <DialogTitle>Uploaded Projects</DialogTitle>
-            <DialogDescription>All your submitted project links across modules.</DialogDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle>Uploaded Projects</DialogTitle>
+                <DialogDescription>All your submitted project links across modules.</DialogDescription>
+              </div>
+              <div className="flex gap-2">
+                <Button variant={viewProjectsFilter === null ? 'default' : 'outline'} size="sm" onClick={() => setViewProjectsFilter(null)} data-testid="button-view-all-projects">All</Button>
+                {myModules.map((meta) => (
+                  <Button key={meta.key} variant={viewProjectsFilter === meta.key ? 'default' : 'outline'} size="sm" onClick={() => setViewProjectsFilter(meta.key)} data-testid={`button-view-${meta.key}-projects`}>
+                    {meta.name}
+                  </Button>
+                ))}
+              </div>
+            </div>
           </DialogHeader>
           <div className="p-5">
             <div className="space-y-4">
               {myModules.map((meta) => {
+                if (viewProjectsFilter && meta.key !== viewProjectsFilter) return null;
                 const moduleSubs = submissions[meta.key] || {};
                 const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
                 return (
