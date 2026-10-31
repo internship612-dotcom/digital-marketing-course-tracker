@@ -465,4 +465,35 @@ router.post(
   },
 );
 
+router.post(
+  "/student/verify-password",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    if (!req.auth) {
+      res.status(401).json({ error: "Please sign in to continue." });
+      return;
+    }
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!password) {
+      res.status(400).json({ error: "Enter your password to continue." });
+      return;
+    }
+    const studentId = req.auth.studentId;
+    if (!studentId) {
+      res.status(400).json({ error: "Student session not found." });
+      return;
+    }
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(eq(studentsTable.id, studentId))
+      .limit(1);
+    if (!student || !student.passwordHash || !(await verifyPassword(password, student.passwordHash))) {
+      res.status(400).json({ error: "The password is incorrect." });
+      return;
+    }
+    res.sendStatus(204);
+  },
+);
+
 export default router;

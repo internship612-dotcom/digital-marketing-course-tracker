@@ -690,7 +690,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
     }
   };
   return <div data-theme={theme} className="app-noise min-h-[100dvh] bg-background">
-    <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-sidebar p-5 text-sidebar-foreground transition-transform duration-200 lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+    <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col overflow-y-auto bg-sidebar p-5 text-sidebar-foreground transition-transform duration-200 lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex items-center justify-between"><Logo dark /><button className="rounded-md p-2 lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" data-testid="button-close-menu"><X size={18} /></button></div>
       <div className="mt-12"><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-sidebar-foreground/45">Workspace</p><nav className="mt-3 grid gap-1">{nav.map((item) => {
          const childOpen = openItem === item.href || location === item.href || (item.children?.some((child) => location.startsWith(child.href)) ?? false);
@@ -3302,6 +3302,7 @@ function StudentProjectPage() {
     setDialogName('');
     setDialogLink('');
     setDialogError('');
+    setFileInput(null);
   };
 
   const closeUploadDialog = () => {
@@ -3309,29 +3310,15 @@ function StudentProjectPage() {
     setDialogName('');
     setDialogLink('');
     setDialogError('');
+    setFileInput(null);
   };
 
-  const deleteProject = async (module: Module, cycle: number) => {
+  const deleteProject = (module: Module, cycle: number) => {
     const sub = submissions[module]?.[cycle];
-    if (!sub || !confirm(`Delete “${sub.projectName}" project link?`)) return;
-    try {
-      const res = await fetch('/api/student/project-submission', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ module, cycle }),
-      });
-      if (!res.ok) throw new Error('Failed to delete project');
-      setSubmissions((prev) => {
-        const next = { ...prev };
-        if (next[module]) {
-          delete next[module][cycle];
-          if (Object.keys(next[module]).length === 0) delete next[module];
-        }
-        return next;
-      });
-    } catch (e: unknown) {
-      setDialogError(e instanceof Error ? e.message : 'Could not delete project');
-    }
+    if (!sub) return;
+    setDeleteConfirm({ module, cycle, name: sub.projectName });
+    setDeletePwd('');
+    setDeleteError('');
   };
 
   const handleSaveSubmission = async () => {
@@ -3339,11 +3326,12 @@ function StudentProjectPage() {
     const { module, cycle } = openDialog;
     const name = dialogName.trim();
     const link = dialogLink.trim();
+    const finalLink = link || (fileInput ? fileInput.name : '');
 
     if (!name) { setDialogError('Give your project a name.'); return; }
     if (name.length > 100) { setDialogError('Name must be 100 characters or less.'); return; }
-    if (!link) { setDialogError('Enter the link to your project.'); return; }
-    if (link.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
+    if (!finalLink) { setDialogError('Enter the link to your project or upload a file.'); return; }
+    if (finalLink.length > 500) { setDialogError('Link must be 500 characters or less.'); return; }
 
     setDialogSaving(true);
     setDialogError('');
@@ -3351,7 +3339,7 @@ function StudentProjectPage() {
       const res = await fetch('/api/student/project-submission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ module, cycle, projectName: name, projectLink: link }),
+        body: JSON.stringify({ module, cycle, projectName: name, projectLink: finalLink }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -3376,6 +3364,50 @@ function StudentProjectPage() {
   };
 
   const PROJECT_CYCLES = 12;
+  const [deleteConfirm, setDeleteConfirm] = useState<{ module: Module; cycle: number; name: string } | null>(null);
+  const [deletePwd, setDeletePwd] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const [fileInput, setFileInput] = useState<File | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setFileInput(file);
+  };
+
+  const confirmDeleteProject = () => {
+    if (!deleteConfirm) return;
+    setDeleteBusy(true); setDeleteError('');
+    void fetch('/api/student/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: deletePwd }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('The password is incorrect.');
+        return fetch('/api/student/project-submission', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ module: deleteConfirm.module, cycle: deleteConfirm.cycle }),
+        });
+      })
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to delete project');
+        setSubmissions((prev) => {
+          const next = { ...prev };
+          if (next[deleteConfirm!.module]) {
+            delete next[deleteConfirm!.module][deleteConfirm!.cycle];
+            if (Object.keys(next[deleteConfirm!.module]).length === 0) delete next[deleteConfirm!.module];
+          }
+          return next;
+        });
+        setDeleteConfirm(null);
+        setDeletePwd('');
+      })
+      .catch((err) => setDeleteError(err instanceof Error ? err.message : 'Could not delete project.'))
+      .finally(() => setDeleteBusy(false));
+  };
 
   return (
     <>
@@ -3415,46 +3447,9 @@ function StudentProjectPage() {
                   <p className="text-xs text-muted-foreground">
                     Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
                   </p>
-                  {(() => {
-                    const moduleSubs = submissions[meta.key] || {};
-                    const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
-                    if (submittedCycles.length > 0) {
-                      return (
-                        <div className="space-y-2">
-                          {submittedCycles.map((c) => {
-                            const sub = moduleSubs[c];
-                            const isGraded = sub.marks != null;
-                            return (
-                                <div key={c} className="rounded-md border border-border bg-background p-3 flex flex-col gap-2">
-                                <div className="flex items-center justify-between">
-                                  <span className="font-medium text-sm">{getProjectLabel(c)}</span>
-                                  {isGraded && <span className="rounded-full bg-green-100 text-green-700 text-xs px-2 py-0.5 font-medium">Graded</span>}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1.5 truncate text-sm text-primary underline" title={sub.projectName} data-testid={`open-submitted-project-${meta.key}-${c}`}>
-                                    <span className="truncate">{sub.projectName}</span><ExternalLink size={13} className="shrink-0" />
-                                  </a>
-                                  <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(meta.key, c); }} data-testid={`delete-submitted-project-${meta.key}-${c}`}>
-                                    <Trash2 size={13} /> Delete
-                                  </Button>
-                                </div>
-                                <p className="text-xs text-muted-foreground">Submitted {new Date(sub.submittedAt).toLocaleDateString()}</p>
-                              </div>
-                            );
-                          })}
-                          <Button variant="outline" size="sm" onClick={() => openUploadDialog(meta.key, submittedCycles[submittedCycles.length - 1] + 1 > PROJECT_CYCLES ? PROJECT_CYCLES : submittedCycles[submittedCycles.length - 1] + 1)} className="w-full">
-                            Upload Another Project
-                          </Button>
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
-                          {dialogSaving ? 'Opening…' : 'Upload Project'}
-                        </Button>
-                      );
-                    }
-                  })()}
+                  <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
+                    {dialogSaving ? 'Opening…' : 'Upload Project'}
+                  </Button>
                 </div>
               </div>
             </section>
@@ -3510,6 +3505,17 @@ function StudentProjectPage() {
                 disabled={dialogSaving}
               />
               {dialogError && <p className="text-sm text-destructive" role="alert">{dialogError}</p>}
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="project-file" className="text-sm font-medium">Upload File (optional)</label>
+              <input
+                id="project-file"
+                type="file"
+                onChange={handleFileChange}
+                disabled={dialogSaving}
+                className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-hover hover:file:bg-primary-hover"
+              />
+              {fileInput && <p className="text-xs text-muted-foreground">Selected: {fileInput.name}</p>}
             </div>
           </div>
           <DialogFooter>
@@ -3588,6 +3594,30 @@ function StudentProjectPage() {
           <div className="border-t border-border bg-muted/50 p-3 flex justify-end">
             <Button variant="outline" onClick={() => setViewProjects(false)}>Close</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete project confirmation modal */}
+      <Dialog open={deleteConfirm !== null} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+            <DialogDescription>
+              Enter your student password to confirm deletion of “{deleteConfirm?.name}”.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <PasswordField label="Student password" value={deletePwd} onChange={(e) => setDeletePwd(e.target.value)} autoFocus required data-testid="input-student-delete-password" toggleTestId="button-toggle-student-delete-pwd" />
+            {deleteError && <p className="text-xs text-destructive" role="alert">{deleteError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)} disabled={deleteBusy}>
+              Cancel
+            </Button>
+            <Button onClick={confirmDeleteProject} disabled={deleteBusy || !deletePwd}>
+              {deleteBusy ? 'Verifying…' : 'Delete'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
