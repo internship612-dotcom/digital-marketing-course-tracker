@@ -2046,6 +2046,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   const [marks, setMarks] = useState<Record<string, Mark>>({});
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [savingOne, setSavingOne] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
@@ -2205,6 +2206,32 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       .finally(() => setSaving(false));
   };
 
+  const saveOne = async (studentId: string, mark: Mark) => {
+    const row = rows?.find((r) => r.id === studentId);
+    if (!row || !row.eligible) return;
+    setSavingOne((v) => ({ ...v, [studentId]: true }));
+    setError(''); setNotice('');
+    try {
+      const res = await fetch('/api/teacher/attendance/student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, studentId, mark }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if ((data as { alreadyMarked?: boolean }).alreadyMarked) {
+          setNotice(`Already marked for ${row.fullName} — left as is.`);
+        } else {
+          setError((data as { error?: string }).error || 'Could not save.');
+        }
+        return;
+      }
+      setReloadToken((v) => v + 1);
+      setNotice(`Saved for ${row.fullName}.`);
+    } catch { setError('Could not save. Try again.'); }
+    finally { setSavingOne((v) => { const { [studentId]: _drop, ...rest } = v; return rest; }); }
+  };
+
   return <>
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
@@ -2350,10 +2377,26 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
                   <td className="py-2.5 pr-2 font-medium">{row.fullName}</td>
                   <td className="py-2.5 pr-2 text-muted-foreground">{row.fathersName}</td>
                   <td className="py-2.5 text-right">
-                    <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible} reason={reason} onPick={(next) => setMarks((v) => {
-                      if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
-                      return { ...v, [row.id]: next };
-                    })} />
+                    {row.markedToday ? (
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${marks[row.id] === 'present' ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700' : marks[row.id] === 'absent' ? 'border-destructive bg-destructive/10 text-destructive' : 'border-amber-500 bg-amber-500/15 text-amber-700'}`}>
+                          {marks[row.id] === 'present' ? 'P' : marks[row.id] === 'absent' ? 'A' : 'L'}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">saved</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible || savingOne[row.id]} reason={reason} onPick={(next) => setMarks((v) => {
+                          if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
+                          return { ...v, [row.id]: next };
+                        })} />
+                        {marks[row.id] && !sunday && row.eligible && !savingOne[row.id] && (
+                          <Button type="button" size="sm" onClick={() => saveOne(row.id, marks[row.id]!)} disabled={savingOne[row.id]} data-testid={`button-save-one-${row.id}`}>
+                            {savingOne[row.id] ? 'Saving…' : 'Save'}
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>;
               })}

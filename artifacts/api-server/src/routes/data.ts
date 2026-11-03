@@ -2874,6 +2874,109 @@ router.post(
   },
 );
 
+// Mark attendance for a single student on a date. If that day was already locked/marked
+// for the student, it is not overwritten — previously marked attendance stays as-is.
+router.post(
+  "/teacher/attendance/student",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      date?: string;
+      studentId?: string;
+      mark?: "present" | "absent" | "leave";
+    };
+    const date = parseDayParam(body.date);
+    if (!date || !body.studentId || !body.mark) {
+      res.status(400).json({ error: "Date, student and mark are required." });
+      return;
+    }
+    if (date && await classCancellationFor(req.auth.module, isoDay(date))) {
+      res.status(409).json({ error: "This module's class is marked as canceled for that date." });
+      return;
+    }
+
+    const student = await db
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(eq(studentsTable.id, body.studentId))
+      .limit(1);
+    if (student.length === 0) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+
+    const slot = weekAndDayFor(student[0].dateOfJoining, date);
+    if (!slot) {
+      res.status(400).json({ error: "This date is not inside the student's course." });
+      return;
+    }
+
+    const row = await db
+      .select()
+      .from(attendanceTable)
+      .where(
+        and(
+          eq(attendanceTable.studentId, body.studentId),
+          eq(attendanceTable.module, req.auth.module),
+          eq(attendanceTable.week, slot.week),
+        ),
+      )
+      .limit(1);
+
+    // Already marked for this day — do not overwrite.
+    if (row.length > 0 && isLocked(row[0].lockedDays ?? 0, slot.day)) {
+      res.status(409).json({ error: "Already marked for this date.", alreadyMarked: true });
+      return;
+    }
+
+    const isPresent = body.mark === "present" || body.mark === "leave";
+    const flags = Object.fromEntries(
+      DAY_FLAG_ORDER.map((key) => [key, false]),
+    ) as Record<(typeof DAY_FLAG_ORDER)[number], boolean>;
+    flags[slot.day] = isPresent;
+
+    const leaveDays = body.mark === "leave"
+      ? (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) | dayBit(slot.day)
+      : (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) & ~dayBit(slot.day);
+
+    const lockedDays = (row.length > 0 ? (row[0].lockedDays ?? 0) : 0) | dayBit(slot.day);
+
+    await db
+      .insert(attendanceTable)
+      .values({
+        studentId: body.studentId,
+        module: req.auth.module,
+        week: slot.week,
+        status: "present",
+        ...flags,
+        leaveDays,
+        lockedDays,
+        recordedBy: Number(req.auth.userId),
+      })
+      .onConflictDoUpdate({
+        target: [
+          attendanceTable.studentId,
+          attendanceTable.module,
+          attendanceTable.week,
+        ],
+        set: {
+          status: "present",
+          ...flags,
+          leaveDays,
+          lockedDays,
+          recordedBy: Number(req.auth.userId),
+          recordedAt: new Date(),
+        },
+      });
+
+    res.json({ saved: true, alreadyMarked: false });
+  },
+);
+
 // ---------------------------------------------------------------- institute events
 // A PTM, a holiday or an exam that stops all three modules on one day. Recorded once by
 // whichever desk noticed it first and shown to everyone, because the institute closes as a
