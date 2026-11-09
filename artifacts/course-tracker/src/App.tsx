@@ -2427,9 +2427,11 @@ function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
   const [notice, setNotice] = useState('');
   const [draft, setDraft] = useState<Record<string, Record<string, string>>>({});
 
+  const editableModule = user.module ?? '';
+
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/teacher/students?module=${encodeURIComponent(user.module ?? '')}`)
+    fetch(`/api/teacher/students?module=${encodeURIComponent(editableModule)}`)
       .then((res) => res.json())
       .then((list: any[]) => {
         setStudents(list.map((s) => ({
@@ -2441,23 +2443,26 @@ function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
       })
       .catch(() => setError('Could not load student list.'))
       .finally(() => setLoading(false));
-  }, [user.module]);
+  }, [editableModule]);
 
-  const loadMonth = () => {
-    if (!selectedStudent) return;
+  const loadMonth = useCallback((studentId = selectedStudent, monthValue = month) => {
+    if (!studentId) return;
     setLoading(true);
-    fetch(`/api/teacher/attendance/student-month?studentId=${encodeURIComponent(selectedStudent)}&month=${encodeURIComponent(month)}`)
+    setError(''); setNotice('');
+    fetch(`/api/teacher/attendance/student-month?studentId=${encodeURIComponent(studentId)}&month=${encodeURIComponent(monthValue)}`)
       .then((res) => res.json())
       .then((d: MonthAttendance) => {
         setData(d);
         const next: Record<string, Record<string, string>> = {};
         for (const m of d.modules) {
           next[m.module] = {};
-          for (const [date, cell] of Object.entries(m.weeks)) {
-            for (const [d2, v] of Object.entries(cell)) {
-              if (v.present) next[m.module][d2] = 'present';
-              else if (v.leave) next[m.module][d2] = 'leave';
-              else next[m.module][d2] = 'absent';
+          for (const slot of Object.values(m.dates)) {
+            const cell = m.weeks[String(slot.week)]?.[Object.keys(m.dates).find((k) => m.dates[k] === slot) ?? ''];
+          }
+          // Build draft from weeks data by date.
+          for (const [week, byDate] of Object.entries(m.weeks)) {
+            for (const [date, v] of Object.entries(byDate)) {
+              next[m.module][date] = v.present ? 'present' : v.leave ? 'leave' : 'absent';
             }
           }
         }
@@ -2465,44 +2470,64 @@ function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
       })
       .catch(() => setError('Could not load attendance.'))
       .finally(() => setLoading(false));
-  };
+  }, [month, selectedStudent]);
+
+  useEffect(() => {
+    if (selectedStudent) loadMonth(selectedStudent, month);
+  }, [selectedStudent, month, loadMonth]);
 
   const setDraftMark = (module: string, date: string, mark: string) => {
-    setDraft((d) => ({ ...d, [module]: { ...d[module], [date]: mark } }));
+    if (module !== editableModule) return;
+    setDraft((d) => ({ ...d, [module]: { ...(d[module] ?? {}), [date]: mark } }));
+  };
+
+  const markAllMonth = (mark: 'present' | 'absent' | 'leave') => {
+    if (!data || !editableModule) return;
+    const mod = data.modules.find((m) => m.module === editableModule);
+    if (!mod) return;
+    setDraft((d) => {
+      const next = { ...(d[editableModule] ?? {}) };
+      for (const [date, slot] of Object.entries(mod.dates)) {
+        if (mod.eventDates.includes(date)) continue;
+        const cell = mod.weeks[String(slot.week)]?.[date];
+        if (cell?.locked) continue;
+        next[date] = mark;
+      }
+      return { ...d, [editableModule]: next };
+    });
+    setNotice(`Filled all unlocked teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'} for ${moduleNames[editableModule] ?? editableModule}. Press Save Month to apply.`);
   };
 
   const saveAll = async () => {
-    if (!selectedStudent || !data) return;
+    if (!selectedStudent || !data || !editableModule) return;
     setSaving(true);
     setError(''); setNotice('');
-
-    const allSaved: string[] = [];
-    const allSkipped: string[] = [];
-
-    for (const mod of data.modules) {
-      const records: Array<{ date: string; mark: string }> = [];
-      for (const [date, mark] of Object.entries(draft[mod.module] ?? {})) {
-        records.push({ date, mark });
-      }
-      try {
-        const res = await fetch('/api/teacher/attendance/student-month-bulk', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ studentId: selectedStudent, module: mod.module, records }),
-        });
-        const result = await res.json();
-        allSaved.push(...(result.saved ?? []));
-        allSkipped.push(...(result.skipped ?? []));
-      } catch { allSkipped.push(...records.map((r) => r.date)); }
+    const mod = data.modules.find((m) => m.module === editableModule);
+    if (!mod) { setSaving(false); return; }
+    const records: Array<{ date: string; mark: string }> = [];
+    for (const [date, mark] of Object.entries(draft[editableModule] ?? {})) {
+      if (mod.eventDates.includes(date)) continue;
+      records.push({ date, mark });
     }
-
-    setSaving(false);
-    if (allSkipped.length > 0) {
-      setNotice(`Saved ${allSaved.length} days. ${allSkipped.length} already locked/skipped.`);
-    } else {
-      setNotice(`Saved ${allSaved.length} days across all modules.`);
+    try {
+      const res = await fetch('/api/teacher/attendance/student-month-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selectedStudent, records }),
+      });
+      const result = await res.json();
+      if (!res.ok) { setError(result?.error ?? 'Could not save attendance.'); setSaving(false); return; }
+      const savedCount = (result.saved ?? []).length;
+      const skippedCount = (result.skipped ?? []).length;
+      setNotice(skippedCount > 0
+        ? `Saved ${savedCount} day(s) for ${moduleNames[editableModule] ?? editableModule}. ${skippedCount} skipped (locked/event/invalid).`
+        : `Saved ${savedCount} day(s) for ${moduleNames[editableModule] ?? editableModule}.`);
+      loadMonth(selectedStudent, month);
+    } catch {
+      setError('Could not save attendance. Try again.');
+    } finally {
+      setSaving(false);
     }
-    loadMonth();
   };
 
   const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -2549,9 +2574,9 @@ function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
 
     {!loading && data && (
       <>
-        <section className="mb-6 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <Select value={selectedStudent ?? ''} onValueChange={(v) => { setSelectedStudent(v || null); loadMonth(); }}>
+        <section className="mb-4 rounded-xl border border-border bg-card p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <Select value={selectedStudent ?? ''} onValueChange={(v) => setSelectedStudent(v || null)}>
               <SelectTrigger className="w-64">
                 <SelectValue placeholder="Choose a student" />
               </SelectTrigger>
@@ -2561,15 +2586,20 @@ function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
                 ))}
               </SelectContent>
             </Select>
-            <Input
-              type="month"
-              value={month}
-              onChange={(e) => { setMonth(e.target.value); loadMonth(); }}
-              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-            />
+            <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="h-9 w-[170px] rounded-md border border-input bg-card px-3 text-sm" />
           </div>
           <div className="text-xs text-muted-foreground">
             {data.student.fullName} • {data.student.id} • Joined {data.student.dateOfJoining}
+          </div>
+        </section>
+
+        <section className="mb-4 rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold">Mark whole month ({moduleNames[editableModule] ?? editableModule}):</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('present')}>All Present</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('absent')}>All Absent</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('leave')}>All Leave</Button>
+            <span className="text-xs text-muted-foreground">Locked/event days are skipped. Review, then press Save Month.</span>
           </div>
         </section>
 
@@ -5855,9 +5885,13 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       const data = res.ok ? await res.json() as { studentId: string; marks: number | null; feedback: string | null }[] : null;
       if (data == null) { setError('Could not load this project.'); return; }
       const next: Record<string, { marks: string; feedback: string }> = {};
-      for (const record of data) next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+      const nextSaved: Record<string, boolean> = {};
+      for (const record of data) {
+        next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+        if (record.marks != null || (record.feedback ?? '').trim() !== '') nextSaved[record.studentId] = true;
+      }
       setRows(next);
-      setSaved({});
+      setSaved(nextSaved);
     } catch { setError('Could not load this project.'); }
     finally { setLoading(false); }
   }, []);
@@ -5896,6 +5930,28 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       setSaved((v) => ({ ...v, [studentId]: true }));
       setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
     } catch { setError('Could not save those marks. Try again.'); }
+    finally { setSaving(''); }
+  };
+
+  const deleteOne = async (studentId: string) => {
+    if (cycle == null) return;
+    if (!confirm(`Delete saved marks/feedback for ${studentId} (month ${month}, project ${project})? This cannot be undone.`)) return;
+    setSaving(studentId); setError(''); setNotice('');
+    try {
+      const res = await fetch('/api/teacher/assessments', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId, cycle }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data?.error ?? 'Could not delete those marks.');
+        return;
+      }
+      setRows((v) => ({ ...v, [studentId]: { marks: '', feedback: '' } }));
+      setSaved((v) => ({ ...v, [studentId]: false }));
+      setNotice(`Deleted marks for ${studentId} — month ${month}, project ${project}.`);
+    } catch { setError('Could not delete those marks. Try again.'); }
     finally { setSaving(''); }
   };
 
@@ -5981,7 +6037,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                     <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                   </td>
                   <td className="py-2">
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center gap-2">
                       <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
                       {isSaved && <>
                         <span className="text-[11px] font-medium text-emerald-700">Saved</span>
@@ -5990,6 +6046,9 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
                           marksBox.current[student.id]?.focus();
                         }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
+                        <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-delete-marks-${student.id}`}>
+                          <Trash2 size={14} /> Delete
+                        </Button>
                       </>}
                     </span>
                   </td>

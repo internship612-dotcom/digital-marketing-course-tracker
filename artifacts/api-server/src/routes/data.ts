@@ -991,6 +991,34 @@ router.get(
   },
 );
 
+router.delete(
+  "/teacher/assessments",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const body = (req.body ?? {}) as { studentId?: string; cycle?: number };
+    const studentId = typeof body.studentId === "string" ? body.studentId : "";
+    const cycle = Number(body.cycle);
+    if (!studentId || !Number.isInteger(cycle) || cycle < 1) {
+      res.status(400).json({ error: "studentId and a valid cycle are required." });
+      return;
+    }
+    await db
+      .delete(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.studentId, studentId),
+          eq(assessmentsTable.module, req.auth.module),
+          eq(assessmentsTable.cycle, cycle),
+        ),
+      );
+    res.json({ ok: true });
+  },
+);
+
 router.post(
   "/teacher/assessments/bulk",
   requireRole("teacher"),
