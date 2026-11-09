@@ -33,6 +33,7 @@ import {
   BarChart3,
   BookOpen,
   Box,
+  Calendar,
   CalendarCheck2,
   Camera,
   Check,
@@ -660,6 +661,7 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
         { href: `/admin/${user.module ?? 'ai'}`, label: 'Module desk', icon: ClipboardCheck },
         { href: '/teacher/add-student', label: 'Add student', icon: Users, children: [{ href: '/teacher/students', label: 'Student list', icon: UserCheck }] },
         { href: '/teacher/attendance', label: 'Mark Attendance', icon: CalendarCheck2 },
+        { href: '/teacher/attendance/student-month', label: 'Student Monthly Attendance', icon: Calendar },
         { href: '/teacher/assessment', label: 'Mark Assessment', icon: ClipboardCheck },
         { href: '/teacher/announcements', label: 'Announcements', icon: Megaphone },
         { href: '/teacher/documents', label: 'Course files', icon: FileText },
@@ -2408,6 +2410,292 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
     </section>
     </>}
   </>;
+}
+
+interface MonthCell { present: boolean; leave: boolean; locked: boolean; }
+interface MonthModule { module: string; moduleName: string; dates: Record<string, { week: number; day: string }>; weeks: Record<string, Record<string, MonthCell>>; eventDates: string[]; }
+interface MonthAttendance { student: { id: string; fullName: string; dateOfJoining: string }; modules: MonthModule[]; }
+
+function StudentMonthlyAttendance({ user }: { user: CurrentUser }) {
+  const [students, setStudents] = useState<Array<{ id: string; fullName: string; fathersName: string; dateOfJoining: string }>>([]);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [data, setData] = useState<MonthAttendance | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [draft, setDraft] = useState<Record<string, Record<string, string>>>({});
+
+  const editableModule = user.module ?? '';
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/teacher/students?module=${encodeURIComponent(editableModule)}`)
+      .then((res) => res.json())
+      .then((list: any[]) => {
+        setStudents(list.map((s) => ({
+          id: s.id,
+          fullName: s.fullName,
+          fathersName: s.fathersName,
+          dateOfJoining: s.dateOfJoining,
+        })));
+      })
+      .catch(() => setError('Could not load student list.'))
+      .finally(() => setLoading(false));
+  }, [editableModule]);
+
+  const loadMonth = useCallback((studentId = selectedStudent, monthValue = month) => {
+    if (!studentId) return;
+    setLoading(true);
+    setError(''); setNotice('');
+    fetch(`/api/teacher/attendance/student-month?studentId=${encodeURIComponent(studentId)}&month=${encodeURIComponent(monthValue)}`)
+      .then((res) => res.json())
+      .then((d: MonthAttendance) => {
+        setData(d);
+        const next: Record<string, Record<string, string>> = {};
+        for (const m of d.modules) {
+          next[m.module] = {};
+          for (const slot of Object.values(m.dates)) {
+            const cell = m.weeks[String(slot.week)]?.[Object.keys(m.dates).find((k) => m.dates[k] === slot) ?? ''];
+          }
+          // Build draft from weeks data by date.
+          for (const [week, byDate] of Object.entries(m.weeks)) {
+            for (const [date, v] of Object.entries(byDate)) {
+              next[m.module][date] = v.present ? 'present' : v.leave ? 'leave' : 'absent';
+            }
+          }
+        }
+        setDraft(next);
+      })
+      .catch(() => setError('Could not load attendance.'))
+      .finally(() => setLoading(false));
+  }, [month, selectedStudent]);
+
+  useEffect(() => {
+    if (selectedStudent) loadMonth(selectedStudent, month);
+  }, [selectedStudent, month, loadMonth]);
+
+  const setDraftMark = (module: string, date: string, mark: string) => {
+    if (module !== editableModule) return;
+    setDraft((d) => ({ ...d, [module]: { ...(d[module] ?? {}), [date]: mark } }));
+  };
+
+  const markAllMonth = (mark: 'present' | 'absent' | 'leave') => {
+    if (!data || !editableModule) return;
+    const mod = data.modules.find((m) => m.module === editableModule);
+    if (!mod) return;
+    setDraft((d) => {
+      const next = { ...(d[editableModule] ?? {}) };
+      for (const [date, slot] of Object.entries(mod.dates)) {
+        if (mod.eventDates.includes(date)) continue;
+        const cell = mod.weeks[String(slot.week)]?.[date];
+        if (cell?.locked) continue;
+        next[date] = mark;
+      }
+      return { ...d, [editableModule]: next };
+    });
+    setNotice(`Filled all unlocked teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'} for ${moduleNames[editableModule] ?? editableModule}. Press Save Month to apply.`);
+  };
+
+  const saveAll = async () => {
+    if (!selectedStudent || !data || !editableModule) return;
+    setSaving(true);
+    setError(''); setNotice('');
+    const mod = data.modules.find((m) => m.module === editableModule);
+    if (!mod) { setSaving(false); return; }
+    const records: Array<{ date: string; mark: string }> = [];
+    for (const [date, mark] of Object.entries(draft[editableModule] ?? {})) {
+      if (mod.eventDates.includes(date)) continue;
+      records.push({ date, mark });
+    }
+    try {
+      const res = await fetch('/api/teacher/attendance/student-month-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selectedStudent, records }),
+      });
+      const result = await res.json();
+      if (!res.ok) { setError(result?.error ?? 'Could not save attendance.'); setSaving(false); return; }
+      const savedCount = (result.saved ?? []).length;
+      const skippedCount = (result.skipped ?? []).length;
+      setNotice(skippedCount > 0
+        ? `Saved ${savedCount} day(s) for ${moduleNames[editableModule] ?? editableModule}. ${skippedCount} skipped (locked/event/invalid).`
+        : `Saved ${savedCount} day(s) for ${moduleNames[editableModule] ?? editableModule}.`);
+      loadMonth(selectedStudent, month);
+    } catch {
+      setError('Could not save attendance. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const markLabel = (mark: string | undefined) => {
+    if (!mark) return '—';
+    return mark === 'present' ? 'P' : mark === 'absent' ? 'A' : 'L';
+  };
+
+  const markStyle = (mark: string | undefined) => {
+    if (!mark) return 'border-border bg-muted text-muted-foreground';
+    if (mark === 'present') return 'border-emerald-600 bg-emerald-500/15 text-emerald-700';
+    if (mark === 'absent') return 'border-destructive bg-destructive/10 text-destructive';
+    return 'border-amber-500 bg-amber-500/15 text-amber-700';
+  };
+
+  return <>
+    <PageHeader
+      kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
+      title="Student Monthly Attendance"
+      detail="Select a student and month. Mark P / A / L for each teaching day across all three modules, then save."
+      action={<Button type="button" onClick={saveAll} disabled={saving || !data || !selectedStudent} data-testid="button-save-month-attendance">{saving ? 'Saving…' : <><Check size={15} /> Save Month</>}</Button>}
+    />
+
+    {loading && <p className="text-center py-4 text-muted-foreground">Loading…</p>}
+
+    {!loading && !data && (
+      <section className="rounded-xl border border-border bg-card p-6 text-center">
+        <p className="text-sm text-muted-foreground mb-4">Select a student to view their monthly attendance.</p>
+        <div className="flex justify-center">
+          <Select value={selectedStudent ?? ''} onValueChange={(v) => setSelectedStudent(v || null)}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder="Choose a student" />
+            </SelectTrigger>
+            <SelectContent>
+              {students.map((s) => (
+                <SelectItem key={s.id} value={s.id}>{s.fullName} ({s.id})</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </section>
+    )}
+
+    {!loading && data && (
+      <>
+        <section className="mb-4 rounded-xl border border-border bg-card p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <Select value={selectedStudent ?? ''} onValueChange={(v) => setSelectedStudent(v || null)}>
+              <SelectTrigger className="w-64">
+                <SelectValue placeholder="Choose a student" />
+              </SelectTrigger>
+              <SelectContent>
+                {students.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>{s.fullName} ({s.id})</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="h-9 w-[170px] rounded-md border border-input bg-card px-3 text-sm" />
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {data.student.fullName} • {data.student.id} • Joined {data.student.dateOfJoining}
+          </div>
+        </section>
+
+        <section className="mb-4 rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold">Mark whole month ({moduleNames[editableModule] ?? editableModule}):</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('present')}>All Present</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('absent')}>All Absent</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => markAllMonth('leave')}>All Leave</Button>
+            <span className="text-xs text-muted-foreground">Locked/event days are skipped. Review, then press Save Month.</span>
+          </div>
+        </section>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm border-collapse">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="py-2 pr-2 text-[10px] uppercase tracking-wider text-muted-foreground">Date</th>
+                <th className="py-2 text-center text-[10px] uppercase tracking-wider text-muted-foreground" colSpan={6}>Module: {data.modules[0]?.moduleName ?? ''}</th>
+                <th className="py-2 text-center text-[10px] uppercase tracking-wider text-muted-foreground" colSpan={6}>Module: {data.modules[1]?.moduleName ?? ''}</th>
+                <th className="py-2 text-center text-[10px] uppercase tracking-wider text-muted-foreground" colSpan={6}>Module: {data.modules[2]?.moduleName ?? ''}</th>
+              </tr>
+              <tr className="border-b border-border">
+                <th className="py-2 pr-2 text-[10px] uppercase tracking-wider text-muted-foreground">Day</th>
+                {data.modules.flatMap(() => weekDays).map((d, i) => (
+                  <th key={i} className="py-1 text-center text-[10px] uppercase tracking-wider text-muted-foreground">{d}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(data.modules[0].dates).map(([date, slot]) => {
+                const dayName = weekDays[['mon','tue','wed','thu','fri','sat'].indexOf(slot.day)];
+                const isEvent = data.modules[0].eventDates.includes(date);
+                return (
+                  <tr key={date} className={`border-b border-border/60 ${isEvent ? 'bg-amber-50/40' : ''}`}>
+                    <td className="py-2 pr-2 font-mono-ui text-xs font-semibold text-muted-foreground">
+                      {date} {isEvent ? <span className="ml-1 text-[10px] bg-amber-100 text-amber-800 px-1 py-0.5 rounded">Event</span> : null}
+                    </td>
+                    {data.modules.flatMap((mod, mi) => {
+                      const cell = mod.weeks[slot.week]?.[date];
+                      const locked = cell?.locked ?? false;
+                      const current = draft[mod.module]?.[date] ?? (cell?.present ? 'present' : cell?.leave ? 'leave' : 'absent');
+                      return weekDays.map((wd, wi) => {
+                        const dayKey = ['mon','tue','wed','thu','fri','sat'][wi];
+                        const isThisDay = dayKey === slot.day;
+                        const cellMark = isThisDay ? current : undefined;
+                        const cellLocked = isThisDay ? locked : false;
+                        const cellEvent = isThisDay && isEvent;
+                        return (
+                          <td key={`${mi}-${wi}`} className="py-1 text-center">
+                            {cellEvent ? (
+                              <span className="text-[10px] text-amber-600">E</span>
+                            ) : (
+                              <div className="flex flex-col items-center gap-1">
+                                <span className={`text-[10px] font-bold ${markStyle(cellMark)}`}>{markLabel(cellMark)}</span>
+                                {!cellLocked && !cellEvent && (
+                                  <div className="flex gap-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftMark(mod.module, date, 'present')}
+                                      className={`rounded px-1 py-0.5 text-[10px] ${cellMark === 'present' ? 'bg-emerald-100 text-emerald-700 border border-emerald-600' : 'text-muted-foreground hover:bg-muted'}`}
+                                      title="Present"
+                                    >P</button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftMark(mod.module, date, 'absent')}
+                                      className={`rounded px-1 py-0.5 text-[10px] ${cellMark === 'absent' ? 'bg-destructive/10 text-destructive border border-destructive' : 'text-muted-foreground hover:bg-muted'}`}
+                                      title="Absent"
+                                    >A</button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftMark(mod.module, date, 'leave')}
+                                      className={`rounded px-1 py-0.5 text-[10px] ${cellMark === 'leave' ? 'bg-amber-100 text-amber-700 border border-amber-500' : 'text-muted-foreground hover:bg-muted'}`}
+                                      title="Leave"
+                                    >L</button>
+                                  </div>
+                                )}
+                                {cellLocked && (
+                                  <span className="text-[9px] text-muted-foreground">locked</span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      });
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="mt-3 text-xs text-muted-foreground">
+          P = Present &nbsp;|&nbsp; A = Absent &nbsp;|&nbsp; L = Leave &nbsp;|&nbsp; E = Institute event &nbsp;|&nbsp; Locked = already saved, cannot change.
+        </p>
+        {error && <p className="mt-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+        {notice && <p className="mt-2 rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">{notice}</p>}
+      </>
+    )}
+  </>;
+}
+
+function StudentMonthlyAttendanceRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <StudentMonthlyAttendance user={user} /> : null;
 }
 
 function Avatar({ photo, name, size = 34, testId, placeholderTestId }: { photo?: string | null; name: string; size?: number; testId?: string; placeholderTestId?: string }) {
@@ -5527,7 +5815,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:code"><LoginCodeRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/attendance/student-month"><Protected role="teacher"><StudentMonthlyAttendanceRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:code"><LoginCodeRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -5597,9 +5885,13 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       const data = res.ok ? await res.json() as { studentId: string; marks: number | null; feedback: string | null }[] : null;
       if (data == null) { setError('Could not load this project.'); return; }
       const next: Record<string, { marks: string; feedback: string }> = {};
-      for (const record of data) next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+      const nextSaved: Record<string, boolean> = {};
+      for (const record of data) {
+        next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+        if (record.marks != null || (record.feedback ?? '').trim() !== '') nextSaved[record.studentId] = true;
+      }
       setRows(next);
-      setSaved({});
+      setSaved(nextSaved);
     } catch { setError('Could not load this project.'); }
     finally { setLoading(false); }
   }, []);
@@ -5638,6 +5930,28 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       setSaved((v) => ({ ...v, [studentId]: true }));
       setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
     } catch { setError('Could not save those marks. Try again.'); }
+    finally { setSaving(''); }
+  };
+
+  const deleteOne = async (studentId: string) => {
+    if (cycle == null) return;
+    if (!confirm(`Delete saved marks/feedback for ${studentId} (month ${month}, project ${project})? This cannot be undone.`)) return;
+    setSaving(studentId); setError(''); setNotice('');
+    try {
+      const res = await fetch('/api/teacher/assessments', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId, cycle }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data?.error ?? 'Could not delete those marks.');
+        return;
+      }
+      setRows((v) => ({ ...v, [studentId]: { marks: '', feedback: '' } }));
+      setSaved((v) => ({ ...v, [studentId]: false }));
+      setNotice(`Deleted marks for ${studentId} — month ${month}, project ${project}.`);
+    } catch { setError('Could not delete those marks. Try again.'); }
     finally { setSaving(''); }
   };
 
@@ -5723,7 +6037,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                     <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                   </td>
                   <td className="py-2">
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center gap-2">
                       <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
                       {isSaved && <>
                         <span className="text-[11px] font-medium text-emerald-700">Saved</span>
@@ -5732,6 +6046,9 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
                           marksBox.current[student.id]?.focus();
                         }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
+                        <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-delete-marks-${student.id}`}>
+                          <Trash2 size={14} /> Delete
+                        </Button>
                       </>}
                     </span>
                   </td>
