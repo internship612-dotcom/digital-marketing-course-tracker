@@ -2977,6 +2977,200 @@ router.post(
   },
 );
 
+// Get one student's month attendance across every module they are enrolled in.
+// Returns per-module week rows with day flags + leave/locked bits plus calendar events
+// for the month so the UI can render a P/A/L grid.
+router.get(
+  "/teacher/attendance/student-month",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    const studentId = typeof req.query.studentId === "string" ? req.query.studentId : null;
+    const month = typeof req.query.month === "string" ? req.query.month : null; // YYYY-MM
+    if (!studentId || !month) {
+      res.status(400).json({ error: "studentId and month (YYYY-MM) required." });
+      return;
+    }
+    const [yearStr, monthStr] = month.split("-");
+    const year = Number(yearStr);
+    const m = Number(monthStr) - 1; // 0-indexed
+    if (!year || m < 0 || m > 11) {
+      res.status(400).json({ error: "Invalid month." });
+      return;
+    }
+    const from = `${year}-${String(m + 1).padStart(2, "0")}-01`;
+    const to = `${year}-${String(m + 1).padStart(2, "0")}-31`;
+
+    const student = await db
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(eq(studentsTable.id, studentId))
+      .limit(1);
+    if (student.length === 0) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+
+    const events = await db
+      .select()
+      .from(calendarEventsTable)
+      .where(
+        and(gte(calendarEventsTable.date, from), lte(calendarEventsTable.date, to)),
+      )
+      .orderBy(asc(calendarEventsTable.date));
+    const eventDates = new Set(events.map((e) => e.date));
+
+    const modules = ["ai", "dm", "sm"];
+    const result: Record<string, unknown>[] = [];
+
+    for (const module of modules) {
+      const rows = await db
+        .select()
+        .from(attendanceTable)
+        .where(
+          and(
+            eq(attendanceTable.studentId, studentId),
+            eq(attendanceTable.module, module),
+          ),
+        );
+
+      // All teaching dates in the month for this student, mapped to week+day.
+      const monthDates: Record<string, { week: number; day: string }> = {};
+      for (let d = 1; d <= 31; d++) {
+        const date = new Date(year, m, d);
+        if (date.getMonth() !== m) continue;
+        const isoDate = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+        const slot = weekAndDayFor(student[0].dateOfJoining, date);
+        if (!slot) continue; // Sunday or before joining
+        monthDates[isoDate] = { week: slot.week, day: slot.day };
+      }
+
+      const weekRows: Record<string, Record<string, { present: boolean; leave: boolean; locked: boolean }>> = {};
+      for (const [date, slot] of Object.entries(monthDates)) {
+        const row = rows.find((r) => r.week === slot.week);
+        const present = row ? Boolean(row[slot.day as keyof typeof row]) : false;
+        const dayKey = slot.day as (typeof DAY_FLAG_ORDER)[number];
+        const leave = row ? ((row.leaveDays ?? 0) & dayBit(dayKey)) !== 0 : false;
+        const locked = row ? isLocked(row.lockedDays ?? 0, dayKey) : false;
+        if (!weekRows[slot.week]) weekRows[slot.week] = {};
+        weekRows[slot.week][date] = { present, leave, locked };
+      }
+
+      result.push({
+        module,
+        moduleName: module === "ai" ? "Artificial Intelligence" : module === "dm" ? "Digital Marketing" : "Social Media",
+        dates: monthDates,
+        weeks: weekRows,
+        eventDates: Array.from(eventDates),
+      });
+    }
+
+    res.json({ student: student[0], modules: result });
+  },
+);
+
+// Bulk save many days for one student in one module at once.
+// Skips days that are already locked (already marked).
+router.post(
+  "/teacher/attendance/student-month-bulk",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      studentId?: string;
+      records?: Array<{ date: string; mark: "present" | "absent" | "leave" }>;
+    };
+    if (!body.studentId || !Array.isArray(body.records) || body.records.length === 0) {
+      res.status(400).json({ error: "studentId and records required." });
+      return;
+    }
+
+    const student = await db
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(eq(studentsTable.id, body.studentId))
+      .limit(1);
+    if (student.length === 0) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+
+    const saved: string[] = [];
+    const skipped: string[] = [];
+
+    for (const rec of body.records) {
+      const date = parseDayParam(rec.date);
+      if (!date || !rec.mark) { skipped.push(rec.date); continue; }
+      if (await classCancellationFor(req.auth.module, isoDay(date))) { skipped.push(rec.date); continue; }
+
+      const slot = weekAndDayFor(student[0].dateOfJoining, date);
+      if (!slot) { skipped.push(rec.date); continue; }
+
+      const row = await db
+        .select()
+        .from(attendanceTable)
+        .where(
+          and(
+            eq(attendanceTable.studentId, body.studentId),
+            eq(attendanceTable.module, req.auth.module),
+            eq(attendanceTable.week, slot.week),
+          ),
+        )
+        .limit(1);
+
+      if (row.length > 0 && isLocked(row[0].lockedDays ?? 0, slot.day)) {
+        skipped.push(rec.date);
+        continue;
+      }
+
+      const isPresent = rec.mark === "present" || rec.mark === "leave";
+      const flags = Object.fromEntries(
+        DAY_FLAG_ORDER.map((key) => [key, false]),
+      ) as Record<(typeof DAY_FLAG_ORDER)[number], boolean>;
+      flags[slot.day] = isPresent;
+
+      const leaveDays = rec.mark === "leave"
+        ? (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) | dayBit(slot.day)
+        : (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) & ~dayBit(slot.day);
+
+      const lockedDays = (row.length > 0 ? (row[0].lockedDays ?? 0) : 0) | dayBit(slot.day);
+
+      await db
+        .insert(attendanceTable)
+        .values({
+          studentId: body.studentId,
+          module: req.auth.module,
+          week: slot.week,
+          status: "present",
+          ...flags,
+          leaveDays,
+          lockedDays,
+          recordedBy: Number(req.auth.userId),
+        })
+        .onConflictDoUpdate({
+          target: [
+            attendanceTable.studentId,
+            attendanceTable.module,
+            attendanceTable.week,
+          ],
+          set: {
+            status: "present",
+            ...flags,
+            leaveDays,
+            lockedDays,
+            recordedBy: Number(req.auth.userId),
+            recordedAt: new Date(),
+          },
+        });
+      saved.push(rec.date);
+    }
+
+    res.json({ saved, skipped });
+  },
+);
+
 // ---------------------------------------------------------------- institute events
 // A PTM, a holiday or an exam that stops all three modules on one day. Recorded once by
 // whichever desk noticed it first and shown to everyone, because the institute closes as a
