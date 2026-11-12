@@ -3012,87 +3012,98 @@ router.get(
   "/teacher/attendance/student-month",
   requireRole("teacher"),
   async (req, res): Promise<void> => {
-    const studentId = typeof req.query.studentId === "string" ? req.query.studentId : null;
-    const month = typeof req.query.month === "string" ? req.query.month : null; // YYYY-MM
-    if (!studentId || !month) {
-      res.status(400).json({ error: "studentId and month (YYYY-MM) required." });
-      return;
-    }
-    const [yearStr, monthStr] = month.split("-");
-    const year = Number(yearStr);
-    const m = Number(monthStr) - 1; // 0-indexed
-    if (!year || m < 0 || m > 11) {
-      res.status(400).json({ error: "Invalid month." });
-      return;
-    }
-    const from = `${year}-${String(m + 1).padStart(2, "0")}-01`;
-    const to = `${year}-${String(m + 1).padStart(2, "0")}-31`;
+    try {
+      const studentId = typeof req.query.studentId === "string" ? req.query.studentId : null;
+      const month = typeof req.query.month === "string" ? req.query.month : null; // YYYY-MM
+      if (!studentId || !month) {
+        res.status(400).json({ error: "studentId and month (YYYY-MM) required." });
+        return;
+      }
+      const [yearStr, monthStr] = month.split("-");
+      const year = Number(yearStr);
+      const m = Number(monthStr) - 1; // 0-indexed
+      if (!year || m < 0 || m > 11) {
+        res.status(400).json({ error: "Invalid month." });
+        return;
+      }
+      const from = `${year}-${String(m + 1).padStart(2, "0")}-01`;
+      const to = `${year}-${String(m + 1).padStart(2, "0")}-31`;
 
-    const student = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
-      .from(studentsTable)
-      .where(eq(studentsTable.id, studentId))
-      .limit(1);
-    if (student.length === 0) {
-      res.status(404).json({ error: "Student not found." });
-      return;
-    }
+      const student = await db
+        .select({ id: studentsTable.id, fullName: studentsTable.fullName, dateOfJoining: studentsTable.dateOfJoining })
+        .from(studentsTable)
+        .where(eq(studentsTable.id, studentId))
+        .limit(1);
+      if (student.length === 0) {
+        res.status(404).json({ error: "Student not found." });
+        return;
+      }
 
-    const events = await db
-      .select()
-      .from(calendarEventsTable)
-      .where(
-        and(gte(calendarEventsTable.date, from), lte(calendarEventsTable.date, to)),
-      )
-      .orderBy(asc(calendarEventsTable.date));
-    const eventDates = new Set(events.map((e) => e.date));
-
-    const modules = ["ai", "dm", "sm"];
-    const result: Record<string, unknown>[] = [];
-
-    for (const module of modules) {
-      const rows = await db
+      const events = await db
         .select()
-        .from(attendanceTable)
+        .from(calendarEventsTable)
         .where(
-          and(
-            eq(attendanceTable.studentId, studentId),
-            eq(attendanceTable.module, module),
-          ),
-        );
+          and(gte(calendarEventsTable.date, from), lte(calendarEventsTable.date, to)),
+        )
+        .orderBy(asc(calendarEventsTable.date));
+      const eventDates = new Set(events.map((e) => e.date));
 
-      // All teaching dates in the month for this student, mapped to week+day.
-      const monthDates: Record<string, { week: number; day: string }> = {};
-      for (let d = 1; d <= 31; d++) {
-        const date = new Date(year, m, d);
-        if (date.getMonth() !== m) continue;
-        const isoDate = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
-        const slot = weekAndDayFor(student[0].dateOfJoining, date);
-        if (!slot) continue; // Sunday or before joining
-        monthDates[isoDate] = { week: slot.week, day: slot.day };
+      const cancellations = await db
+        .select({ module: moduleClassCancellationsTable.module, date: sql<string>`${moduleClassCancellationsTable.date}::text`, reason: moduleClassCancellationsTable.reason })
+        .from(moduleClassCancellationsTable)
+        .where(and(inArray(moduleClassCancellationsTable.module, ["ai", "dm", "sm"]), gte(moduleClassCancellationsTable.date, from), lte(moduleClassCancellationsTable.date, to)));
+
+      const modules = ["ai", "dm", "sm"];
+      const result: Record<string, unknown>[] = [];
+
+      for (const module of modules) {
+        const rows = await db
+          .select()
+          .from(attendanceTable)
+          .where(
+            and(
+              eq(attendanceTable.studentId, studentId),
+              eq(attendanceTable.module, module),
+            ),
+          );
+
+        // All teaching dates in the month for this student, mapped to week+day.
+        const monthDates: Record<string, { week: number; day: string }> = {};
+        for (let d = 1; d <= 31; d++) {
+          const date = new Date(year, m, d);
+          if (date.getMonth() !== m) continue;
+          const isoDate = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+          const slot = weekAndDayFor(student[0].dateOfJoining, date);
+          if (!slot) continue; // Sunday or before joining
+          monthDates[isoDate] = { week: slot.week, day: slot.day };
+        }
+
+        const weekRows: Record<string, Record<string, { present: boolean; leave: boolean; locked: boolean }>> = {};
+        for (const [date, slot] of Object.entries(monthDates)) {
+          const row = rows.find((r) => r.week === slot.week);
+          const present = row ? Boolean(row[slot.day as keyof typeof row]) : false;
+          const dayKey = slot.day as (typeof DAY_FLAG_ORDER)[number];
+          const leave = row ? ((row.leaveDays ?? 0) & dayBit(dayKey)) !== 0 : false;
+          const locked = row ? isLocked(row.lockedDays ?? 0, dayKey) : false;
+          if (!weekRows[slot.week]) weekRows[slot.week] = {};
+          weekRows[slot.week][date] = { present, leave, locked };
+        }
+
+        const cancelled = cancellations.filter((c) => c.module === module).map((c) => ({ date: c.date, reason: c.reason }));
+        result.push({
+          module,
+          moduleName: module === "ai" ? "Artificial Intelligence" : module === "dm" ? "Digital Marketing" : "Social Media",
+          dates: monthDates,
+          weeks: weekRows,
+          eventDates: Array.from(eventDates),
+          cancelledDates: cancelled,
+        });
       }
 
-      const weekRows: Record<string, Record<string, { present: boolean; leave: boolean; locked: boolean }>> = {};
-      for (const [date, slot] of Object.entries(monthDates)) {
-        const row = rows.find((r) => r.week === slot.week);
-        const present = row ? Boolean(row[slot.day as keyof typeof row]) : false;
-        const dayKey = slot.day as (typeof DAY_FLAG_ORDER)[number];
-        const leave = row ? ((row.leaveDays ?? 0) & dayBit(dayKey)) !== 0 : false;
-        const locked = row ? isLocked(row.lockedDays ?? 0, dayKey) : false;
-        if (!weekRows[slot.week]) weekRows[slot.week] = {};
-        weekRows[slot.week][date] = { present, leave, locked };
-      }
-
-      result.push({
-        module,
-        moduleName: module === "ai" ? "Artificial Intelligence" : module === "dm" ? "Digital Marketing" : "Social Media",
-        dates: monthDates,
-        weeks: weekRows,
-        eventDates: Array.from(eventDates),
-      });
+      res.json({ student: student[0], modules: result });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Could not load monthly attendance." });
     }
-
-    res.json({ student: student[0], modules: result });
   },
 );
 

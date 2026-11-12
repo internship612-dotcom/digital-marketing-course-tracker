@@ -2238,7 +2238,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark Attendance"
       detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
-      action={<Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || classCancellation != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button>}
+      action={<div className="flex flex-wrap items-center gap-2"><MonthlyStudentAttendancePanel moduleId={user.module ?? ''} moduleLabel={user.module ? (moduleNames[user.module] ?? user.module) : 'module'} students={all} /><Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || classCancellation != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button></div>}
     />
 
     <section className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2334,8 +2334,6 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
     {/* The search box and the table are hidden while an event stands, so there is nothing to
         fill in and no Save button to press. */}
-    <MonthlyStudentAttendancePanel moduleId={user.module ?? ''} moduleLabel={user.module ? (moduleNames[user.module] ?? user.module) : 'module'} students={all} />
-
     {event == null && classCancellation == null && <>
     <div className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="relative w-full sm:max-w-md">
@@ -2414,7 +2412,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 }
 
 interface MonthAttendanceCell { present: boolean; leave: boolean; locked: boolean; }
-interface MonthAttendanceModule { module: string; moduleName: string; dates: Record<string, { week: number; day: string }>; weeks: Record<string, Record<string, MonthAttendanceCell>>; eventDates: string[]; }
+interface MonthAttendanceModule { module: string; moduleName: string; dates: Record<string, { week: number; day: string }>; weeks: Record<string, Record<string, MonthAttendanceCell>>; eventDates: string[]; cancelledDates?: Array<{ date: string; reason: string }> }
 interface MonthAttendancePayload { student: { id: string; fullName: string; dateOfJoining: string }; modules: MonthAttendanceModule[]; }
 
 function MonthlyStudentAttendancePanel({
@@ -2424,8 +2422,9 @@ function MonthlyStudentAttendancePanel({
 }: {
   moduleId: string;
   moduleLabel: string;
-  students: Array<{ id: string; fullName: string; fathersName: string; dateOfJoining: string }>;
+  students: Array<{ id: string; fullName: string; fathersName?: string; dateOfJoining: string }>;
 }) {
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -2436,47 +2435,76 @@ function MonthlyStudentAttendancePanel({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
+  const resetState = () => {
+    setQuery('');
+    setSelectedId('');
+    setData(null);
+    setDraft({});
+    setError('');
+    setNotice('');
+  };
+
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return students.slice(0, 12);
-    return students.filter((s) =>
-      s.id.toLowerCase().includes(q) ||
-      s.fullName.toLowerCase().includes(q) ||
-      (s.fathersName ?? '').toLowerCase().includes(q)
-    ).slice(0, 12);
+    const list = q
+      ? students.filter((s) =>
+          s.id.toLowerCase().includes(q) ||
+          s.fullName.toLowerCase().includes(q) ||
+          (s.fathersName ?? '').toLowerCase().includes(q))
+      : students;
+    return list.slice(0, 15);
   }, [query, students]);
 
   const selected = students.find((s) => s.id === selectedId) ?? null;
   const mod = data?.modules.find((m) => m.module === moduleId) ?? data?.modules[0] ?? null;
+  const cancelledMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of mod?.cancelledDates ?? []) map.set(c.date, c.reason);
+    return map;
+  }, [mod]);
 
   const load = async (studentId = selectedId, monthValue = month) => {
     if (!studentId) { setError('Select a student from the list.'); return; }
     setLoading(true); setError(''); setNotice('');
     try {
-      const res = await fetch(`/api/teacher/attendance/student-month?studentId=${encodeURIComponent(studentId)}&month=${encodeURIComponent(monthValue)}`);
-      const json = await res.json();
-      if (!res.ok) { setError(json?.error ?? 'Could not load monthly attendance.'); setData(null); return; }
+      const res = await fetch(`/api/teacher/attendance/student-month?studentId=${encodeURIComponent(studentId)}&month=${encodeURIComponent(monthValue)}`, { credentials: 'same-origin' });
+      const text = await res.text();
+      let json: any = {};
+      try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
+      if (!res.ok) {
+        setError(json?.error || `Could not load monthly attendance (${res.status}).`);
+        setData(null);
+        return;
+      }
       const payload = json as MonthAttendancePayload;
       setData(payload);
       const target = payload.modules.find((m) => m.module === moduleId) ?? payload.modules[0];
       const next: Record<string, 'present' | 'absent' | 'leave'> = {};
       if (target) {
-        for (const [week, byDate] of Object.entries(target.weeks)) {
+        for (const [, byDate] of Object.entries(target.weeks)) {
           for (const [date, v] of Object.entries(byDate)) {
             next[date] = v.leave ? 'leave' : v.present ? 'present' : 'absent';
           }
         }
       }
       setDraft(next);
-    } catch {
-      setError('Could not load monthly attendance.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load monthly attendance.');
       setData(null);
     } finally {
       setLoading(false);
     }
   };
 
+  const isBlocked = (date: string) => (mod?.eventDates.includes(date) ?? false) || cancelledMap.has(date);
+  const isLocked = (date: string) => {
+    if (!mod) return false;
+    const slot = mod.dates[date];
+    return slot ? (mod.weeks[String(slot.week)]?.[date]?.locked ?? false) : false;
+  };
+
   const setMark = (date: string, mark: 'present' | 'absent' | 'leave') => {
+    if (isBlocked(date) || isLocked(date)) return;
     setDraft((d) => ({ ...d, [date]: mark }));
   };
 
@@ -2484,22 +2512,20 @@ function MonthlyStudentAttendancePanel({
     if (!mod) return;
     setDraft((d) => {
       const next = { ...d };
-      for (const [date, slot] of Object.entries(mod.dates)) {
-        if (mod.eventDates.includes(date)) continue;
-        const cell = mod.weeks[String(slot.week)]?.[date];
-        if (cell?.locked) continue;
+      for (const date of Object.keys(mod.dates)) {
+        if (isBlocked(date) || isLocked(date)) continue;
         next[date] = mark;
       }
       return next;
     });
-    setNotice(`Filled unlocked teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'}. Review the grid, then click Save Month.`);
+    setNotice(`Filled unlocked teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'}. Review the calendar, then click Save Month.`);
   };
 
   const saveMonth = async () => {
     if (!selectedId || !mod) return;
     setSaving(true); setError(''); setNotice('');
     const records = Object.entries(mod.dates)
-      .filter(([date]) => !mod.eventDates.includes(date))
+      .filter(([date]) => !isBlocked(date))
       .map(([date]) => ({ date, mark: draft[date] ?? 'absent' }));
     try {
       const res = await fetch('/api/teacher/attendance/student-month-bulk', {
@@ -2511,7 +2537,7 @@ function MonthlyStudentAttendancePanel({
       if (!res.ok) { setError(json?.error ?? 'Could not save monthly attendance.'); return; }
       const saved = Array.isArray(json.saved) ? json.saved.length : 0;
       const skipped = Array.isArray(json.skipped) ? json.skipped.length : 0;
-      setNotice(skipped ? `Saved ${saved} day(s) for ${moduleLabel}. ${skipped} skipped (locked/event/invalid).` : `Saved ${saved} day(s) for ${moduleLabel}.`);
+      setNotice(skipped ? `Saved ${saved} day(s) for ${moduleLabel}. ${skipped} skipped (locked/event/class not held/invalid).` : `Saved ${saved} day(s) for ${moduleLabel}.`);
       await load(selectedId, month);
     } catch {
       setError('Could not save monthly attendance. Try again.');
@@ -2520,135 +2546,146 @@ function MonthlyStudentAttendancePanel({
     }
   };
 
-  const dayOrder = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
-  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const sortedDates = mod ? Object.keys(mod.dates).sort() : [];
+  const calendarCells = useMemo(() => {
+    if (!mod || !month) return [];
+    const [y, m] = month.split('-').map(Number);
+    if (!y || !m) return [];
+    const first = new Date(y, m - 1, 1);
+    const lastDay = new Date(y, m, 0).getDate();
+    const startOffset = (first.getDay() + 6) % 7; // Mon=0
+    const cells: Array<{ date?: string; dayNum?: number }> = [];
+    for (let i = 0; i < startOffset; i++) cells.push({});
+    for (let d = 1; d <= lastDay; d++) {
+      const date = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      cells.push({ date, dayNum: d });
+    }
+    while (cells.length % 7 !== 0) cells.push({});
+    return cells;
+  }, [mod, month]);
+
+  const markBtn = (date: string, mark: 'present' | 'absent' | 'leave', label: string) => {
+    const active = (draft[date] ?? 'absent') === mark;
+    const disabled = isBlocked(date) || isLocked(date);
+    const activeStyle = mark === 'present'
+      ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700'
+      : mark === 'absent'
+        ? 'border-destructive bg-destructive/10 text-destructive'
+        : 'border-amber-500 bg-amber-500/15 text-amber-700';
+    return (
+      <button
+        key={mark}
+        type="button"
+        disabled={disabled}
+        onClick={() => setMark(date, mark)}
+        className={`h-7 w-7 rounded border text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeStyle : 'border-border bg-card text-muted-foreground hover:bg-muted'}`}
+        title={mark}
+      >{label}</button>
+    );
+  };
 
   return (
-    <section className="mt-5 rounded-xl border border-border bg-card p-5" data-testid="panel-monthly-attendance">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Whole month (one student)</p>
-          <h2 className="mt-1 font-display text-2xl font-bold">Mark full month in Mark Attendance</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Search a student, choose a month, mark P/A/L for teaching days, then save. Locked and event days are skipped.</p>
-        </div>
-      </div>
+    <>
+      <Button type="button" variant="outline" onClick={() => setOpen(true)} data-testid="button-open-monthly-attendance">
+        <Calendar size={15} /> Mark Monthly Attendance
+      </Button>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1.3fr)_180px_auto] md:items-end">
-        <div className="grid gap-1.5">
-          <label className="text-sm font-medium" htmlFor="monthly-student-search">Search student</label>
-          <Input id="monthly-student-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name, student ID, father's name" data-testid="input-monthly-student-search" />
-        </div>
-        <div className="grid gap-1.5">
-          <label className="text-sm font-medium" htmlFor="monthly-month">Month</label>
-          <Input id="monthly-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} data-testid="input-monthly-month" />
-        </div>
-        <Button type="button" onClick={() => load(selectedId, month)} disabled={!selectedId || loading} data-testid="button-load-monthly-attendance">
-          {loading ? 'Loading…' : 'Load month'}
-        </Button>
-      </div>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setError(''); setNotice(''); } }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Mark Monthly Attendance</DialogTitle>
+            <DialogDescription>Search one student, select a month, and mark P/A/L for teaching days in {moduleLabel}. Institute events, module class-not-held days, and locked days are handled like daily attendance.</DialogDescription>
+          </DialogHeader>
 
-      <div className="mt-3 rounded-lg border border-border bg-muted/20 p-3">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Matching students</p>
-        {matches.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No matching student found.</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {matches.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => { setSelectedId(s.id); setData(null); setDraft({}); setNotice(''); setError(''); }}
-                className={`rounded-full border px-3 py-1.5 text-left text-xs transition ${selectedId === s.id ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-card hover:bg-muted'}`}
-                data-testid={`monthly-student-${s.id}`}
-              >
-                <span className="font-semibold">{s.fullName}</span>
-                <span className="ml-1 text-muted-foreground">({s.id})</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selected && <p className="mt-3 text-sm text-muted-foreground">Selected: <strong className="text-foreground">{selected.fullName}</strong> ({selected.id}) · {moduleLabel}</p>}
-
-      {data && mod && (
-        <>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold">Fill unlocked days:</span>
-            <Button type="button" size="sm" variant="outline" onClick={() => fillAll('present')} data-testid="button-monthly-all-present">All Present</Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => fillAll('absent')} data-testid="button-monthly-all-absent">All Absent</Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => fillAll('leave')} data-testid="button-monthly-all-leave">All Leave</Button>
-            <Button type="button" size="sm" onClick={saveMonth} disabled={saving} data-testid="button-save-monthly-attendance"><Check size={14} /> {saving ? 'Saving…' : 'Save Month'}</Button>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto_auto] md:items-end">
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="monthly-student-search">Search student</label>
+              <Input id="monthly-student-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name, student ID, father's name" data-testid="input-monthly-student-search" />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="monthly-month">Month</label>
+              <Input id="monthly-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} data-testid="input-monthly-month" />
+            </div>
+            <Button type="button" variant="outline" onClick={() => load(selectedId, month)} disabled={!selectedId || loading} data-testid="button-load-monthly-attendance">{loading ? 'Loading…' : 'Load'}</Button>
+            <Button type="button" onClick={saveMonth} disabled={!selectedId || !mod || saving} data-testid="button-save-monthly-attendance"><Check size={14} /> {saving ? 'Saving…' : 'Save Month'}</Button>
           </div>
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-sm" data-testid="table-monthly-attendance">
-              <thead>
-                <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <th className="py-2 pr-2 text-left font-semibold">Date</th>
-                  {dayLabels.map((d) => <th key={d} className="py-2 px-1 text-center font-semibold">{d}</th>)}
-                  <th className="py-2 pl-2 text-left font-semibold">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedDates.map((date) => {
-                  const slot = mod.dates[date];
-                  const cell = mod.weeks[String(slot.week)]?.[date];
-                  const locked = cell?.locked ?? false;
-                  const eventDay = mod.eventDates.includes(date);
-                  const mark = draft[date] ?? (cell?.leave ? 'leave' : cell?.present ? 'present' : 'absent');
-                  return (
-                    <tr key={date} className={`border-b border-border/60 ${eventDay ? 'bg-amber-50/60' : ''}`}>
-                      <td className="py-2 pr-2 font-mono-ui text-xs">{date}</td>
-                      {dayOrder.map((dayKey) => {
-                        const active = slot.day === dayKey;
-                        return (
-                          <td key={dayKey} className="py-2 px-1 text-center">
-                            {!active ? <span className="text-muted-foreground/40">—</span>
-                              : eventDay ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Event</span>
-                              : (
-                                <div className="inline-flex items-center gap-1">
-                                  {(['present', 'absent', 'leave'] as const).map((m) => {
-                                    const label = m === 'present' ? 'P' : m === 'absent' ? 'A' : 'L';
-                                    const activeStyle = m === 'present'
-                                      ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700'
-                                      : m === 'absent'
-                                        ? 'border-destructive bg-destructive/10 text-destructive'
-                                        : 'border-amber-500 bg-amber-500/15 text-amber-700';
-                                    return (
-                                      <button
-                                        key={m}
-                                        type="button"
-                                        disabled={locked}
-                                        onClick={() => setMark(date, m)}
-                                        className={`h-7 w-7 rounded border text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-50 ${mark === m ? activeStyle : 'border-border bg-card text-muted-foreground hover:bg-muted'}`}
-                                        data-testid={`monthly-mark-${date}-${m}`}
-                                        title={m}
-                                      >{label}</button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                          </td>
-                        );
-                      })}
-                      <td className="py-2 pl-2 text-xs text-muted-foreground">
-                        {eventDay ? 'Institute event' : locked ? 'Locked (already saved)' : mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="rounded-lg border border-border bg-muted/20 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Student list {query.trim() ? '(filtered)' : '(recent)'}</p>
+            {matches.length === 0 ? <p className="text-sm text-muted-foreground">No matching student.</p> : (
+              <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+                {matches.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => { setSelectedId(s.id); setData(null); setDraft({}); setNotice(''); setError(''); }}
+                    className={`rounded-full border px-3 py-1.5 text-xs ${selectedId === s.id ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-card hover:bg-muted'}`}
+                    data-testid={`monthly-student-${s.id}`}
+                  >
+                    <span className="font-semibold">{s.fullName}</span> <span className="text-muted-foreground">({s.id})</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">P = Present, A = Absent, L = Leave. Saves to <strong>{moduleLabel}</strong> only. Already locked days and institute events are not changed.</p>
-        </>
-      )}
 
-      {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-monthly-attendance-error">{error}</p>}
-      {notice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-monthly-attendance-success">{notice}</p>}
-    </section>
+          {selected && <p className="text-sm">Selected: <strong>{selected.fullName}</strong> ({selected.id}) · {moduleLabel}</p>}
+
+          {data && mod && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold">Fill unlocked days:</span>
+                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('present')}>All P</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('absent')}>All A</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('leave')}>All L</Button>
+                <span className="text-xs text-muted-foreground">Events, class-not-held, and locked days are skipped.</span>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <div className="grid min-w-[720px] grid-cols-7 border-b border-border bg-muted/30 text-center text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="px-2 py-2">{d}</div>)}
+                </div>
+                <div className="grid min-w-[720px] grid-cols-7">
+                  {calendarCells.map((cell, idx) => {
+                    if (!cell.date || !cell.dayNum) return <div key={idx} className="min-h-[96px] border-b border-r border-border/50 bg-muted/10 p-2" />;
+                    const date = cell.date;
+                    const teachable = Boolean(mod.dates[date]);
+                    const eventDay = mod.eventDates.includes(date);
+                    const cancelledReason = cancelledMap.get(date);
+                    const locked = isLocked(date);
+                    const mark = draft[date] ?? 'absent';
+                    return (
+                      <div key={date} className={`min-h-[96px] border-b border-r border-border/50 p-2 ${!teachable ? 'bg-muted/10' : eventDay ? 'bg-amber-50/70' : cancelledReason ? 'bg-slate-100/80' : ''}`}>
+                        <div className="mb-1 flex items-center justify-between gap-1">
+                          <span className="text-xs font-semibold">{cell.dayNum}</span>
+                          {locked && teachable && !isBlocked(date) && <span className="text-[9px] text-muted-foreground">locked</span>}
+                        </div>
+                        {!teachable ? <span className="text-[10px] text-muted-foreground/60">—</span>
+                          : eventDay ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Event</span>
+                          : cancelledReason ? <span className="block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700" title={cancelledReason}>Class not held</span>
+                          : (
+                            <div className="flex flex-wrap gap-1">
+                              {markBtn(date, 'present', 'P')}
+                              {markBtn(date, 'absent', 'A')}
+                              {markBtn(date, 'leave', 'L')}
+                            </div>
+                          )}
+                        {teachable && !eventDay && !cancelledReason && (
+                          <div className="mt-1 text-[10px] text-muted-foreground">{locked ? (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent') : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">Calendar month view for <strong>{moduleLabel}</strong>. Sundays/non-teaching days before joining are not markable. Event and class-not-held days follow the same rules as daily attendance.</p>
+            </>
+          )}
+
+          {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-monthly-attendance-error">{error}</p>}
+          {notice && <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-monthly-attendance-success">{notice}</p>}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -5887,10 +5924,13 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     finally { setSaving(''); }
   };
 
-  const deleteOne = async (studentId: string) => {
-    if (cycle == null) return;
-    if (!confirm(`Delete saved marks/feedback for ${studentId} (month ${month}, project ${project})? This cannot be undone.`)) return;
-    setSaving(studentId); setError(''); setNotice('');
+  const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: string } | null>(null);
+  const [deletingId, setDeletingId] = useState('');
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || cycle == null) return;
+    const { studentId, label } = deleteTarget;
+    setDeletingId(studentId); setSaving(studentId); setError(''); setNotice('');
     try {
       const res = await fetch('/api/teacher/assessments', {
         method: 'DELETE',
@@ -5904,9 +5944,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       }
       setRows((v) => ({ ...v, [studentId]: { marks: '', feedback: '' } }));
       setSaved((v) => ({ ...v, [studentId]: false }));
-      setNotice(`Deleted marks for ${studentId} — month ${month}, project ${project}.`);
+      setDeleteTarget(null);
+      setNotice(`Deleted marks for ${label} — month ${month}, project ${project}.`);
     } catch { setError('Could not delete those marks. Try again.'); }
-    finally { setSaving(''); }
+    finally { setDeletingId(''); setSaving(''); }
   };
 
   return <>
@@ -6000,8 +6041,8 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
                           marksBox.current[student.id]?.focus();
                         }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
-                        <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-delete-marks-${student.id}`}>
-                          <Trash2 size={14} /> Delete
+                        <Button type="button" size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:text-destructive" onClick={() => cycle != null && setDeleteTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={saving === student.id || loading || deletingId === student.id} data-testid={`button-delete-marks-${student.id}`} title="Delete saved marks">
+                          <Trash2 size={14} />
                         </Button>
                       </>}
                     </span>
@@ -6015,6 +6056,23 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
 
     {error && <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-assessment-error">{error}</p>}
     {notice && <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-assessment-success">{notice}</p>}
+
+    <Dialog open={deleteTarget != null} onOpenChange={(open) => { if (!open && !deletingId) setDeleteTarget(null); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete saved marks?</DialogTitle>
+          <DialogDescription>
+            {deleteTarget ? `Delete saved marks/feedback for ${deleteTarget.label}, month ${month}, project ${project}? This cannot be undone.` : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} disabled={!!deletingId}>Cancel</Button>
+          <Button type="button" variant="destructive" autoFocus onClick={confirmDelete} disabled={!deleteTarget || !!deletingId} data-testid="button-confirm-delete-marks">
+            {deletingId ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </>;
 }
 
