@@ -87,6 +87,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { validateStudentEmail } from '@/lib/email-validation';
 import { LOGIN_THEMES, type LoginThemeKey } from './login-themes';
 import { supabase, verifyAdminPassword } from './lib/supabase';
@@ -2018,12 +2019,12 @@ function MarkCheckboxes({ row, mark, disabled, reason, onPick }: { row: Register
     </label>;
   };
   return <div className="flex flex-col items-end gap-1">
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center justify-end gap-1.5">
       {box('present', 'P', 'border-emerald-600 bg-emerald-500/15 text-emerald-700', 'accent-emerald-600')}
       {box('absent', 'A', 'border-destructive bg-destructive/10 text-destructive', 'accent-red-600')}
       {box('leave', 'L', 'border-amber-500 bg-amber-500/15 text-amber-700', 'accent-amber-500')}
     </div>
-    {disabled && <span className="whitespace-nowrap text-[10px] text-muted-foreground" data-testid={`reason-${row.id}`}>{reason}</span>}
+    {disabled && reason && <span className="text-right text-[10px] text-muted-foreground">{reason}</span>}
   </div>;
 }
 
@@ -2237,8 +2238,8 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark Attendance"
-      detail="Today's register, ready to fill. Tick P for present, A for absent or L for leave; anything left grey is not recorded either way. You can go back to any earlier day and change a row — attendance stays editable once saved."
-      action={<div className="flex flex-wrap items-center gap-2"><MonthlyStudentAttendancePanel moduleId={user.module ?? ''} moduleLabel={user.module ? (moduleNames[user.module] ?? user.module) : 'module'} students={all} /><Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || classCancellation != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button></div>}
+      detail=""
+      action={<div className="flex items-center justify-end gap-2"><Button type="button" onClick={save} disabled={saving || rows == null || sunday || event != null || classCancellation != null || markable === 0} data-testid="button-save-register">{saving ? 'Saving…' : <><Check size={15} /> Save attendance</>}</Button><MonthlyStudentAttendancePanel moduleId={user.module ?? ''} moduleLabel={user.module ? (moduleNames[user.module] ?? user.module) : 'module'} students={all} /></div>}
     />
 
     <section className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2267,66 +2268,64 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
     {/* An event replaces the register for the day. Saying it here is the whole point: the
         day then counts for nobody in any module, instead of showing up as an absence. */}
-    <section className={`mb-5 rounded-xl border p-4 ${event ? 'border-amber-400/60 bg-amber-50/60' : 'border-dashed border-border bg-card'}`} data-testid="panel-event">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <div className="mb-5 grid gap-3 lg:grid-cols-2">
+      <section className={`rounded-lg border p-3 ${event ? 'border-amber-400/60 bg-amber-50/60' : 'border-border bg-card'}`} data-testid="panel-event">
+        <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Event on this day</p>
-          {event
-            ? <p className="mt-1 font-display text-lg font-bold text-amber-800" data-testid="text-event-title">{event.title}</p>
-            : <p className="mt-1 text-sm text-muted-foreground">PTM, a holiday or an exam? Record it once here. All three modules get the day off and it is left out of every student&apos;s attendance percentage.</p>}
+          {event && <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={clearEvent} disabled={eventBusy} data-testid="button-clear-event">Remove</Button>}
         </div>
-        {event && <Button type="button" size="sm" variant="outline" onClick={clearEvent} disabled={eventBusy} data-testid="button-clear-event">Remove event</Button>}
-      </div>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <Input
-          className="sm:max-w-sm"
-          placeholder={event ? 'Change event title' : 'Enter event title'}
-          value={eventTitle}
-          onChange={(e) => setEventTitle(e.target.value)}
-          disabled={sunday || eventBusy}
-          data-testid="input-event-title"
-          aria-label="Event title"
-        />
-        <Button type="button" onClick={saveEvent} disabled={sunday || eventBusy || eventTitle.trim() === ''} data-testid="button-save-event">
-          {eventBusy ? 'Saving…' : event ? 'Update event' : 'Mark this day as an event'}
-        </Button>
-      </div>
-      {sunday && <p className="mt-2 text-xs text-muted-foreground">It is a Sunday, so there is nothing to mark off anyway.</p>}
-      {eventError && <p className="mt-2 text-xs text-destructive" data-testid="status-event-error">{eventError}</p>}
-    </section>
-
-    {event != null && rows != null && <p className="mb-5 rounded-xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 text-sm text-amber-900" data-testid="status-event-day">{longDate(date)} is marked as <strong>{event.title}</strong>. No attendance is being taken and the day is excluded from everyone&apos;s percentage. Remove the event above if that is wrong.</p>}
-
-    {event == null && <section className={`mb-5 rounded-xl border p-4 ${classCancellation ? 'border-amber-400/60 bg-amber-50/60' : 'border-dashed border-border bg-card'}`} data-testid="panel-class-cancellation">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">This module&apos;s class</p>
-          {classCancellation
-            ? <p className="mt-1 text-sm font-medium text-amber-900" data-testid="text-class-cancellation">Class not held: {classCancellation.reason}</p>
-            : <p className="mt-1 text-sm text-muted-foreground">If this module&apos;s class did not happen, write why. No attendance will be taken for this module on this date.</p>}
+        {event && <p className="mt-1 text-sm font-semibold text-amber-800" data-testid="text-event-title">{event.title}</p>}
+        <div className="mt-2 flex gap-2">
+          <Input
+            className="h-9"
+            placeholder={event ? 'Change event title' : 'Enter event title'}
+            value={eventTitle}
+            onChange={(e) => setEventTitle(e.target.value)}
+            disabled={sunday || eventBusy}
+            data-testid="input-event-title"
+            aria-label="Event title"
+          />
+          <Button type="button" size="sm" className="shrink-0" onClick={saveEvent} disabled={sunday || eventBusy || eventTitle.trim() === ''} data-testid="button-save-event">
+            {eventBusy ? 'Saving…' : event ? 'Update' : 'Mark event'}
+          </Button>
         </div>
-        {classCancellation && <Button type="button" size="sm" variant="outline" onClick={clearClassCancellation} disabled={cancellationBusy} data-testid="button-clear-class-cancellation">Remove</Button>}
-      </div>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <Input
-          className="sm:max-w-xl"
-          placeholder="Enter why the class was not held"
-          value={cancellationReason}
-          onChange={(e) => setCancellationReason(e.target.value)}
-          maxLength={1000}
-          disabled={sunday || event != null || cancellationBusy}
-          data-testid="input-class-cancellation-reason"
-          aria-label="Reason this module's class was not held"
-        />
-        <Button type="button" onClick={saveClassCancellation} disabled={sunday || event != null || cancellationBusy || !cancellationReason.trim()} data-testid="button-save-class-cancellation">
-          {cancellationBusy ? 'Saving…' : classCancellation ? 'Update reason' : 'Class not held'}
-        </Button>
-      </div>
-      {sunday && <p className="mt-2 text-xs text-muted-foreground">Sunday is already a day off.</p>}
-      {cancellationError && <p className="mt-2 text-xs text-destructive" data-testid="status-class-cancellation-error">{cancellationError}</p>}
-    </section>}
+        {eventError && <p className="mt-1.5 text-xs text-destructive" data-testid="status-event-error">{eventError}</p>}
+      </section>
 
-    {classCancellation && event == null && rows != null && <p className="mb-5 rounded-xl border border-amber-400/60 bg-amber-50/60 px-4 py-3 text-sm text-amber-900" data-testid="status-class-cancelled-day">{longDate(date)}: this module&apos;s class was not held because <strong>{classCancellation.reason}</strong>. No attendance is counted for this module today.</p>}
+      {event == null ? (
+        <section className={`rounded-lg border p-3 ${classCancellation ? 'border-amber-400/60 bg-amber-50/60' : 'border-border bg-card'}`} data-testid="panel-class-cancellation">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">This module&apos;s class</p>
+            {classCancellation && <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={clearClassCancellation} disabled={cancellationBusy} data-testid="button-clear-class-cancellation">Remove</Button>}
+          </div>
+          {classCancellation && <p className="mt-1 text-sm font-medium text-amber-900" data-testid="text-class-cancellation">Class not held: {classCancellation.reason}</p>}
+          <div className="mt-2 flex gap-2">
+            <Input
+              className="h-9"
+              placeholder="Enter why the class was not held"
+              value={cancellationReason}
+              onChange={(e) => setCancellationReason(e.target.value)}
+              maxLength={1000}
+              disabled={sunday || cancellationBusy}
+              data-testid="input-class-cancellation-reason"
+              aria-label="Reason this module's class was not held"
+            />
+            <Button type="button" size="sm" className="shrink-0" onClick={saveClassCancellation} disabled={sunday || cancellationBusy || !cancellationReason.trim()} data-testid="button-save-class-cancellation">
+              {cancellationBusy ? 'Saving…' : classCancellation ? 'Update' : 'Class not held'}
+            </Button>
+          </div>
+          {cancellationError && <p className="mt-1.5 text-xs text-destructive" data-testid="status-class-cancellation-error">{cancellationError}</p>}
+        </section>
+      ) : (
+        <section className="rounded-lg border border-amber-400/60 bg-amber-50/60 p-3" data-testid="status-event-day">
+          <p className="text-xs font-semibold uppercase tracking-wider text-amber-800">Event active</p>
+          <p className="mt-1 text-sm text-amber-900"><strong>{event.title}</strong> — attendance not taken for any module.</p>
+        </section>
+      )}
+    </div>
+
+    {classCancellation && event == null && rows != null && <p className="mb-5 rounded-lg border border-amber-400/60 bg-amber-50/60 px-3 py-2 text-sm text-amber-900" data-testid="status-class-cancelled-day">Class not held: <strong>{classCancellation.reason}</strong>. No attendance counted for this module today.</p>}
+
 
     {!sunday && event == null && rows != null && all.length > 0 && eligible.length === 0 && <p className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="status-none-eligible">
       Nobody can be marked on {longDate(date)} — every student&apos;s joining date is later than this, so their course has not started yet. Each row below shows the date it opens from.
@@ -2379,14 +2378,14 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
                   <td className="py-2.5 pr-2 text-muted-foreground">{row.fathersName}</td>
                   <td className="py-2.5 text-right">
                     {row.markedToday ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-end gap-2">
                         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${marks[row.id] === 'present' ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700' : marks[row.id] === 'absent' ? 'border-destructive bg-destructive/10 text-destructive' : 'border-amber-500 bg-amber-500/15 text-amber-700'}`}>
                           {marks[row.id] === 'present' ? 'P' : marks[row.id] === 'absent' ? 'A' : 'L'}
                         </span>
                         <span className="text-[10px] text-muted-foreground">saved</span>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-end gap-2">
                         <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible || savingOne[row.id]} reason={reason} onPick={(next) => setMarks((v) => {
                           if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
                           return { ...v, [row.id]: next };
@@ -2432,6 +2431,7 @@ function MonthlyStudentAttendancePanel({
   const [draft, setDraft] = useState<Record<string, 'present' | 'absent' | 'leave'>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [overwriteLocked, setOverwriteLocked] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -2446,13 +2446,12 @@ function MonthlyStudentAttendancePanel({
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = q
-      ? students.filter((s) =>
-          s.id.toLowerCase().includes(q) ||
-          s.fullName.toLowerCase().includes(q) ||
-          (s.fathersName ?? '').toLowerCase().includes(q))
-      : students;
-    return list.slice(0, 15);
+    if (!q) return [];
+    return students.filter((s) =>
+      s.id.toLowerCase().includes(q) ||
+      s.fullName.toLowerCase().includes(q) ||
+      (s.fathersName ?? '').toLowerCase().includes(q)
+    ).slice(0, 12);
   }, [query, students]);
 
   const selected = students.find((s) => s.id === selectedId) ?? null;
@@ -2504,7 +2503,7 @@ function MonthlyStudentAttendancePanel({
   };
 
   const setMark = (date: string, mark: 'present' | 'absent' | 'leave') => {
-    if (isBlocked(date) || isLocked(date)) return;
+    if (isBlocked(date) || (isLocked(date) && !overwriteLocked)) return;
     setDraft((d) => ({ ...d, [date]: mark }));
   };
 
@@ -2513,12 +2512,12 @@ function MonthlyStudentAttendancePanel({
     setDraft((d) => {
       const next = { ...d };
       for (const date of Object.keys(mod.dates)) {
-        if (isBlocked(date) || isLocked(date)) continue;
+        if (isBlocked(date) || (isLocked(date) && !overwriteLocked)) continue;
         next[date] = mark;
       }
       return next;
     });
-    setNotice(`Filled unlocked teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'}. Review the calendar, then click Save Month.`);
+    setNotice(`Filled ${overwriteLocked ? 'unlocked/event-safe' : 'unlocked'} teaching days as ${mark === 'present' ? 'Present' : mark === 'absent' ? 'Absent' : 'Leave'}. Review the calendar, then click Save Month.`);
   };
 
   const saveMonth = async () => {
@@ -2531,7 +2530,7 @@ function MonthlyStudentAttendancePanel({
       const res = await fetch('/api/teacher/attendance/student-month-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: selectedId, records }),
+        body: JSON.stringify({ studentId: selectedId, records, unlockLocked: overwriteLocked }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(json?.error ?? 'Could not save monthly attendance.'); return; }
@@ -2565,7 +2564,7 @@ function MonthlyStudentAttendancePanel({
 
   const markBtn = (date: string, mark: 'present' | 'absent' | 'leave', label: string) => {
     const active = (draft[date] ?? 'absent') === mark;
-    const disabled = isBlocked(date) || isLocked(date);
+    const disabled = isBlocked(date) || (isLocked(date) && !overwriteLocked);
     const activeStyle = mark === 'present'
       ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700'
       : mark === 'absent'
@@ -2577,7 +2576,7 @@ function MonthlyStudentAttendancePanel({
         type="button"
         disabled={disabled}
         onClick={() => setMark(date, mark)}
-        className={`h-7 w-7 rounded border text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeStyle : 'border-border bg-card text-muted-foreground hover:bg-muted'}`}
+        className={`h-6 w-6 rounded border text-[10px] font-bold disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeStyle : 'border-border bg-card text-muted-foreground hover:bg-muted'}`}
         title={mark}
       >{label}</button>
     );
@@ -2590,10 +2589,10 @@ function MonthlyStudentAttendancePanel({
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setError(''); setNotice(''); } }}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Mark Monthly Attendance</DialogTitle>
-            <DialogDescription>Search one student, select a month, and mark P/A/L for teaching days in {moduleLabel}. Institute events, module class-not-held days, and locked days are handled like daily attendance.</DialogDescription>
+            <DialogDescription />
           </DialogHeader>
 
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto_auto] md:items-end">
@@ -2609,42 +2608,47 @@ function MonthlyStudentAttendancePanel({
             <Button type="button" onClick={saveMonth} disabled={!selectedId || !mod || saving} data-testid="button-save-monthly-attendance"><Check size={14} /> {saving ? 'Saving…' : 'Save Month'}</Button>
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/20 p-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Student list {query.trim() ? '(filtered)' : '(recent)'}</p>
-            {matches.length === 0 ? <p className="text-sm text-muted-foreground">No matching student.</p> : (
-              <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-                {matches.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => { setSelectedId(s.id); setData(null); setDraft({}); setNotice(''); setError(''); }}
-                    className={`rounded-full border px-3 py-1.5 text-xs ${selectedId === s.id ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-card hover:bg-muted'}`}
-                    data-testid={`monthly-student-${s.id}`}
-                  >
-                    <span className="font-semibold">{s.fullName}</span> <span className="text-muted-foreground">({s.id})</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {query.trim() && (
+            <div className="rounded-lg border border-border bg-muted/20 p-2">
+              {matches.length === 0 ? <p className="text-sm text-muted-foreground">No matching student.</p> : (
+                <div className="flex max-h-24 flex-wrap gap-2 overflow-y-auto">
+                  {matches.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => { setSelectedId(s.id); setData(null); setDraft({}); setNotice(''); setError(''); setQuery(''); }}
+                      className={`rounded-full border px-2.5 py-1 text-xs ${selectedId === s.id ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-card hover:bg-muted'}`}
+                      data-testid={`monthly-student-${s.id}`}
+                    >
+                      <span className="font-semibold">{s.fullName}</span> <span className="text-muted-foreground">({s.id})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {selected && <p className="text-sm">Selected: <strong>{selected.fullName}</strong> ({selected.id}) · {moduleLabel}</p>}
 
           {data && mod && (
             <>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold">Fill unlocked days:</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('present')}>All P</Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('absent')}>All A</Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => fillAll('leave')}>All L</Button>
-                <span className="text-xs text-muted-foreground">Events, class-not-held, and locked days are skipped.</span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">Fill days:</span>
+                  <Button type="button" size="sm" variant="outline" onClick={() => fillAll('present')}>All P</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => fillAll('absent')}>All A</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => fillAll('leave')}>All L</Button>
+                </div>
+                <Button type="button" size="sm" variant={overwriteLocked ? 'default' : 'outline'} onClick={() => setOverwriteLocked((v) => !v)} data-testid="button-monthly-unlock">
+                  {overwriteLocked ? 'Unlock: On' : 'Unlock'}
+                </Button>
               </div>
 
               <div className="overflow-x-auto rounded-lg border border-border">
-                <div className="grid min-w-[720px] grid-cols-7 border-b border-border bg-muted/30 text-center text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="px-2 py-2">{d}</div>)}
+                <div className="grid min-w-[560px] grid-cols-7 border-b border-border bg-muted/30 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="px-1 py-1.5">{d}</div>)}
                 </div>
-                <div className="grid min-w-[720px] grid-cols-7">
+                <div className="grid min-w-[560px] grid-cols-7">
                   {calendarCells.map((cell, idx) => {
                     if (!cell.date || !cell.dayNum) return <div key={idx} className="min-h-[96px] border-b border-r border-border/50 bg-muted/10 p-2" />;
                     const date = cell.date;
@@ -2654,10 +2658,10 @@ function MonthlyStudentAttendancePanel({
                     const locked = isLocked(date);
                     const mark = draft[date] ?? 'absent';
                     return (
-                      <div key={date} className={`min-h-[96px] border-b border-r border-border/50 p-2 ${!teachable ? 'bg-muted/10' : eventDay ? 'bg-amber-50/70' : cancelledReason ? 'bg-slate-100/80' : ''}`}>
-                        <div className="mb-1 flex items-center justify-between gap-1">
-                          <span className="text-xs font-semibold">{cell.dayNum}</span>
-                          {locked && teachable && !isBlocked(date) && <span className="text-[9px] text-muted-foreground">locked</span>}
+                      <div key={date} className={`min-h-[72px] border-b border-r border-border/50 p-1.5 ${!teachable ? 'bg-muted/10' : eventDay ? 'bg-amber-50/70' : cancelledReason ? 'bg-slate-100/80' : ''}`}>
+                        <div className="mb-0.5 flex items-center justify-between gap-1">
+                          <span className="text-[11px] font-semibold">{cell.dayNum}</span>
+                          {locked && teachable && !isBlocked(date) && <span className="text-[9px] text-muted-foreground">{overwriteLocked ? 'unlock' : 'locked'}</span>}
                         </div>
                         {!teachable ? <span className="text-[10px] text-muted-foreground/60">—</span>
                           : eventDay ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Event</span>
@@ -2670,7 +2674,9 @@ function MonthlyStudentAttendancePanel({
                             </div>
                           )}
                         {teachable && !eventDay && !cancelledReason && (
-                          <div className="mt-1 text-[10px] text-muted-foreground">{locked ? (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent') : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')}</div>
+                          <div className="mt-1 text-[10px] text-muted-foreground">
+                            {locked ? (overwriteLocked ? 'Locked (can overwrite)' : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')) : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')}
+                          </div>
                         )}
                       </div>
                     );
@@ -2873,8 +2879,8 @@ function TeacherStudentListPage({ user }: { user: CurrentUser }) {
 }
 
 type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null; projectLink: string | null };
-type ReportModule = { module: Module; present: number; absent: number; total: number; percentage: number; recorded: boolean; cancelledClasses?: { date: string; reason: string }[]; projects: ProjectMark[] };
-type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; total: number; percentage: number; recorded: boolean; events?: { date: string; title: string }[]; modules: ReportModule[] };
+type ReportModule = { module: Module; present: number; absent: number; leave?: number; total: number; percentage: number; recorded: boolean; presentDates?: string[]; absentDates?: string[]; leaveDates?: string[]; cancelledClasses?: { date: string; reason: string }[]; projects: ProjectMark[] };
+type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; leave?: number; total: number; percentage: number; recorded: boolean; presentDates?: string[]; absentDates?: string[]; leaveDates?: string[]; events?: { date: string; title: string }[]; modules: ReportModule[] };
 type StudentReport = {
   joinedOn: string | null;
   courseStart: string | null;
@@ -2961,10 +2967,46 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
   const scoped = moduleFilter ? shownModules[0] : null;
   const present = scoped ? scoped.present : selected.present;
   const absent = scoped ? scoped.absent : selected.absent;
+  const leave = scoped ? (scoped.leave ?? 0) : (selected.leave ?? 0);
   const total = scoped ? scoped.total : selected.total;
   const percentage = scoped ? scoped.percentage : selected.percentage;
+  const presentDates = scoped ? (scoped.presentDates ?? []) : (selected.presentDates ?? []);
+  const absentDates = scoped ? (scoped.absentDates ?? []) : (selected.absentDates ?? []);
+  const leaveDates = scoped ? (scoped.leaveDates ?? []) : (selected.leaveDates ?? []);
   const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
   const eventCount = selected.events?.length ?? 0;
+
+  const DateCount = ({ label, value, dates, tone, testId }: { label: string; value: number; dates: string[]; tone: string; testId: string }) => (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className="rounded-lg border border-border p-4 text-left transition hover:bg-muted/40" data-testid={testId}>
+          <p className="text-xs font-medium text-muted-foreground">{label} <span className="ml-1 text-[10px]">(dates)</span></p>
+          <p className={`mt-1 font-display text-3xl font-bold ${tone}`}>{value}</p>
+          <p className="text-xs text-muted-foreground">of {total} days</p>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="start">
+        <p className="mb-2 text-xs font-semibold">{label} dates ({dates.length})</p>
+        {dates.length === 0 ? <p className="text-xs text-muted-foreground">No dates.</p> : (
+          <div className="max-h-48 overflow-y-auto text-xs"><div className="flex flex-wrap gap-1.5">{dates.map((d) => <span key={d} className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono-ui">{d}</span>)}</div></div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+
+  const InlineDates = ({ label, value, dates, tone }: { label: string; value: number; dates: string[]; tone?: string }) => (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className={`underline decoration-dotted underline-offset-2 hover:text-foreground ${tone ?? ''}`}>{value} {label}</button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="end">
+        <p className="mb-2 text-xs font-semibold">{label} dates ({dates.length})</p>
+        {dates.length === 0 ? <p className="text-xs text-muted-foreground">No dates.</p> : (
+          <div className="max-h-48 overflow-y-auto text-xs"><div className="flex flex-wrap gap-1.5">{dates.map((d) => <span key={d} className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono-ui">{d}</span>)}</div></div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 
   return <>
     <section className={`rounded-xl border border-border bg-card ${compact ? 'p-4' : 'p-5'}`}>
@@ -2981,21 +3023,15 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         </label>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-accent/40 bg-accent/15 p-4" data-testid="tile-month-percentage">
           <p className="text-xs font-medium text-muted-foreground">This month</p>
           <p className={`mt-1 font-display text-3xl font-bold ${percentTone(percentage)}`}>{percentage}%</p>
-        </div>
-        <div className="rounded-lg border border-border p-4" data-testid="tile-month-present">
-          <p className="text-xs font-medium text-muted-foreground">Present</p>
-          <p className="mt-1 font-display text-3xl font-bold text-primary">{present}</p>
           <p className="text-xs text-muted-foreground">of {total} days</p>
         </div>
-        <div className="rounded-lg border border-border p-4" data-testid="tile-month-absent">
-          <p className="text-xs font-medium text-muted-foreground">Absent</p>
-          <p className="mt-1 font-display text-3xl font-bold text-destructive">{absent}</p>
-          <p className="text-xs text-muted-foreground">of {total} days</p>
-        </div>
+        <DateCount label="Present" value={present} dates={presentDates} tone="text-primary" testId="tile-month-present" />
+        <DateCount label="Absent" value={absent} dates={absentDates} tone="text-destructive" testId="tile-month-absent" />
+        <DateCount label="Leave" value={leave} dates={leaveDates} tone="text-amber-600" testId="tile-month-leave" />
       </div>
 
       <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.min(100, percentage)}%` }} /></div>
@@ -3003,9 +3039,12 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
       <div className="mt-4 grid gap-2">
         {shownModules.map((item) => <div key={item.module} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2.5 text-sm" data-testid={`row-month-module-${item.module}`}>
           <span className="font-semibold">{moduleNames[item.module]}</span>
-          <span className="text-xs text-muted-foreground">{item.present} present · {item.absent} absent · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span></span>
+          <span className="text-xs text-muted-foreground">
+            <InlineDates label="present" value={item.present} dates={item.presentDates ?? []} /> · <InlineDates label="absent" value={item.absent} dates={item.absentDates ?? []} tone="text-destructive" /> · <InlineDates label="leave" value={item.leave ?? 0} dates={item.leaveDates ?? []} tone="text-amber-700" /> · <span className={`font-semibold ${percentTone(item.percentage)}`}>{item.percentage}%</span>
+          </span>
         </div>)}
       </div>
+
       <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{total}</strong> teaching days{range ? ` (${range})` : ''}{scopeLabel ? ` for ${scopeLabel}` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month of enrolment, so the first covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
       {/* Name each event day, so a shorter denominator is never a mystery. */}
       {eventCount > 0 && <ul className="mt-2 flex flex-wrap gap-2" data-testid="list-month-events">

@@ -1298,12 +1298,13 @@ function courseMonths(joinedOn: string | null, events: ReadonlyMap<string, strin
 
 // Attendance is stored as week-number + mon..sat flags, week 1 being the week the
 // student joined. Turn each marked flag back into the real date it stands for.
-function presentDatesByModule(
+function attendanceDatesByModule(
   joinedOn: string | null,
   rows: (typeof attendanceTable.$inferSelect)[],
-): Map<string, Set<string>> {
-  const byDate = new Map<string, Set<string>>();
-  if (!joinedOn) return byDate;
+): { present: Map<string, Set<string>>; leave: Map<string, Set<string>> } {
+  const present = new Map<string, Set<string>>();
+  const leave = new Map<string, Set<string>>();
+  if (!joinedOn) return { present, leave };
   const anchor = mondayOf(new Date(`${joinedOn}T00:00:00Z`));
   for (const row of rows) {
     DAY_FLAG_ORDER.forEach((key, offset) => {
@@ -1311,11 +1312,13 @@ function presentDatesByModule(
       const date = new Date(anchor);
       date.setUTCDate(date.getUTCDate() + (row.week - 1) * 7 + offset);
       const day = isoDay(date);
-      if (!byDate.has(day)) byDate.set(day, new Set());
-      byDate.get(day)!.add(row.module);
+      const onLeave = ((row.leaveDays ?? 0) & dayBit(key)) !== 0;
+      const target = onLeave ? leave : present;
+      if (!target.has(day)) target.set(day, new Set());
+      target.get(day)!.add(row.module);
     });
   }
-  return byDate;
+  return { present, leave };
 }
 
 // Institute-wide non-teaching days as plain YYYY-MM-DD strings, so they can be compared
@@ -1377,7 +1380,7 @@ async function buildStudentReport(studentId: string) {
   const joinedOn = student?.dateOfJoining ?? null;
   const events = await eventDates();
   const slices = courseMonths(joinedOn, events);
-  const presentOn = presentDatesByModule(joinedOn, attendanceRows);
+  const { present: presentOn, leave: leaveOn } = attendanceDatesByModule(joinedOn, attendanceRows);
   const moduleKeys = await studentModuleKeys(studentId);
   const cancellations = await classCancellationsFor(moduleKeys);
 
@@ -1385,14 +1388,23 @@ async function buildStudentReport(studentId: string) {
     const perModule = moduleKeys.map((module) => {
       const moduleCancellations = cancellations.get(module) ?? new Map<string, string>();
       const moduleDays = slice.days.filter((day) => !moduleCancellations.has(day));
-      const present = moduleDays.filter((day) => presentOn.get(day)?.has(module)).length;
+      const presentDates = moduleDays.filter((day) => presentOn.get(day)?.has(module));
+      const leaveDates = moduleDays.filter((day) => leaveOn.get(day)?.has(module));
+      const absentDates = moduleDays.filter((day) => !presentOn.get(day)?.has(module) && !leaveOn.get(day)?.has(module));
+      const present = presentDates.length;
+      const leave = leaveDates.length;
+      const absent = absentDates.length;
       return {
         module,
         present,
-        absent: Math.max(0, moduleDays.length - present),
+        absent,
+        leave,
         total: moduleDays.length,
         percentage: moduleDays.length ? Math.round((present / moduleDays.length) * 100) : 0,
-        recorded: present > 0,
+        recorded: present + leave + absent > 0,
+        presentDates,
+        absentDates,
+        leaveDates,
         cancelledClasses: slice.days
           .filter((day) => moduleCancellations.has(day))
           .map((day) => ({ date: day, reason: moduleCancellations.get(day)! })),
@@ -1419,14 +1431,24 @@ async function buildStudentReport(studentId: string) {
       !(moduleKeys.length > 0 && moduleKeys.every((module) => cancellations.get(module)?.has(day))),
     );
     // A day counts as attended when the student turned up for any module that day.
-    const present = overallDays.filter((day) => (presentOn.get(day)?.size ?? 0) > 0).length;
+    // Leave is kept separate for display; days with neither present nor leave are absent.
+    const presentDatesOverall = overallDays.filter((day) => (presentOn.get(day)?.size ?? 0) > 0);
+    const leaveDatesOverall = overallDays.filter((day) => (presentOn.get(day)?.size ?? 0) === 0 && (leaveOn.get(day)?.size ?? 0) > 0);
+    const absentDatesOverall = overallDays.filter((day) => (presentOn.get(day)?.size ?? 0) === 0 && (leaveOn.get(day)?.size ?? 0) === 0);
+    const present = presentDatesOverall.length;
+    const leave = leaveDatesOverall.length;
+    const absent = absentDatesOverall.length;
     return {
       month: slice.month,
       start: slice.start,
       end: slice.end,
       present,
-      absent: Math.max(0, overallDays.length - present),
+      absent,
+      leave,
       total: overallDays.length,
+      presentDates: presentDatesOverall,
+      absentDates: absentDatesOverall,
+      leaveDates: leaveDatesOverall,
       // The event days inside this slice, with what each one was, so the UI can say why the
       // denominator is short instead of leaving a student wondering where days went. Counted
       // from start/end rather than from slice.days, because an event on a Sunday is a no-op
@@ -2032,7 +2054,7 @@ router.get(
       );
       if (!slice) continue; // not enrolled during this calendar month
       possibleDays += slice.days.length;
-      const presentOn = presentDatesByModule(
+      const { present: presentOn } = attendanceDatesByModule(
         student.dateOfJoining,
         byStudent.get(student.id) ?? [],
       );
@@ -3120,6 +3142,7 @@ router.post(
     const body = (req.body ?? {}) as {
       studentId?: string;
       records?: Array<{ date: string; mark: "present" | "absent" | "leave" }>;
+      unlockLocked?: boolean;
     };
     if (!body.studentId || !Array.isArray(body.records) || body.records.length === 0) {
       res.status(400).json({ error: "studentId and records required." });
@@ -3138,6 +3161,8 @@ router.post(
 
     const saved: string[] = [];
     const skipped: string[] = [];
+    const unlockLocked = body.unlockLocked === true;
+    const weekState = new Map<number, { flags: Record<(typeof DAY_FLAG_ORDER)[number], boolean>; leaveDays: number; lockedDays: number }>();
 
     for (const rec of body.records) {
       const date = parseDayParam(rec.date);
@@ -3147,34 +3172,40 @@ router.post(
       const slot = weekAndDayFor(student[0].dateOfJoining, date);
       if (!slot) { skipped.push(rec.date); continue; }
 
-      const row = await db
-        .select()
-        .from(attendanceTable)
-        .where(
-          and(
-            eq(attendanceTable.studentId, body.studentId),
-            eq(attendanceTable.module, req.auth.module),
-            eq(attendanceTable.week, slot.week),
-          ),
-        )
-        .limit(1);
+      let state = weekState.get(slot.week);
+      if (!state) {
+        const row = await db
+          .select()
+          .from(attendanceTable)
+          .where(
+            and(
+              eq(attendanceTable.studentId, body.studentId),
+              eq(attendanceTable.module, req.auth.module),
+              eq(attendanceTable.week, slot.week),
+            ),
+          )
+          .limit(1);
+        state = {
+          flags: Object.fromEntries(
+            DAY_FLAG_ORDER.map((key) => [key, row.length > 0 ? Boolean(row[0][key]) : false]),
+          ) as Record<(typeof DAY_FLAG_ORDER)[number], boolean>,
+          leaveDays: row.length > 0 ? (row[0].leaveDays ?? 0) : 0,
+          lockedDays: row.length > 0 ? (row[0].lockedDays ?? 0) : 0,
+        };
+      }
 
-      if (row.length > 0 && isLocked(row[0].lockedDays ?? 0, slot.day)) {
+      if (!unlockLocked && isLocked(state.lockedDays, slot.day)) {
         skipped.push(rec.date);
         continue;
       }
 
       const isPresent = rec.mark === "present" || rec.mark === "leave";
-      const flags = Object.fromEntries(
-        DAY_FLAG_ORDER.map((key) => [key, false]),
-      ) as Record<(typeof DAY_FLAG_ORDER)[number], boolean>;
-      flags[slot.day] = isPresent;
-
-      const leaveDays = rec.mark === "leave"
-        ? (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) | dayBit(slot.day)
-        : (row.length > 0 ? (row[0].leaveDays ?? 0) : 0) & ~dayBit(slot.day);
-
-      const lockedDays = (row.length > 0 ? (row[0].lockedDays ?? 0) : 0) | dayBit(slot.day);
+      state.flags[slot.day] = isPresent;
+      state.leaveDays = rec.mark === "leave"
+        ? state.leaveDays | dayBit(slot.day)
+        : state.leaveDays & ~dayBit(slot.day);
+      state.lockedDays = state.lockedDays | dayBit(slot.day);
+      weekState.set(slot.week, state);
 
       await db
         .insert(attendanceTable)
@@ -3183,9 +3214,9 @@ router.post(
           module: req.auth.module,
           week: slot.week,
           status: "present",
-          ...flags,
-          leaveDays,
-          lockedDays,
+          ...state.flags,
+          leaveDays: state.leaveDays,
+          lockedDays: state.lockedDays,
           recordedBy: Number(req.auth.userId),
         })
         .onConflictDoUpdate({
@@ -3196,9 +3227,9 @@ router.post(
           ],
           set: {
             status: "present",
-            ...flags,
-            leaveDays,
-            lockedDays,
+            ...state.flags,
+            leaveDays: state.leaveDays,
+            lockedDays: state.lockedDays,
             recordedBy: Number(req.auth.userId),
             recordedAt: new Date(),
           },
@@ -5836,7 +5867,7 @@ router.get(
       if (!slice) continue;
       possibleDays += slice.days.length;
 
-      const presentOn = presentDatesByModule(
+      const { present: presentOn } = attendanceDatesByModule(
         student.dateOfJoining,
         byStudent.get(student.id) ?? [],
       );
