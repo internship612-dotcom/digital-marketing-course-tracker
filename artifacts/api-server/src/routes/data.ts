@@ -2550,6 +2550,10 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
     absent: 0,
     leave: 0,
     unmarked: 0,
+    presentNames: [] as Array<{ id: string; fullName: string }>,
+    absentNames: [] as Array<{ id: string; fullName: string }>,
+    leaveNames: [] as Array<{ id: string; fullName: string }>,
+    unmarkedNames: [] as Array<{ id: string; fullName: string }>,
     assessmentMarked: 0,
     assessmentPending: 0,
   };
@@ -2564,12 +2568,12 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
       const markedPresent = row ? Boolean(row[slot.day]) : false;
       // Leave records the day flag as present too, so it needs its own bucket here or it
       // would be counted as present and nobody would see it.
-      if (onLeave) result.leave += 1;
-      else if (markedPresent) result.present += 1;
+      if (onLeave) { result.leave += 1; result.leaveNames.push({ id: student.id, fullName: student.fullName }); }
+      else if (markedPresent) { result.present += 1; result.presentNames.push({ id: student.id, fullName: student.fullName }); }
       // A recorded absent and a day nobody touched both leave the day flag false; the
       // locked bit is the only thing that tells them apart.
-      else if (row && isLocked(row.lockedDays, slot.day)) result.absent += 1;
-      else result.unmarked += 1;
+      else if (row && isLocked(row.lockedDays, slot.day)) { result.absent += 1; result.absentNames.push({ id: student.id, fullName: student.fullName }); }
+      else { result.unmarked += 1; result.unmarkedNames.push({ id: student.id, fullName: student.fullName }); }
     }
 
     // Marks count the projects that have fallen due by this date. Only for students inside

@@ -1718,6 +1718,7 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
 
 // One day of one module, counted four ways. Shared by the module desk and the admin
 // module page so the two desks can never read different numbers for the same day.
+type DayStatusName = { id: string; fullName: string };
 type DayStatus = {
   date: string;
   sunday: boolean;
@@ -1729,6 +1730,10 @@ type DayStatus = {
   absent: number;
   leave: number;
   unmarked: number;
+  presentNames?: DayStatusName[];
+  absentNames?: DayStatusName[];
+  leaveNames?: DayStatusName[];
+  unmarkedNames?: DayStatusName[];
   assessmentMarked: number;
   assessmentPending: number;
 };
@@ -1766,10 +1771,10 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
   }, [moduleKey, scope, date, reloadToken, branchId]);
 
   const tiles = status == null ? [] : [
-    { key: 'present', label: 'Present', value: status.present, tone: 'text-emerald-600' },
-    { key: 'absent', label: 'Absent', value: status.absent, tone: 'text-destructive' },
-    { key: 'leave', label: 'On leave', value: status.leave, tone: 'text-amber-600' },
-    { key: 'unmarked', label: 'Not marked', value: status.unmarked, tone: 'text-muted-foreground' },
+    { key: 'present', label: 'Present', value: status.present, tone: 'text-emerald-600', names: status.presentNames ?? [] },
+    { key: 'absent', label: 'Absent', value: status.absent, tone: 'text-destructive', names: status.absentNames ?? [] },
+    { key: 'leave', label: 'On leave', value: status.leave, tone: 'text-amber-600', names: status.leaveNames ?? [] },
+    { key: 'unmarked', label: 'Not marked', value: status.unmarked, tone: 'text-muted-foreground', names: status.unmarkedNames ?? [] },
   ];
 
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
@@ -1809,22 +1814,32 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
           </div>
           : <div className="mt-4">
             <p className="font-display text-4xl font-bold">{status.present}<span className="text-2xl text-muted-foreground"> / {status.eligible}</span></p>
-            <p className="mt-1 text-xs text-muted-foreground">present on this day out of {status.eligible} student{status.eligible === 1 ? '' : 's'} whose course is running</p>
           </div>}
       </div>
 
       {/* Wide: the four buckets sit beside the headline, vertically centred against it
           rather than hanging off the top. */}
       {status != null && status.event == null && status.classCancellation == null && !status.sunday && <div className={wide ? 'grid flex-1 grid-cols-2 gap-2 self-center sm:grid-cols-4 lg:max-w-2xl' : 'mt-4 grid grid-cols-4 gap-2'}>
-        {tiles.map((tile) => <div key={tile.key} className="rounded-lg bg-muted/60 px-2 py-3 text-center" data-testid={`${testId}-${tile.key}`}>
-          <p className={`font-display text-2xl font-bold ${tile.tone}`}>{tile.value}</p>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
-        </div>)}
+        {tiles.map((tile) => <Popover key={tile.key}>
+          <PopoverTrigger asChild>
+            <button type="button" className="rounded-lg bg-muted/60 px-2 py-3 text-center transition hover:bg-muted" data-testid={`${testId}-${tile.key}`}>
+              <p className={`font-display text-2xl font-bold ${tile.tone}`}>{tile.value}</p>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 p-3" align="start">
+            <p className="mb-2 text-xs font-semibold">{tile.label} ({tile.names.length})</p>
+            {tile.names.length === 0 ? <p className="text-xs text-muted-foreground">No students.</p> : (
+              <div className="max-h-56 overflow-y-auto text-xs">
+                <ul className="grid gap-1.5">
+                  {tile.names.map((s) => <li key={s.id} className="rounded border border-border bg-muted/30 px-2 py-1"><span className="font-medium">{s.fullName}</span> <span className="text-muted-foreground">({s.id})</span></li>)}
+                </ul>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>)}
       </div>}
     </div>
-    {status != null && status.event == null && status.classCancellation == null && !status.sunday && <p className="mt-4 text-xs text-muted-foreground lg:mt-3">
-      {status.totalStudents} on the roster{status.eligible < status.totalStudents ? `, ${status.totalStudents - status.eligible} not in a course on this day` : ''}. {status.unmarked > 0 ? `${status.unmarked} still to mark.` : 'Everyone has been marked.'}
-    </p>}
   </div>;
 }
 
