@@ -220,6 +220,43 @@ async function ensureProjectSubmissionsTable(): Promise<void> {
   }
 }
 
+// Class tests are one-off exams: the teacher picks a real date, gives the test a title,
+// and uploads marks against every student for that test. Unlike the twelve project
+// cycles there is no month/project split — the date IS the identifier, so re-saving a
+// test replaces it rather than stacking up. Both tables are idempotent at boot.
+async function ensureClassTestsTables(): Promise<void> {
+  try {
+    await db.execute(
+      sql.raw(`
+        CREATE TABLE IF NOT EXISTS class_tests (
+          id serial PRIMARY KEY,
+          module text NOT NULL,
+          date date NOT NULL,
+          title text NOT NULL,
+          created_by integer REFERENCES teachers(id) ON DELETE SET NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (module, date)
+        )
+      `),
+    );
+    await db.execute(
+      sql.raw(`
+        CREATE TABLE IF NOT EXISTS class_test_marks (
+          test_id integer NOT NULL REFERENCES class_tests(id) ON DELETE CASCADE,
+          student_id text NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          marks integer,
+          feedback text,
+          entered_at timestamptz,
+          entered_by integer REFERENCES teachers(id) ON DELETE SET NULL,
+          PRIMARY KEY (test_id, student_id)
+        )
+      `),
+    );
+  } catch (err) {
+    logger.warn({ err }, "Could not ensure class_tests tables");
+  }
+}
+
 // Shareable login codes. Every branch and module gets a unique `login_code`; the login
 // pages open ONLY at /<code> (never at the branch/module name). Two halves, both
 // idempotent and both run at boot because the hosted DB is not migrated by hand:
@@ -348,6 +385,7 @@ ensureCalendarEventsTable()
   .then(ensureAttendanceLeaveColumn)
   .then(ensureAnnouncementsImageColumn)
   .then(ensureProjectSubmissionsTable)
+  .then(ensureClassTestsTables)
   .then(ensureBranchStructure)
   .then(ensureLoginCodes)
   .catch((err) => logger.warn({ err }, "Schema checks failed"))

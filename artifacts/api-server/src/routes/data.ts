@@ -24,6 +24,8 @@ import {
   attendanceTable,
   branchesTable,
   calendarEventsTable,
+  classTestMarksTable,
+  classTestsTable,
   courseDocumentsTable,
   db,
   modulesCatalog,
@@ -760,11 +762,162 @@ router.get(
       .from(assessmentsTable)
       .innerJoin(studentsTable, eq(assessmentsTable.studentId, studentsTable.id))
       .orderBy(desc(assessmentsTable.cycle), asc(studentsTable.fullName));
-    res.json(
-      ListAllAssessmentsResponse.parse(
+res.json(
+      SaveTeacherAssessmentsResponse.parse(
         rows.map((row) => assessmentView(row.record, row.studentName)),
       ),
     );
+  },
+);
+
+// ---------------------------------------------------------------- class tests
+// A class test is a one-off exam: the teacher picks a real date, gives the test a
+// title, then uploads marks against every student for that test. Unlike the twelve
+// project cycles there is no month/project split — the date IS the identifier, so
+// re-saving a test replaces it rather than stacking up.
+router.get(
+  "/teacher/class-tests",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const tests = await db
+      .select()
+      .from(classTestsTable)
+      .where(eq(classTestsTable.module, req.auth.module))
+      .orderBy(desc(classTestsTable.date));
+    const out: {
+      id: number;
+      module: string;
+      date: string;
+      title: string;
+      createdAt: string;
+      marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; enteredAt: string | null }[];
+    }[] = [];
+    for (const test of tests as Array<{
+      id: number;
+      module: string;
+      date: string;
+      title: string;
+      createdBy: number | null;
+      createdAt: Date;
+    }>) {
+      const marks = await db
+        .select({
+          record: classTestMarksTable,
+          studentName: studentsTable.fullName,
+        })
+        .from(classTestMarksTable)
+        .innerJoin(studentsTable, eq(classTestMarksTable.studentId, studentsTable.id))
+        .where(eq(classTestMarksTable.testId, test.id));
+      out.push({
+        id: test.id,
+        module: test.module,
+        date: test.date,
+        title: test.title,
+        createdAt: test.createdAt.toISOString(),
+        marks: marks.map((m) => ({
+          studentId: m.record.studentId,
+          studentName: m.studentName,
+          marks: m.record.marks,
+          feedback: m.record.feedback,
+          enteredAt: m.record.enteredAt == null ? null : m.record.enteredAt.toISOString(),
+        })),
+      });
+    }
+    res.json(out);
+  },
+);
+
+router.post(
+  "/teacher/class-tests",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      date?: unknown;
+      title?: unknown;
+      marks?: unknown[];
+    };
+    const date = typeof body.date === "string" ? body.date : "";
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ error: "Choose a test date." });
+      return;
+    }
+    if (!title) {
+      res.status(400).json({ error: "Give the test a title." });
+      return;
+    }
+    if (!Array.isArray(body.marks)) {
+      res.status(400).json({ error: "Send marks for each student." });
+      return;
+    }
+    const [test] = await db
+      .insert(classTestsTable)
+      .values({
+        module: req.auth.module,
+        date,
+        title,
+        createdBy: Number(req.auth.userId),
+      })
+      .onConflictDoUpdate({
+        target: [classTestsTable.module, classTestsTable.date],
+        set: { title, createdBy: Number(req.auth.userId) },
+      })
+      .returning();
+    if (!test) {
+      res.status(500).json({ error: "Could not save the test." });
+      return;
+    }
+    for (const entry of body.marks as {
+      studentId?: unknown;
+      marks?: unknown;
+      feedback?: unknown;
+    }[]) {
+      const studentId = typeof entry.studentId === "string" ? entry.studentId : "";
+      if (!studentId) continue;
+      const marks = typeof entry.marks === "string" || typeof entry.marks === "number"
+        ? Number(entry.marks)
+        : null;
+      const feedback = typeof entry.feedback === "string" ? entry.feedback : null;
+      if (marks == null && feedback == null) {
+        await db
+          .delete(classTestMarksTable)
+          .where(
+            and(
+              eq(classTestMarksTable.testId, test.id),
+              eq(classTestMarksTable.studentId, studentId),
+            ),
+          );
+        continue;
+      }
+      await db
+        .insert(classTestMarksTable)
+        .values({
+          testId: test.id,
+          studentId,
+          marks: marks == null ? null : (Number.isNaN(marks) ? null : marks),
+          feedback,
+          enteredAt: new Date(),
+          enteredBy: Number(req.auth.userId),
+        })
+        .onConflictDoUpdate({
+          target: [classTestMarksTable.testId, classTestMarksTable.studentId],
+          set: {
+            marks: marks == null ? null : (Number.isNaN(marks) ? null : marks),
+            feedback,
+            enteredAt: new Date(),
+            enteredBy: Number(req.auth.userId),
+          },
+        });
+    }
+    res.json({ id: test.id, date, title, saved: true });
   },
 );
 
@@ -988,6 +1141,80 @@ router.get(
       );
     const submitted = Number(markedRows.value);
     res.json({ totalStudents, submitted });
+  },
+);
+
+// One student's marks across every cycle on this module — the per-student "View"
+  // icon on the assessment register opens this, so a teacher can see the whole
+  // project history for one student without leaving the marks page.
+  router.get(
+    "/teacher/assessments/student/:studentId",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const studentId = typeof req.params.studentId === "string" ? req.params.studentId : "";
+    if (!studentId) {
+      res.status(400).json({ error: "Choose a student." });
+      return;
+    }
+    const [student] = await db
+      .select({ id: studentsTable.id, fullName: studentsTable.fullName })
+      .from(studentsTable)
+      .where(eq(studentsTable.id, studentId))
+      .limit(1);
+    if (!student) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(assessmentsTable)
+      .where(
+        and(
+          eq(assessmentsTable.studentId, studentId),
+          eq(assessmentsTable.module, req.auth.module),
+        ),
+      )
+      .orderBy(asc(assessmentsTable.cycle));
+    const byCycle = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => i + 1).map((cycle) => {
+        const found = rows.find((r) => r.cycle === cycle);
+        return [cycle, found ? assessmentView(found, student.fullName) : { cycle, marks: null, feedback: null, projectName: null, enteredAt: null }];
+      }),
+    );
+    res.json({ student: { id: student.id, fullName: student.fullName }, module: req.auth.module, cycles: byCycle });
+  },
+);
+
+// Whole-class assessment view: every student on this module with their marks
+// across all twelve cycles, keyed by student id so the Class Assessment page can
+// search and filter without a per-cycle round trip.
+router.get(
+  "/teacher/assessments/class",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(assessmentsTable)
+      .where(eq(assessmentsTable.module, req.auth.module));
+    const out: Record<string, Record<number, { marks: number | null; feedback: string | null; projectName: string | null; enteredAt: string | null }>> = {};
+    for (const row of rows) {
+      if (!out[row.studentId]) out[row.studentId] = {};
+      out[row.studentId][row.cycle] = {
+        marks: row.marks,
+        feedback: row.feedback,
+        projectName: row.projectName,
+        enteredAt: row.enteredAt?.toISOString() ?? null,
+      };
+    }
+    res.json(out);
   },
 );
 
@@ -2981,11 +3208,10 @@ router.post(
       )
       .limit(1);
 
-    // Already marked for this day — do not overwrite.
-    if (row.length > 0 && isLocked(row[0].lockedDays ?? 0, slot.day)) {
-      res.status(409).json({ error: "Already marked for this date.", alreadyMarked: true });
-      return;
-    }
+    // A previously marked day is not locked against edits — the whole point of the
+    // per-student Save is to correct a wrong mark. The lock bits stay set so the
+    // register still knows this day was handled, but the upsert below overwrites it.
+    const alreadyMarked = row.length > 0 && isLocked(row[0].lockedDays ?? 0, slot.day);
 
     const isPresent = body.mark === "present" || body.mark === "leave";
     const flags = Object.fromEntries(
@@ -3027,7 +3253,7 @@ router.post(
         },
       });
 
-    res.json({ saved: true, alreadyMarked: false });
+    res.json({ saved: true, alreadyMarked });
   },
 );
 
@@ -3053,7 +3279,10 @@ router.get(
         return;
       }
       const from = `${year}-${String(m + 1).padStart(2, "0")}-01`;
-      const to = `${year}-${String(m + 1).padStart(2, "0")}-31`;
+      // September has 30 days, so a hard-coded 31 makes the range query fail on the
+      // `date` column. Use the real last day of the month instead.
+      const lastDay = new Date(year, m + 1, 0).getDate();
+      const to = `${year}-${String(m + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
       const student = await db
         .select({ id: studentsTable.id, fullName: studentsTable.fullName, dateOfJoining: studentsTable.dateOfJoining })
@@ -4937,9 +5166,9 @@ router.post(
       res.status(400).json({ error: "Choose a branch." });
       return;
     }
-    const module = (req.body as { module?: unknown })?.module as Module;
-    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
-      res.status(400).json({ error: "Choose a valid module." });
+    const moduleKeys = await branchModuleIds(req.auth.branchId);
+    if (moduleKeys.length === 0) {
+      res.status(400).json({ error: "This branch has no modules yet." });
       return;
     }
     const input = announcementInput(req.body);
@@ -4948,19 +5177,27 @@ router.post(
       return;
     }
     const publish = (req.body as { publish?: unknown })?.publish === true;
-    const [record] = await db
-      .insert(announcementsTable)
-      .values({
-        module,
-        title: input.title,
-        body: input.body,
-        authorName: req.auth?.displayName ?? null,
-        createdBy: null,
-        publishedAt: publish ? new Date() : null,
-        image: input.image ?? null,
-      })
-      .returning();
-    res.status(201).json(announcementView(record));
+    // A branch notice propagates to every module the branch owns, so students on
+    // any of them see it. Picking one module still writes a single-row notice.
+    const requested = (req.body as { module?: unknown })?.module as Module | undefined;
+    const targets = requested && moduleKeys.includes(requested) ? [requested] : moduleKeys;
+    const records: typeof announcementsTable.$inferSelect[] = [];
+    for (const module of targets) {
+      const [record] = await db
+        .insert(announcementsTable)
+        .values({
+          module,
+          title: input.title,
+          body: input.body,
+          authorName: req.auth?.displayName ?? null,
+          createdBy: null,
+          publishedAt: publish ? new Date() : null,
+          image: input.image ?? null,
+        })
+        .returning();
+      if (record) records.push(record);
+    }
+    res.status(201).json(records.map(announcementView));
   },
 );
 

@@ -713,7 +713,20 @@ function Shell({ user, children }: { user: CurrentUser; children: ReactNode }) {
 }
 
 function PageHeader({ kicker, title, detail, action }: { kicker: ReactNode; title: string; detail: string; action?: ReactNode }) {
-  return <div className="mb-8 flex flex-col justify-between gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end"><div><div className="flex items-center gap-2"><button type="button" onClick={() => window.history.back()} className="-ml-1 grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground" title="Back" aria-label="Back" data-testid="button-page-back"><ChevronLeft size={16} /></button><p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-primary">{kicker}</p></div><h1 className="mt-2 font-display text-4xl font-bold tracking-tight sm:text-5xl" data-testid="text-page-title">{title}</h1><p className="mt-2 max-w-xl text-sm text-muted-foreground">{detail}</p></div>{action}</div>;
+  // Responsive by default: on a phone the header stacks (title above the action) so
+  // neither the heading nor the button ever gets squeezed off the right edge, and
+  // the detail wraps instead of being clipped by a fixed max-width.
+  return <div className="mb-8 flex flex-col gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="min-w-0">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => window.history.back()} className="-ml-1 grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground" title="Back" aria-label="Back" data-testid="button-page-back"><ChevronLeft size={16} /></button>
+        <p className="font-mono-ui text-[10px] uppercase tracking-[0.22em] text-primary">{kicker}</p>
+      </div>
+      <h1 className="mt-2 font-display text-3xl font-bold leading-tight tracking-tight sm:text-4xl lg:text-5xl" data-testid="text-page-title">{title}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
+    </div>
+    {action && <div className="shrink-0 sm:ml-auto">{action}</div>}
+  </div>;
 }
 
 function StatCard({ label, value, detail, icon: Icon, accent = false }: { label: string; value: string | number; detail: string; icon: typeof Users; accent?: boolean }) {
@@ -2064,6 +2077,10 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [savingOne, setSavingOne] = useState<Record<string, boolean>>({});
+  // Once a student's mark is saved for this day, the row shows the badge + an edit
+  // (pencil) icon instead of the checkboxes. Clicking it unlocks the row so a wrong
+  // mark can be corrected and saved again — the same `saveOne` call does the update.
+  const [editingOne, setEditingOne] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
@@ -2223,7 +2240,7 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       .finally(() => setSaving(false));
   };
 
-  const saveOne = async (studentId: string, mark: Mark) => {
+const saveOne = async (studentId: string, mark: Mark) => {
     const row = rows?.find((r) => r.id === studentId);
     if (!row || !row.eligible) return;
     setSavingOne((v) => ({ ...v, [studentId]: true }));
@@ -2236,13 +2253,10 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        if ((data as { alreadyMarked?: boolean }).alreadyMarked) {
-          setNotice(`Already marked for ${row.fullName} — left as is.`);
-        } else {
-          setError((data as { error?: string }).error || 'Could not save.');
-        }
+        setError((data as { error?: string }).error || 'Could not save.');
         return;
       }
+      setEditingOne((v) => { const { [studentId]: _drop, ...rest } = v; return rest; });
       setReloadToken((v) => v + 1);
       setNotice(`Saved for ${row.fullName}.`);
     } catch { setError('Could not save. Try again.'); }
@@ -2391,28 +2405,31 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
                   <td className="py-2.5 pr-2 font-mono-ui text-xs font-semibold text-muted-foreground">{row.id}</td>
                   <td className="py-2.5 pr-2 font-medium">{row.fullName}</td>
                   <td className="py-2.5 pr-2 text-muted-foreground">{row.fathersName}</td>
-                  <td className="py-2.5 text-right">
-                    {row.markedToday ? (
-                      <div className="flex items-center justify-end gap-2">
-                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${marks[row.id] === 'present' ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700' : marks[row.id] === 'absent' ? 'border-destructive bg-destructive/10 text-destructive' : 'border-amber-500 bg-amber-500/15 text-amber-700'}`}>
-                          {marks[row.id] === 'present' ? 'P' : marks[row.id] === 'absent' ? 'A' : 'L'}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">saved</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-end gap-2">
-                        <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible || savingOne[row.id]} reason={reason} onPick={(next) => setMarks((v) => {
-                          if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
-                          return { ...v, [row.id]: next };
-                        })} />
-                        {marks[row.id] && !sunday && row.eligible && !savingOne[row.id] && (
-                          <Button type="button" size="sm" onClick={() => saveOne(row.id, marks[row.id]!)} disabled={savingOne[row.id]} data-testid={`button-save-one-${row.id}`}>
-                            {savingOne[row.id] ? 'Saving…' : 'Save'}
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </td>
+<td className="py-2.5 text-right">
+                     {row.markedToday && !editingOne[row.id] ? (
+                       <div className="flex items-center justify-end gap-2">
+                         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${marks[row.id] === 'present' ? 'border-emerald-600 bg-emerald-500/15 text-emerald-700' : marks[row.id] === 'absent' ? 'border-destructive bg-destructive/10 text-destructive' : 'border-amber-500 bg-amber-500/15 text-amber-700'}`}>
+                           {marks[row.id] === 'present' ? 'P' : marks[row.id] === 'absent' ? 'A' : 'L'}
+                         </span>
+                         <span className="text-[10px] text-muted-foreground">saved</span>
+                         <button type="button" onClick={() => setEditingOne((v) => ({ ...v, [row.id]: true }))} className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={`Edit ${row.fullName}'s attendance mark`} data-testid={`button-edit-one-${row.id}`} title="Edit mark">
+                           <Pencil size={15} />
+                         </button>
+                       </div>
+                     ) : (
+                       <div className="flex items-center justify-end gap-2">
+                         <MarkCheckboxes row={row} mark={marks[row.id]} disabled={sunday || !row.eligible || savingOne[row.id]} reason={reason} onPick={(next) => setMarks((v) => {
+                           if (!next) { const { [row.id]: _drop, ...rest } = v; return rest; }
+                           return { ...v, [row.id]: next };
+                         })} />
+                         {marks[row.id] && !sunday && row.eligible && !savingOne[row.id] && (
+                           <Button type="button" size="sm" onClick={() => saveOne(row.id, marks[row.id]!)} disabled={savingOne[row.id]} data-testid={`button-save-one-${row.id}`}>
+                             {savingOne[row.id] ? 'Saving…' : 'Save'}
+                           </Button>
+                         )}
+                       </div>
+                     )}
+                   </td>
                 </tr>;
               })}
             </tbody>
@@ -3377,11 +3394,12 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
 
   const create = (publish: boolean) => {
     if (!title.trim() && !body.trim() && !image) { setError('Enter a title, a message, or attach an image.'); return; }
+    if ((isAdmin || isBranch) && selectedBranch == null) { setError('Choose a branch first.'); return; }
     setBusy(true); setError(''); setNotice('');
     fetch(base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(isAdmin || isBranch ? { title, body, publish, module, image } : { title, body, publish, image }),
+      body: JSON.stringify(isAdmin || isBranch ? { title, body, publish, image } : { title, body, publish, module, image }),
     })
       .then((res) => { if (!res.ok) throw new Error('save failed'); })
       .then(() => {
@@ -3437,16 +3455,18 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
     return source ? source.modules.some((mod) => mod.id === m.key) : false;
   });
   const pickableModules = isAdmin || isBranch ? branchModules : catalog;
-  const hasTargetSelection = isAdmin || isBranch
+  const hasTargetSelection = isAdmin
     ? selectedBranch != null && module != null && branchModules.some((item) => item.key === module)
-    : module != null;
+    : isBranch
+      ? selectedBranch != null
+      : module != null;
   const shownNotices = isAdmin || isBranch
-    ? hasTargetSelection ? (notices ?? []).filter((n) => n.module === module) : []
+    ? hasTargetSelection ? (notices ?? []) : []
     : notices;
   const published = (shownNotices ?? []).filter((n) => n.published);
   const drafts = (shownNotices ?? []).filter((n) => !n.published);
   const visibleModules = isAdmin || isBranch
-    ? hasTargetSelection ? catalog.filter((m) => m.key === module) : []
+    ? hasTargetSelection ? catalog.filter((m) => (isAdmin ? m.key === module : branchModules.some((b) => b.key === m.key))) : []
     : catalog.filter((m) => m.key === (user.module ?? 'ai'));
 
   return <>
@@ -3456,7 +3476,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       detail={isAdmin
         ? 'Notices for the module you pick below. Write one for that module, or take down something a module owner posted.'
         : isBranch
-          ? `Notices for ${user.displayName} and its modules only. Publish one and it appears on the branch's students' portal straight away.`
+          ? `Notices for ${user.displayName} and its modules only. Publish one and it appears on every module's students' portal straight away.`
           : `Notices for ${user.module ? moduleNames[user.module] : 'your module'} only. Publish one and it appears on your students' portal straight away.`} />
 
     <section className="rounded-xl border border-border bg-card p-5">
@@ -3464,7 +3484,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       <h2 className="mt-1 font-display text-2xl font-bold">Write an announcement</h2>
       <div className="mt-5 grid gap-3">
         {isAdmin && <label className="grid gap-1.5 text-sm font-medium">Branch<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={branch} disabled={branchList.length === 0} onChange={(e) => { setBranch(e.target.value); setModule(null); }} data-testid="select-notice-branch"><option value="">— Select branch —</option>{branchList.map((b) => <option key={b.id} value={String(b.id)}>{b.name}</option>)}</select></label>}
-        {(isAdmin ? selectedBranch != null : isBranch ? branchModules.length > 0 : false) && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module ?? ''} onChange={(e) => setModule(e.target.value ? e.target.value as Module : null)} data-testid="select-notice-module"><option value="">— Select module —</option>{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
+        {isAdmin && selectedBranch != null && <label className="grid gap-1.5 text-sm font-medium">Module<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={module ?? ''} onChange={(e) => setModule(e.target.value ? e.target.value as Module : null)} data-testid="select-notice-module"><option value="">— Select module —</option>{pickableModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}</select></label>}
         <label className="grid gap-1.5 text-sm font-medium">Title<Input placeholder="Enter notice title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} data-testid="input-notice-title" /></label>
         <label className="grid gap-1.5 text-sm font-medium">Message<Textarea rows={5} placeholder={isAdmin ? 'Write what the students need to know' : 'Write what your students need to know'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={5000} onPaste={(e) => {
           const file = announcementImageFile(e);
@@ -3497,7 +3517,7 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
     <section className="mt-8">
       <div className="mb-5">
         <h2 className="font-display text-2xl font-bold">All notices</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{hasTargetSelection ? `${published.length} published · ${drafts.length} ${drafts.length === 1 ? 'draft' : 'drafts'}. Click a title to read it; drafts stay off the student portal until you publish them.` : 'Choose a branch and module to view notices.'}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{hasTargetSelection ? `${published.length} published · ${drafts.length} ${drafts.length === 1 ? 'draft' : 'drafts'}. Click a title to read it; drafts stay off the student portal until you publish them.` : (isBranch ? 'Choose a branch to view notices.' : 'Choose a branch and module to view notices.')}</p>
       </div>
       {(isAdmin || isBranch) && !hasTargetSelection ? <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">Choose a branch and module to view notices.</p>
         : notices == null ? <div className="grid gap-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
@@ -5904,6 +5924,91 @@ function TeacherAttendanceFromRoute() {
 }
 
 // Marks for one project, for every student on the module roster at once. The single-student
+// Shared per-student assessment dialog: every cycle on this module for one student.
+// Both the Mark Assessment grid and the Class Assessment page open this when a teacher
+// clicks a row's View icon, so the two desks can never show different data.
+type CycleMark = { cycle: number; marks: number | null; feedback: string | null; projectName: string | null; enteredAt: string | null };
+function StudentAssessmentDialog({
+  open,
+  studentId,
+  label,
+  onClose,
+}: {
+  open: boolean;
+  studentId: string | null;
+  label: string | null;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<{ student: { id: string; fullName: string }; cycles: Record<number, CycleMark> } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!open || !studentId) return;
+    let alive = true;
+    setLoading(true); setError(''); setData(null);
+    fetch(`/api/teacher/assessments/student/${encodeURIComponent(studentId)}`)
+      .then((res) => res.json().then((json) => ({ ok: res.ok, json })))
+      .then(({ ok, json }) => {
+        if (!alive) return;
+        if (!ok) { setError((json as { error?: string })?.error ?? 'Could not load this student\'s assessments.'); return; }
+        setData(json as typeof data);
+      })
+      .catch(() => { if (alive) setError('Could not load this student\'s assessments.'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [open, studentId]);
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Class Assessment</DialogTitle>
+          <DialogDescription>{label ? `${label}` : ''}</DialogDescription>
+        </DialogHeader>
+        {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-assessment-error">{error}</p>}
+        {loading ? <div className="space-y-3">{[1, 2, 3, 4, 5, 6].map((i) => <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />)}</div>
+          : data ? (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm" data-testid="table-class-assessment">
+                <thead>
+                  <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <th className="py-2 pr-3 font-semibold">Cycle</th>
+                    <th className="py-2 pr-3 font-semibold">Month · Project</th>
+                    <th className="py-2 pr-3 font-semibold">Project name</th>
+                    <th className="py-2 pr-3 font-semibold">Marks</th>
+                    <th className="py-2 pr-3 font-semibold">Feedback</th>
+                    <th className="py-2 font-semibold">Entered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(data.cycles).map(([cycle, entry]) => {
+                    const c = Number(cycle);
+                    const month = Math.floor((c - 1) / 2) + 1;
+                    const project = (c - 1) % 2 + 1;
+                    return (
+                      <tr key={cycle} className="border-b border-border/60">
+                        <td className="py-2 pr-3 font-mono-ui text-xs font-semibold">Cycle {c}</td>
+                        <td className="py-2 pr-3 text-muted-foreground">Month {month} · Project {project}</td>
+                        <td className="py-2 pr-3">{entry.projectName ?? <span className="text-xs text-muted-foreground">—</span>}</td>
+                        <td className="py-2 pr-3">{entry.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{entry.marks}</span>}</td>
+                        <td className="py-2 pr-3 text-muted-foreground">{entry.feedback ?? '—'}</td>
+                        <td className="py-2 pr-3 text-xs text-muted-foreground">{entry.enteredAt ? new Date(entry.enteredAt).toLocaleDateString() : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // form still lives on the record; this is the pass you make when you have a class full of
 // marks to enter and do not want to open twenty records to do it.
 function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
@@ -5922,6 +6027,24 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [notice, setNotice] = useState('');
   const cycle = project === '' ? null : (month - 1) * 2 + project;
   const [projectLinks, setProjectLinks] = useState<Record<string, string>>({});
+  // Class tests are separate from the twelve project cycles: the teacher picks a real
+  // date, gives the test a title, and uploads marks against every student for that
+  // test. The button lives next to "Open student list" on this page.
+  const [classTestOpen, setClassTestOpen] = useState(false);
+  const [classTestTitle, setClassTestTitle] = useState('');
+  const [classTestDate, setClassTestDate] = useState(todayIso());
+  const [classTestMarks, setClassTestMarks] = useState<Record<string, { marks: string; feedback: string }>>({});
+  const [classTestSaving, setClassTestSaving] = useState(false);
+  const [classTestError, setClassTestError] = useState('');
+  const [classTestNotice, setClassTestNotice] = useState('');
+  const [classTestViewOpen, setClassTestViewOpen] = useState(false);
+  const [classTestView, setClassTestView] = useState<{ id: number; date: string; title: string; marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; enteredAt: string | null }[] }[] | null>(null);
+  const [classTestViewLoading, setClassTestViewLoading] = useState(false);
+  // Tapping a date tile expands that test's per-student marks list. Only one open at a time.
+  const [expandedTestId, setExpandedTestId] = useState<number | null>(null);
+  // Search inside the marks-entry table so a teacher does not have to scroll past the
+  // whole roster to reach one student. The View list is unaffected.
+  const [classTestSearch, setClassTestSearch] = useState('');
 
   const load = useCallback(async (target: number) => {
     setLoading(true); setError('');
@@ -5978,8 +6101,11 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
     finally { setSaving(''); }
   };
 
-  const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: string } | null>(null);
+const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: string } | null>(null);
   const [deletingId, setDeletingId] = useState('');
+  // Per-student "View" icon opens the shared StudentAssessmentDialog, which shows
+  // this module's whole project history for one student.
+  const [viewTarget, setViewTarget] = useState<{ studentId: string; label: string } | null>(null);
 
   const confirmDelete = async () => {
     if (!deleteTarget || cycle == null) return;
@@ -6001,15 +6127,59 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
       setDeleteTarget(null);
       setNotice(`Deleted marks for ${label} — month ${month}, project ${project}.`);
     } catch { setError('Could not delete those marks. Try again.'); }
-    finally { setDeletingId(''); setSaving(''); }
+finally { setDeletingId(''); setSaving(''); }
   };
+
+  const saveClassTest = async () => {
+    if (!classTestTitle.trim() || !classTestDate) { setClassTestError('Choose a test date and give it a title.'); return; }
+    setClassTestSaving(true); setClassTestError(''); setClassTestNotice('');
+    try {
+      const records = all.map((student) => {
+        const row = classTestMarks[student.id] ?? { marks: '', feedback: '' };
+        return { studentId: student.id, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback };
+      });
+      const res = await fetch('/api/teacher/class-tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: classTestDate, title: classTestTitle.trim(), marks: records }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setClassTestError((data as { error?: string })?.error ?? 'Could not save those marks.'); return; }
+      setClassTestNotice(`Saved marks for ${classTestTitle.trim()} on ${classTestDate}.`);
+    } catch { setClassTestError('Could not save those marks. Try again.'); }
+    finally { setClassTestSaving(false); }
+  };
+
+  const loadClassTests = async () => {
+    setClassTestViewLoading(true); setClassTestError('');
+    try {
+      const res = await fetch('/api/teacher/class-tests');
+      const data = res.ok ? await res.json() : null;
+      if (data == null) { setClassTestError('Could not load class tests.'); return; }
+      setClassTestView(data as typeof classTestView);
+    } catch { setClassTestError('Could not load class tests.'); }
+    finally { setClassTestViewLoading(false); }
+  };
+
+  // The View button opens the list; the dialog's own useEffect loads it.
+  useEffect(() => {
+    if (classTestViewOpen) void loadClassTests();
+  }, [classTestViewOpen]);
+
+  // Search inside the class-test marks table: only the matching students render,
+  // so a teacher can jump straight to one student's marks without scrolling the
+  // whole roster. The View list is unaffected.
+  const classTestQuery = classTestSearch.trim().toLowerCase();
+  const classTestShown = classTestQuery === ''
+    ? all
+    : all.filter((student) => studentMatches(student, classTestQuery));
 
   return <>
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark Assessment"
       detail="Every project on your module roster in one place. Pick the month and project, then type marks and feedback against each student and press Save."
-      action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link>}
+      action={<div className="flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setClassTestOpen(true)} data-testid="button-open-class-test"><BookOpen size={15} /> Class test</Button><Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link></div>}
     />
 
     <section className="rounded-xl border border-border bg-card p-4">
@@ -6085,11 +6255,12 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
                   <td className="py-2 pr-3">
                     <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                   </td>
-                  <td className="py-2">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
-                      {isSaved && <>
-                        <span className="text-[11px] font-medium text-emerald-700">Saved</span>
+<td className="py-2">
+                     <span className="flex flex-wrap items-center gap-2">
+                       <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
+                       <Button type="button" size="sm" variant="ghost" onClick={() => setViewTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} data-testid={`button-view-assessment-${student.id}`} title="View this student's whole project history"><Eye size={14} /> View</Button>
+                       {isSaved && <>
+                         <span className="text-[11px] font-medium text-emerald-700">Saved</span>
                         <Button type="button" size="sm" variant="ghost" onClick={() => {
                           setSaved((v) => ({ ...v, [student.id]: false }));
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
@@ -6124,6 +6295,120 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
           <Button type="button" variant="destructive" autoFocus onClick={confirmDelete} disabled={!deleteTarget || !!deletingId} data-testid="button-confirm-delete-marks">
             {deletingId ? 'Deleting…' : 'Delete'}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <StudentAssessmentDialog
+      open={viewTarget != null}
+      studentId={viewTarget?.studentId ?? null}
+      label={viewTarget?.label ?? null}
+      onClose={() => setViewTarget(null)}
+    />
+
+    <Dialog open={classTestOpen} onOpenChange={(v) => { if (!v) { setClassTestOpen(false); setClassTestError(''); setClassTestNotice(''); } }}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Class test</DialogTitle>
+          <DialogDescription>Pick the date the test was held, give it a title, then enter marks against every student on this module. Saving replaces the marks for that test date.</DialogDescription>
+        </DialogHeader>
+        {classTestError && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-test-error">{classTestError}</p>}
+        {classTestNotice && <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-class-test-success">{classTestNotice}</p>}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1.5 text-sm font-medium">Test date
+            <Input type="date" value={classTestDate} onChange={(e) => setClassTestDate(e.target.value)} data-testid="input-class-test-date" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium flex-1 min-w-[200px]">Title
+            <Input placeholder="e.g. Mid-term paper" value={classTestTitle} onChange={(e) => setClassTestTitle(e.target.value)} data-testid="input-class-test-title" />
+          </label>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => { setClassTestView(null); setClassTestViewOpen(true); }}>View</Button>
+            <Button type="button" onClick={saveClassTest} disabled={classTestSaving} data-testid="button-save-class-test">{classTestSaving ? 'Saving…' : 'Save marks'}</Button>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">{shown.length} of {all.length} students</p>
+          <div className="relative w-full sm:max-w-md">
+            <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
+            <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={classTestSearch} onChange={(e) => setClassTestSearch(e.target.value)} data-testid="input-search-class-test" />
+          </div>
+        </div>
+        <div className="mt-4 max-h-[60vh] overflow-y-auto">
+          <table className="w-full border-collapse text-left text-sm" data-testid="table-class-test">
+            <thead>
+              <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                <th className="py-2 pr-3 font-semibold">#</th>
+                <th className="py-2 pr-3 font-semibold">Student ID</th>
+                <th className="py-2 pr-3 font-semibold">Name</th>
+                <th className="py-2 pr-3 font-semibold">Marks</th>
+                <th className="py-2 pr-3 font-semibold">Feedback</th>
+              </tr>
+            </thead>
+            <tbody>
+              {classTestShown.map((student, index) => {
+                const row = classTestMarks[student.id] ?? { marks: '', feedback: '' };
+                return <tr key={student.id} className="border-b border-border/60">
+                  <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
+                  <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
+                  <td className="py-2 pr-3">{student.fullName}</td>
+                  <td className="py-2 pr-3"><Input className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-class-test-marks-${student.id}`} /></td>
+                  <td className="py-2 pr-3"><Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-class-test-feedback-${student.id}`} /></td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={classTestViewOpen} onOpenChange={(v) => { if (!v) { setClassTestViewOpen(false); setClassTestView(null); setExpandedTestId(null); setClassTestError(''); } }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Class tests</DialogTitle>
+          <DialogDescription>Every test held on this module, newest first. Tap a date tile to see the marks uploaded for it.</DialogDescription>
+        </DialogHeader>
+        {classTestViewLoading ? <div className="space-y-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-md bg-muted" />)}</div>
+          : (classTestView ?? []).length === 0 ? <p className="text-sm text-muted-foreground">No class tests recorded yet.</p>
+          : <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+            {(classTestView ?? []).map((test) => {
+              const expanded = expandedTestId === test.id;
+              return <div key={test.id} className="overflow-hidden rounded-lg border border-border">
+                <button type="button" onClick={() => setExpandedTestId(expanded ? null : test.id)} className="flex w-full items-center justify-between gap-3 bg-card px-4 py-3 text-left hover:bg-muted/60">
+                  <div className="min-w-0">
+                    <p className="font-mono-ui text-sm font-semibold">{test.date}</p>
+                    <p className="truncate text-sm text-muted-foreground">{test.title}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks.length} marks</span>
+                    <ChevronDown size={14} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                  </div>
+                </button>
+                {expanded && <div className="border-t border-border bg-card/60 px-4 py-3">
+                  {test.marks.length === 0 ? <p className="text-sm text-muted-foreground">No marks uploaded for this test yet.</p>
+                    : <table className="w-full border-collapse text-left text-sm" data-testid={`table-class-test-marks-${test.id}`}>
+                        <thead>
+                          <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+                            <th className="py-1.5 pr-3 font-semibold">Student ID</th>
+                            <th className="py-1.5 pr-3 font-semibold">Name</th>
+                            <th className="py-1.5 pr-3 font-semibold">Marks</th>
+                            <th className="py-1.5 pr-3 font-semibold">Feedback</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {test.marks.map((m, i) => <tr key={m.studentId} className="border-b border-border/40">
+                            <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{m.studentId}</td>
+                            <td className="py-1.5 pr-3 font-semibold">{m.studentName}</td>
+                            <td className="py-1.5 pr-3">{m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{m.feedback ?? '—'}</td>
+                          </tr>)}
+                        </tbody>
+                      </table>}
+                </div>}
+              </div>;
+            })}
+          </div>}
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={() => { setClassTestViewOpen(false); setClassTestView(null); setExpandedTestId(null); }}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

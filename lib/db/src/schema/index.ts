@@ -8,6 +8,7 @@ import {
   text,
   timestamp,
   primaryKey,
+  unique,
 } from "drizzle-orm/pg-core";
 
 // Module keys are now admin-defined text; the catalog below says which module
@@ -301,6 +302,53 @@ export const moduleClassCancellationsTable = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.module, table.date] }),
+  }),
+);
+
+// A class test — not one of the twelve project cycles. A module owner picks a real
+// date, then uploads marks against every student for that test. The date is the
+// primary key alongside the module, so re-saving a test replaces it rather than
+// stacking up, and a student can have at most one mark per test date.
+export const classTestsTable = pgTable(
+  "class_tests",
+  {
+    id: serial("id").primaryKey(),
+    module: text("module").notNull(),
+    date: date("date").notNull(),
+    title: text("title").notNull(),
+    createdBy: integer("created_by").references(() => teachersTable.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    moduleDateUnique: unique("class_tests_module_date_unique").on(
+      table.module,
+      table.date,
+    ),
+  }),
+);
+
+export const classTestMarksTable = pgTable(
+  "class_test_marks",
+  {
+    testId: integer("test_id")
+      .notNull()
+      .references(() => classTestsTable.id, { onDelete: "cascade" }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => studentsTable.id, { onDelete: "cascade" }),
+    marks: integer("marks"),
+    feedback: text("feedback"),
+    enteredAt: timestamp("entered_at", { withTimezone: true }),
+    enteredBy: integer("entered_by").references(() => teachersTable.id, {
+      onDelete: "set null",
+    }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.testId, table.studentId] }),
   }),
 );
 
