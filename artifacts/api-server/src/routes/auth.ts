@@ -199,6 +199,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
       contactNumber: data.contactNumber.trim(),
       email,
       passwordHash: await hashPassword(data.password),
+      plainPassword: data.password,
       branchId,
     })
     .returning();

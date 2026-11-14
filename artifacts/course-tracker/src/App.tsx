@@ -1884,7 +1884,7 @@ function TeacherPage({ user }: { user: CurrentUser }) {
   const total = overview?.totalStudents ?? students.data?.length ?? 0;
   const moduleKey = (user.module ?? 'ai') as Module;
   return <>
-    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title="Keep Your Module Updated." detail="Where this module stands today, day by day. Fill the register from Mark Attendance in the side panel, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
+    <PageHeader kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`} title="Keep Your Module Updated." detail="Fill the register day by day, or open the student list to upload project marks." action={<Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-open-student-list"><Users size={15} /> Open student list</Link>} />
     <div className="grid gap-4 lg:grid-cols-2" data-testid="module-desk-summary">
       {/* Just the number, but stretched to the same height as the card beside it — the two
           sit side by side and one being shorter read as a mistake. */}
@@ -2617,13 +2617,13 @@ function MonthlyStudentAttendancePanel({
   return (
     <>
       <Button type="button" variant="outline" onClick={() => setOpen(true)} data-testid="button-open-monthly-attendance">
-        <Calendar size={15} /> Mark Monthly Attendance
+        <Calendar size={15} /> Monthly Attendance
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setError(''); setNotice(''); } }}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Mark Monthly Attendance</DialogTitle>
+            <DialogTitle>Monthly Attendance</DialogTitle>
             <DialogDescription />
           </DialogHeader>
 
@@ -3005,8 +3005,12 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
   const presentDates = scoped ? (scoped.presentDates ?? []) : (selected.presentDates ?? []);
   const absentDates = scoped ? (scoped.absentDates ?? []) : (selected.absentDates ?? []);
   const leaveDates = scoped ? (scoped.leaveDates ?? []) : (selected.leaveDates ?? []);
-  const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
+const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
   const eventCount = selected.events?.length ?? 0;
+  // Class tests are not part of the twelve project cycles, so they live on their own
+  // page. The icon next to the month picker opens that page from anywhere in the
+  // student record, so a student never has to hunt for it in the navigation.
+  const [classTestsOpen, setClassTestsOpen] = useState(false);
 
   const DateCount = ({ label, value, dates, tone, testId }: { label: string; value: number; dates: string[]; tone: string; testId: string }) => (
     <Popover>
@@ -3077,7 +3081,7 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         </div>)}
       </div>
 
-      <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{total}</strong> teaching days{range ? ` (${range})` : ''}{scopeLabel ? ` for ${scopeLabel}` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}. The course is six calendar months starting with the month of enrolment, so the first covers only the rest of that month{range ? ` (${report.joinedOn} onwards)` : ''}.</p>
+      <p className="mt-3 text-xs text-muted-foreground">{calendarMonthName(selected.start, `Month ${selected.month}`)} has <strong className="text-foreground">{total}</strong> teaching days{range ? ` (${range})` : ''}{scopeLabel ? ` for ${scopeLabel}` : ''}. Sundays are off{eventCount > 0 ? `, and ${eventCount} event day${eventCount === 1 ? '' : 's'} excluded` : ''}.</p>
       {/* Name each event day, so a shorter denominator is never a mystery. */}
       {eventCount > 0 && <ul className="mt-2 flex flex-wrap gap-2" data-testid="list-month-events">
         {selected.events?.map((ev) => <li key={ev.date} className="rounded-full border border-amber-400/70 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800">{shortDate(ev.date)} · {ev.title}</li>)}
@@ -3098,11 +3102,14 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
           <h2 className={`mt-1 font-display font-bold ${compact ? 'text-xl' : 'text-2xl'}`}>Project marks — {calendarMonthName(selected.start, `Month ${selected.month}`)}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{scopeLabel ? `${scopeLabel} runs two projects a month.` : 'Each module runs two projects a month.'}{range ? ` ${calendarMonthName(selected.start, `Month ${selected.month}`)} is ${range}.` : ''}</p>
         </div>
-        <label className="grid gap-1.5 text-sm font-medium">Month
-          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
-            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
-          </select>
-        </label>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => setClassTestsOpen(true)} data-testid="button-open-student-class-tests" title="Class tests"><FileText size={15} /> Class tests</Button>
+          <label className="grid gap-1.5 text-sm font-medium">Month
+            <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
+              {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
+            </select>
+          </label>
+        </div>
       </div>
       <div className={`mt-5 grid gap-3 ${compact || scoped ? '' : 'lg:grid-cols-3'}`}>
         {shownModules.map((item) => <div key={item.module} className="rounded-lg border border-border p-4" data-testid={`card-marks-${item.module}`}>
@@ -3115,8 +3122,8 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
                   ? <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">Not marked</span>
                   : <span className={`rounded-md px-2 py-1 font-mono-ui text-xs font-medium ${project.marks >= 70 ? 'bg-accent/25 text-primary' : 'bg-destructive/10 text-destructive'}`} data-testid={`marks-${item.module}-${project.project}`}>{project.marks}/100</span>}
                 {project.projectLink && (
-                  <a href={project.projectLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline" data-testid={`project-link-${item.module}-${project.project}`}>
-                    <ExternalLink size={12} /> Open
+<a href={project.projectLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline" data-testid={`project-link-${item.module}-${project.project}`}>
+                    <ExternalLink size={12} /> Uploaded
                   </a>
                 )}
               </div>
@@ -3126,8 +3133,18 @@ function MonthlyProgress({ report, compact = false, moduleFilter }: { report: St
         </div>)}
       </div>
     </section>
-  </>;
-}
+
+      <Dialog open={classTestsOpen} onOpenChange={setClassTestsOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Class tests</DialogTitle>
+            <DialogDescription>Pick a module to see the tests held on it and the marks uploaded for each one.</DialogDescription>
+          </DialogHeader>
+<StudentClassTestsPicker />
+        </DialogContent>
+      </Dialog>
+    </>;
+  }
 
 function useStudentReport(url: string) {
   const [report, setReport] = useState<StudentReport | null>(null);
@@ -3468,6 +3485,17 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
   const visibleModules = isAdmin || isBranch
     ? hasTargetSelection ? catalog.filter((m) => (isAdmin ? m.key === module : branchModules.some((b) => b.key === m.key))) : []
     : catalog.filter((m) => m.key === (user.module ?? 'ai'));
+  // A separate "view" module picker sits above the notices list. Admin picks a module
+  // (or "All modules" to see every branch's notices at once); a branch desk picks one
+  // of its own modules — it has nowhere else to look, so there is no "all" option; a
+  // teacher is scoped to their module by the API and never sees a picker here.
+  const [viewModule, setViewModule] = useState<Module | null>(null);
+  const showViewPicker = isAdmin || isBranch;
+  const viewModuleOptions = showViewPicker
+    ? (selectedBranch != null ? branchModules : [])
+    : [];
+  const viewNotices = (shownNotices ?? []).filter((n) => viewModule == null ? false : n.module === viewModule);
+  const viewVisible = viewModule == null ? [] : catalog.filter((m) => m.key === viewModule);
 
   return <>
     <PageHeader
@@ -3521,24 +3549,34 @@ function AnnouncementsPage({ user, scope }: { user: CurrentUser; scope: 'admin' 
       </div>
       {(isAdmin || isBranch) && !hasTargetSelection ? <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">Choose a branch and module to view notices.</p>
         : notices == null ? <div className="grid gap-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
-        : <NoticesByModule
-            notices={shownNotices ?? []}
-            modules={visibleModules}
-            emptyDetail="Nothing written for this module yet."
-            renderRow={(item) => <NoticeRow
-              notice={item}
-              editing={editingId === item.id}
-              busy={busy}
-              onCancel={() => { setEditingId(null); setError(''); }}
-              onSave={(next) => saveEdit(item.id, next)}>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <span className={`hidden rounded-full px-2.5 py-1 font-mono-ui text-[10px] uppercase sm:inline ${item.published ? 'bg-accent/20 text-primary' : 'bg-muted text-muted-foreground'}`}>{item.published ? 'Published' : 'Draft'}</span>
-                {!item.published && <Button type="button" size="sm" onClick={() => setPublished(item.id, true)} data-testid={`button-publish-${item.id}`}>Publish</Button>}
-                <Button type="button" size="sm" variant="outline" onClick={() => { setEditingId(editingId === item.id ? null : item.id); setError(''); setNotice(''); }} data-testid={`button-edit-${item.id}`}><Pencil size={14} /> Edit</Button>
-                <button type="button" onClick={() => remove(item.id, item.title)} className="rounded-md p-2 text-muted-foreground transition hover:bg-muted hover:text-destructive" aria-label={`Delete ${item.title}`} data-testid={`button-delete-notice-${item.id}`}><Trash2 size={15} /></button>
-              </div>
-            </NoticeRow>} />}
-    </section>
+: <>
+          {showViewPicker && <label className="mb-4 grid w-full max-w-sm gap-1.5 text-sm font-medium">Module
+            <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={viewModule ?? ''} onChange={(e) => setViewModule(e.target.value ? e.target.value as Module : null)} data-testid="select-notice-view-module">
+              <option value="">{isAdmin ? '— All modules —' : '— Select a module —'}</option>
+              {viewModuleOptions.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
+            </select>
+          </label>}
+          {showViewPicker && !isAdmin && viewModule == null ? <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">Pick a module above to see its notices.</p>
+            : viewModule != null && viewNotices.length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">Nothing written for this module yet.</p>
+            : <NoticesByModule
+                notices={viewModule == null ? (shownNotices ?? []) : viewNotices}
+                modules={viewModule == null ? visibleModules : viewVisible}
+                emptyDetail="Nothing written for this module yet."
+                renderRow={(item) => <NoticeRow
+                  notice={item}
+                  editing={editingId === item.id}
+                  busy={busy}
+                  onCancel={() => { setEditingId(null); setError(''); }}
+                  onSave={(next) => saveEdit(item.id, next)}>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className={`hidden rounded-full px-2.5 py-1 font-mono-ui text-[10px] uppercase sm:inline ${item.published ? 'bg-accent/20 text-primary' : 'bg-muted text-muted-foreground'}`}>{item.published ? 'Published' : 'Draft'}</span>
+                    {!item.published && <Button type="button" size="sm" onClick={() => setPublished(item.id, true)} data-testid={`button-publish-${item.id}`}>Publish</Button>}
+                    <Button type="button" size="sm" variant="outline" onClick={() => { setEditingId(editingId === item.id ? null : item.id); setError(''); setNotice(''); }} data-testid={`button-edit-${item.id}`}><Pencil size={14} /> Edit</Button>
+                    <button type="button" onClick={() => remove(item.id, item.title)} className="rounded-md p-2 text-muted-foreground transition hover:bg-muted hover:text-destructive" aria-label={`Delete ${item.title}`} data-testid={`button-delete-notice-${item.id}`}><Trash2 size={15} /></button>
+                  </div>
+                </NoticeRow>} />}
+        </>}
+      </section>
   </>;
 }
 
@@ -3561,12 +3599,24 @@ function StudentAnnouncementsPage() {
   };
   useEffect(() => { load(); }, []);
 
+  const [viewModule, setViewModule] = useState<Module | null>(null);
+  const viewNotices = viewModule == null || notices == null ? [] : notices.filter((n) => n.module === viewModule);
   return <>
-    <PageHeader kicker="Student / announcements" title="Announcements" detail="Notices from your branch's modules, kept apart. Click a title to read the whole notice." />
+    <PageHeader kicker="Student / announcements" title="Announcements" detail="Pick a module below to see the notices published for it. Click a title to read the whole notice." />
     {failed ? <ErrorState retry={load} />
       : notices == null || user == null || branches == null ? <div className="grid gap-4">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl bg-muted" />)}</div>
       : branchModules.length === 0 ? <EmptyState title="No modules yet" detail="Your branch has no modules to show." icon={BookOpen} />
-      : <NoticesByModule notices={notices} modules={branchModules} emptyDetail="No announcements from this module yet." />}
+      : <>
+        <label className="grid w-full max-w-sm gap-1.5 text-sm font-medium">Module
+          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={viewModule ?? ''} onChange={(e) => setViewModule(e.target.value ? e.target.value as Module : null)} data-testid="select-student-notice-module">
+            <option value="">— Select a module —</option>
+            {branchModules.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
+          </select>
+        </label>
+        {viewModule == null ? <p className="mt-6 text-sm text-muted-foreground">Choose a module to see its notices.</p>
+          : viewNotices.length === 0 ? <p className="mt-6 text-sm text-muted-foreground">No announcements from this module yet.</p>
+          : <NoticesByModule notices={viewNotices} modules={catalog.filter((m) => m.key === viewModule)} emptyDetail="No announcements from this module yet." />}
+      </>}
   </>;
 }
 
@@ -3823,7 +3873,7 @@ function StudentProjectPage() {
                     <h2 className="mt-0 font-display text-xl font-bold">{meta.name}</h2>
                   </div>
                   <Button size="sm" onClick={() => toggleUploaded(meta.key)} data-testid={`button-view-uploaded-${meta.key}`}>
-                    View Uploaded Projects
+Uploaded Projects
                   </Button>
                 </div>
 
@@ -4184,6 +4234,142 @@ function StudentPage({ user }: { user: CurrentUser }) {
           <StatCard label="Present / absent" value={`${report.overall.present} / ${report.overall.absent}`} detail={`${report.overall.percentage}% overall, updated as each month is uploaded`} icon={CalendarCheck2} accent />
         </div>
         <MonthlyProgress report={report} />
+</>}
+  </>;
+}
+
+// Module picker used inside the "Class tests" dialog that the icon next to the month
+// picker opens. Fetches the student's own tests, asks for a module, then renders that
+// module's tests as expandable date tiles.
+function StudentClassTestsPicker() {
+  const [tests, setTests] = useState<{ module: string; tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[] }[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedModule, setSelectedModule] = useState<string>('');
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch('/api/student/class-tests')
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (!alive) return; setTests(ok ? data : null); })
+      .catch(() => { if (alive) setTests(null); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const groups = tests ?? [];
+  const selected = groups.find((g) => g.module === selectedModule);
+  const moduleTests = selected?.tests ?? [];
+  const marked = moduleTests.filter((t) => t.marks != null).length;
+  return <div className="space-y-4">
+    {loading ? <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}</div>
+      : groups.length === 0 ? <p className="text-sm text-muted-foreground">No tests have been held on your modules yet.</p>
+      : <>
+        <label className="grid gap-1.5 text-sm font-medium">Module
+          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={selectedModule} onChange={(e) => setSelectedModule(e.target.value)} data-testid="select-student-class-tests-module">
+            <option value="">— Select a module —</option>
+            {groups.map((g) => <option key={g.module} value={g.module}>{moduleNames[g.module as Module] ?? g.module}</option>)}
+          </select>
+        </label>
+        {selectedModule === '' ? <p className="text-sm text-muted-foreground">Choose a module to see its tests.</p>
+          : moduleTests.length === 0 ? <p className="text-sm text-muted-foreground">No tests have been held on this module yet.</p>
+          : <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-border p-3" data-testid="tile-student-class-tests-held"><p className="text-xs font-medium text-muted-foreground">Tests held</p><p className="mt-1 font-display text-2xl font-bold">{moduleTests.length}</p></div>
+              <div className="rounded-lg border border-border p-3" data-testid="tile-student-class-tests-marked"><p className="text-xs font-medium text-muted-foreground">Marked</p><p className="mt-1 font-display text-2xl font-bold">{marked}</p><p className="text-xs text-muted-foreground">{moduleTests.length ? `${Math.round((marked / moduleTests.length) * 100)}% scored` : 'no tests yet'}</p></div>
+            </div>
+            <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+              {[...moduleTests].sort((a, b) => (a.date < b.date ? 1 : -1)).map((test) => <StudentClassTestTile key={test.id} test={test} />)}
+            </div>
+          </>}
+      </>}
+  </div>;
+}
+
+// Shared expandable date tile for a single student's class-test mark. Used both on the
+// student dashboard and on the dedicated Class tests page, so the two views look the
+// same. Only one tile is open at a time.
+function StudentClassTestTile({ test, defaultExpanded = false }: { test: { id: number; date: string; title: string; marks: number | null; feedback: string | null }; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  return <div className="overflow-hidden rounded-lg border border-border" data-testid={`student-class-test-tile-${test.id}`}>
+    <button type="button" onClick={() => setExpanded((v) => !v)} className="flex w-full items-center justify-between gap-3 bg-card px-4 py-3 text-left hover:bg-muted/60">
+      <div className="min-w-0">
+        <p className="font-mono-ui text-sm font-semibold">{test.date}</p>
+        <p className="truncate text-sm text-muted-foreground">{test.title}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks == null ? 'Not marked' : 'Marked'}</span>
+        <ChevronDown size={14} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </div>
+    </button>
+    {expanded && <div className="border-t border-border bg-card/60 px-4 py-3">
+      <table className="w-full border-collapse text-left text-sm" data-testid={`table-student-class-test-marks-${test.id}`}>
+        <thead>
+          <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+            <th className="py-1.5 pr-3 font-semibold">Date</th>
+            <th className="py-1.5 pr-3 font-semibold">Test</th>
+            <th className="py-1.5 pr-3 font-semibold">Marks</th>
+            <th className="py-1.5 pr-3 font-semibold">Feedback</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr className="border-b border-border/40">
+            <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{test.date}</td>
+            <td className="py-1.5 pr-3 font-semibold">{test.title}</td>
+            <td className="py-1.5 pr-3">{test.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{test.marks}</span>}</td>
+            <td className="py-1.5 pr-3 text-muted-foreground">{test.feedback ?? '—'}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>}
+  </div>;
+}
+
+// Class tests page for students. Mirrors the teacher's class-test View layout — a list of
+// date tiles, each expandable to show the marks uploaded for that test. The only
+// difference is scope: a student sees only their own marks, never anyone else's.
+// Pick a module first, then that module's tests render below it.
+function StudentClassTestsPage() {
+  const [tests, setTests] = useState<{ module: string; tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[] }[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [selectedModule, setSelectedModule] = useState<string>('');
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setFailed(false);
+    fetch('/api/student/class-tests')
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => { if (!alive) return; setTests(ok ? data : null); if (!ok) setFailed(true); })
+      .catch(() => { if (alive) setFailed(true); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const groups = tests ?? [];
+  const moduleOptions = groups.map((g) => g.module);
+  const selected = groups.find((g) => g.module === selectedModule);
+  const moduleTests = selected?.tests ?? [];
+  const marked = moduleTests.filter((t) => t.marks != null).length;
+  return <>
+    <PageHeader kicker="Student / class tests" title="Class tests" detail="Pick a module below to see the tests held on it and the marks uploaded for each one." />
+    {failed ? <ErrorState retry={() => window.location.reload()} />
+      : loading ? <div className="space-y-3">{[1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}</div>
+      : groups.length === 0 ? <EmptyState title="No class tests yet" detail="No tests have been held on your modules. Check back once your teacher has run one." icon={FileText} />
+      : <>
+        <label className="grid w-full max-w-sm gap-1.5 text-sm font-medium">Module
+          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={selectedModule} onChange={(e) => setSelectedModule(e.target.value)} data-testid="select-student-class-tests-module">
+            <option value="">— Select a module —</option>
+            {moduleOptions.map((m) => <option key={m} value={m}>{moduleNames[m as Module] ?? m}</option>)}
+          </select>
+        </label>
+        {selectedModule === '' ? <p className="mt-6 text-sm text-muted-foreground">Choose a module to see its tests.</p>
+          : moduleTests.length === 0 ? <p className="mt-6 text-sm text-muted-foreground">No tests have been held on this module yet.</p>
+          : <>
+            <div className="mt-6 mb-6 grid gap-4 sm:grid-cols-2">
+              <StatCard label="Tests held" value={moduleTests.length} detail={moduleNames[selectedModule as Module] ?? selectedModule} icon={FileText} />
+              <StatCard label="Marked" value={marked} detail={moduleTests.length ? `${Math.round((marked / moduleTests.length) * 100)}% of tests scored` : 'no tests yet'} icon={ClipboardCheck} accent />
+            </div>
+            <div className="max-h-[70vh] space-y-2 overflow-y-auto">
+              {[...moduleTests].sort((a, b) => (a.date < b.date ? 1 : -1)).map((test) => <StudentClassTestTile key={test.id} test={test} />)}
+            </div>
+          </>}
       </>}
   </>;
 }
@@ -5880,7 +6066,7 @@ function Router() {
   // A route change resets the scroll: staying where you were (say, halfway down a
   // long student list) would make the opened detail screen start in the middle.
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [pathname]);
-  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:code"><LoginCodeRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={pathname}><Switch><Route path="/" component={Home} /><Route path="/admin" component={AdminLoginPage} /><Route path="/admin/login" component={AdminLoginPage} /><Route path="/student/login" component={StudentAuthPage} /><Route path="/admin/dashboard"><Protected role="admin"><AdminModulesPage /></Protected></Route><Route path="/admin/dashboard/:module"><Protected role="admin"><AdminModuleReportPage /></Protected></Route><Route path="/admin/branch/:branchId/module/:module"><Protected role="admin"><AdminBranchModuleRoute /></Protected></Route><Route path="/admin/branch/:branchId/module/:module/report"><Protected role="admin"><AdminBranchModuleReportRoute /></Protected></Route><Route path="/admin/module/:module"><Protected role="admin"><ModuleDetailPage /></Protected></Route><Route path="/admin/settings"><Protected role="admin"><AdminSettingsPage /></Protected></Route><Route path="/admin/panel-logins"><Protected role="admin"><AdminPanelLoginsPage /></Protected></Route><Route path="/admin/students"><Protected role="admin"><AdminStudentsPage /></Protected></Route><Route path="/admin/students/enrolled"><Protected role="admin"><AdminEnrolledPage /></Protected></Route><Route path="/admin/students/:id"><Protected role="admin"><StudentDetailPage scope="admin" /></Protected></Route><Route path="/admin/announcements"><Protected role="admin"><AdminAnnouncementsFromRoute /></Protected></Route><Route path="/admin/documents"><Protected role="admin"><AdminDocumentsFromRoute /></Protected></Route><Route path="/admin/branches"><Protected role="admin"><AdminBranchesPage /></Protected></Route><Route path="/admin/branch/:id"><Protected role="admin"><AdminBranchPage /></Protected></Route><Route path="/admin/:panel"><ModulePanelRoute /></Route><Route path="/teacher/add-student"><Protected role="teacher"><TeacherAddStudentFromRoute /></Protected></Route><Route path="/teacher/attendance"><Protected role="teacher"><TeacherAttendanceFromRoute /></Protected></Route><Route path="/teacher/assessment"><Protected role="teacher"><TeacherAssessmentFromRoute /></Protected></Route><Route path="/teacher/announcements"><Protected role="teacher"><TeacherAnnouncementsFromRoute /></Protected></Route><Route path="/teacher/documents"><Protected role="teacher"><TeacherDocumentsFromRoute /></Protected></Route><Route path="/teacher/students"><Protected role="teacher"><TeacherStudentListFromRoute /></Protected></Route><Route path="/teacher/students/:id"><Protected role="teacher"><StudentDetailPage scope="teacher" /></Protected></Route><Route path="/teacher"><Protected role="teacher"><TeacherPageFromRoute /></Protected></Route><Route path="/student/profile"><Protected role="student"><StudentProfileFromRoute /></Protected></Route><Route path="/student/modules"><Protected role="student"><StudentModulesPage /></Protected></Route><Route path="/student/project"><Protected role="student"><StudentProjectPage /></Protected></Route><Route path="/student/announcements"><Protected role="student"><StudentAnnouncementsPage /></Protected></Route><Route path="/student/class-tests"><Protected role="student"><StudentClassTestsFromRoute /></Protected></Route><Route path="/student"><Protected role="student"><StudentPageFromRoute /></Protected></Route><Route path="/branch/module/:module/report"><Protected role="branch"><BranchModuleReportRoute /></Protected></Route><Route path="/branch/module/:module"><Protected role="branch"><BranchModuleRoute /></Protected></Route><Route path="/branch/add-student"><Protected role="branch"><BranchAddStudentPage /></Protected></Route><Route path="/branch/students/:id"><Protected role="branch"><StudentDetailPage scope="branch" /></Protected></Route><Route path="/branch/students"><Protected role="branch"><BranchStudentListPage /></Protected></Route><Route path="/branch/documents"><Protected role="branch"><BranchDocumentsFromRoute /></Protected></Route><Route path="/branch/announcements"><Protected role="branch"><BranchAnnouncementsFromRoute /></Protected></Route><Route path="/branch"><Protected role="branch"><BranchPage /></Protected></Route><Route path="/:code"><LoginCodeRoute /></Route><Route component={() => <div className="grid min-h-[100dvh] place-items-center p-6"><div className="text-center"><p className="font-mono-ui text-xs uppercase tracking-wider text-primary">404</p><h1 className="mt-2 font-display text-4xl font-bold">Page not found</h1><Link href="/" className="mt-5 inline-flex text-sm font-semibold text-primary" data-testid="link-not-found-home">Return home <ArrowRight size={15} /></Link></div></div>} /></Switch></ErrorBoundary>;
 }
 
 function TeacherAddStudentFromRoute() {
@@ -6201,7 +6387,7 @@ finally { setDeletingId(''); setSaving(''); }
           <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
         </div>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Two projects a month — the first halfway through, the second at the end. Cycle numbers never move, so month 3 project 1 stays month 3 project 1. A blank marks box saves as 'not marked'. After saving you get an Edit button on that row.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Two projects a month. A blank marks box saves as 'not marked' — after saving you get an Edit button on that row.</p>
     </section>
 
     {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to load the roster and start entering marks.</p>}
@@ -6243,7 +6429,7 @@ finally { setDeletingId(''); setSaving(''); }
                   <td className="py-2 pr-3">
                     {link ? (
                       <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid={`project-link-${student.id}`}>
-                        <ExternalLink size={14} /> View Project
+                        <ExternalLink size={14} /> Uploaded
                       </a>
                     ) : (
                       <span className="text-xs text-muted-foreground">Not uploaded</span>
@@ -6310,7 +6496,7 @@ finally { setDeletingId(''); setSaving(''); }
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Class test</DialogTitle>
-          <DialogDescription>Pick the date the test was held, give it a title, then enter marks against every student on this module. Saving replaces the marks for that test date.</DialogDescription>
+          <DialogDescription>Pick the test date and give it a title, then enter marks against every student. Saving replaces the marks for that test date.</DialogDescription>
         </DialogHeader>
         {classTestError && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-test-error">{classTestError}</p>}
         {classTestNotice && <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-class-test-success">{classTestNotice}</p>}
@@ -6542,6 +6728,11 @@ function LoginCodeRoute() {
 function StudentPageFromRoute() {
   const { data: user } = useCurrentUser();
   return user ? <StudentPage user={user} /> : null;
+}
+
+function StudentClassTestsFromRoute() {
+  const { data: user } = useCurrentUser();
+  return user ? <StudentClassTestsPage /> : null;
 }
 
 function StudentProfileFromRoute() {

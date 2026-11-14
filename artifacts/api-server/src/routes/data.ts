@@ -917,7 +917,62 @@ router.post(
           },
         });
     }
-    res.json({ id: test.id, date, title, saved: true });
+res.json({ id: test.id, date, title, saved: true });
+  },
+);
+
+// Student-facing class tests: every test held on any module this student belongs to,
+// with only this student's own marks. Students never see another learner's marks.
+router.get(
+  "/student/class-tests",
+  requireRole("student"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.studentId) {
+      res.status(401).json({ error: "Student session not found." });
+      return;
+    }
+    const modules = await studentModuleKeys(req.auth.studentId);
+    const out: {
+      module: string;
+      tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[];
+    }[] = [];
+    for (const module of modules) {
+      const rows = await db
+        .select({
+          id: classTestsTable.id,
+          date: classTestsTable.date,
+          title: classTestsTable.title,
+          marks: classTestMarksTable.marks,
+          feedback: classTestMarksTable.feedback,
+        })
+        .from(classTestsTable)
+        .leftJoin(
+          classTestMarksTable,
+          and(
+            eq(classTestMarksTable.testId, classTestsTable.id),
+            eq(classTestMarksTable.studentId, req.auth.studentId),
+          ),
+        )
+        .where(eq(classTestsTable.module, module))
+        .orderBy(desc(classTestsTable.date));
+      out.push({
+        module,
+        tests: (rows as unknown as Array<{
+          id: number;
+          date: string;
+          title: string;
+          marks: number | null;
+          feedback: string | null;
+        }>).map((row) => ({
+          id: row.id,
+          date: row.date,
+          title: row.title,
+          marks: row.marks,
+          feedback: row.feedback,
+        })),
+      });
+    }
+    res.json(out);
   },
 );
 
