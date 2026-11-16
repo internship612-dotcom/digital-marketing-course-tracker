@@ -2464,8 +2464,18 @@ function MonthlyStudentAttendancePanel({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [overwriteLocked, setOverwriteLocked] = useState(false);
-  const [error, setError] = useState('');
+const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
+  // The student roster is a snapshot of who was enrolled on or before the chosen
+  // month. Switching months re-filters the same list — a teacher marking November must
+  // not see students who enrolled in December, and the register for an earlier month
+  // keeps the students who were there at the time.
+  const roster = useMemo(() => {
+    const [y, m] = month.split('-').map(Number);
+    const monthEnd = y && m ? new Date(y, m, 0) : null;
+    return students.filter((s) => !monthEnd || s.dateOfJoining <= monthEnd.toISOString().slice(0, 10));
+  }, [students, month]);
 
   const resetState = () => {
     setQuery('');
@@ -2476,18 +2486,29 @@ function MonthlyStudentAttendancePanel({
     setNotice('');
   };
 
-  const matches = useMemo(() => {
+const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return students.filter((s) =>
+    return roster.filter((s) =>
       s.id.toLowerCase().includes(q) ||
       s.fullName.toLowerCase().includes(q) ||
       (s.fathersName ?? '').toLowerCase().includes(q)
     ).slice(0, 12);
-  }, [query, students]);
+  }, [query, roster]);
 
-  const selected = students.find((s) => s.id === selectedId) ?? null;
+  const selected = roster.find((s) => s.id === selectedId) ?? null;
   const mod = data?.modules.find((m) => m.module === moduleId) ?? data?.modules[0] ?? null;
+  // If the selected student drops out of the roster when the month changes, clear the
+  // selection rather than showing a ghost row from an earlier month.
+  useEffect(() => {
+    if (selectedId && !roster.find((s) => s.id === selectedId)) {
+      setSelectedId('');
+      setData(null);
+      setDraft({});
+      setNotice('');
+      setError('');
+    }
+  }, [roster, selectedId]);
   const cancelledMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of mod?.cancelledDates ?? []) map.set(c.date, c.reason);

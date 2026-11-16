@@ -3069,13 +3069,17 @@ router.get(
       .select()
       .from(studentsTable)
       .orderBy(asc(studentsTable.fullName));
+    // Only students enrolled on or before this date show up. A teacher marking a day in
+    // November must not see students who enrolled in December — the register for that
+    // month is a snapshot of who was actually there, and it stays that way.
+    const enrolled = students.filter((s) => String(s.dateOfJoining).slice(0, 10) <= isoDay(date));
     const rows = await db
       .select()
       .from(attendanceTable)
       .where(eq(attendanceTable.module, req.auth.module));
 
     res.json(
-      students.map((student) => {
+      enrolled.map((student) => {
         const slot = weekAndDayFor(student.dateOfJoining, date);
         const row = slot
           ? rows.find((r) => r.studentId === student.id && r.week === slot.week)
