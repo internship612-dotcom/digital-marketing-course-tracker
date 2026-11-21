@@ -3133,7 +3133,7 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
         </div>
       </div>
       <div className={`mt-5 grid gap-3 ${compact || scoped ? '' : 'lg:grid-cols-3'}`}>
-        {shownModules.map((item) => <div key={item.module} className="rounded-lg border border-border p-4" data-testid={`card-marks-${item.module}`}>
+        {shownModules.map((item) => <div key={item.module} className="min-w-0 rounded-lg border border-border p-4" data-testid={`card-marks-${item.module}`}>
           <p className="font-semibold">{moduleNames[item.module]}</p>
           <div className="mt-3 grid gap-2">
             {item.projects.map((project) => <div key={project.project} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
@@ -3149,7 +3149,12 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
                 )}
               </div>
             </div>)}
-            {item.projects.some((project) => project.feedback) && <p className="mt-1 text-xs text-muted-foreground">{item.projects.filter((project) => project.feedback).map((project) => `P${project.project}: ${project.feedback}`).join(' · ')}</p>}
+            {/* One line per project, wrapped anywhere: a long feedback with no spaces used to
+                run straight off the card and across the screen. */}
+            {item.projects.filter((project) => project.feedback).map((project) => <div key={`fb-${project.project}`} className="mt-1 border-t border-border/60 pt-2" data-testid={`feedback-${item.module}-${project.project}`}>
+              <p className="text-xs font-semibold text-foreground">Project {project.project} Feedback:</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-xs text-muted-foreground [overflow-wrap:anywhere]">{project.feedback}</p>
+            </div>)}
           </div>
         </div>)}
       </div>
@@ -4336,7 +4341,7 @@ function StudentClassTestTile({ test, defaultExpanded = false }: { test: { id: n
             <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{test.date}</td>
             <td className="py-1.5 pr-3 font-semibold">{test.title}</td>
             <td className="py-1.5 pr-3">{test.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{test.marks}</span>}</td>
-            <td className="py-1.5 pr-3 text-muted-foreground">{test.feedback ?? '—'}</td>
+            <td className="py-1.5 pr-3 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{test.feedback ?? '—'}</td>
           </tr>
         </tbody>
       </table>
@@ -6313,6 +6318,9 @@ const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: str
   // Per-student "View" icon opens the shared StudentAssessmentDialog, which shows
   // this module's whole project history for one student.
   const [viewTarget, setViewTarget] = useState<{ studentId: string; label: string } | null>(null);
+  // The eye button beside each feedback box opens the whole text read-only: the single-line
+  // input cuts long feedback off, and scrolling inside it was the only way to read it.
+  const [feedbackTarget, setFeedbackTarget] = useState<{ studentId: string; label: string } | null>(null);
 
   const confirmDelete = async () => {
     if (!deleteTarget || cycle == null) return;
@@ -6460,7 +6468,12 @@ finally { setDeletingId(''); setSaving(''); }
                     <Input ref={(node) => { marksBox.current[student.id] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
                   </td>
                   <td className="py-2 pr-3">
-                    <Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
+                    <span className="flex items-center gap-1">
+                      <Input className="h-9 min-w-[180px]" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
+                      <Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 p-0" onClick={() => setFeedbackTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={!row.feedback.trim()} title="See the complete feedback" data-testid={`button-view-feedback-${student.id}`}>
+                        <Eye size={15} />
+                      </Button>
+                    </span>
                   </td>
 <td className="py-2">
                      <span className="flex flex-wrap items-center gap-2">
@@ -6502,6 +6515,21 @@ finally { setDeletingId(''); setSaving(''); }
           <Button type="button" variant="destructive" autoFocus onClick={confirmDelete} disabled={!deleteTarget || !!deletingId} data-testid="button-confirm-delete-marks">
             {deletingId ? 'Deleting…' : 'Delete'}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={feedbackTarget != null} onOpenChange={(open) => { if (!open) setFeedbackTarget(null); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Feedback</DialogTitle>
+          <DialogDescription>{feedbackTarget ? `${feedbackTarget.label} · month ${month}, project ${project}` : ''}</DialogDescription>
+        </DialogHeader>
+        {feedbackTarget && <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-sm [overflow-wrap:anywhere]" data-testid="text-feedback-popup">
+          {draft(feedbackTarget.studentId).feedback || <span className="text-muted-foreground">No feedback written yet.</span>}
+        </div>}
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={() => setFeedbackTarget(null)} data-testid="button-close-feedback-popup">Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
