@@ -725,7 +725,7 @@ function PageHeader({ kicker, title, detail, action }: { kicker: ReactNode; titl
       <h1 className="mt-2 font-display text-3xl font-bold leading-tight tracking-tight sm:text-4xl lg:text-5xl" data-testid="text-page-title">{title}</h1>
       <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
     </div>
-    {action && <div className="shrink-0 sm:ml-auto">{action}</div>}
+    {action && <div className="min-w-0 max-w-full sm:ml-auto [&>*]:flex-wrap [&>*]:justify-start sm:[&>*]:justify-end">{action}</div>}
   </div>;
 }
 
@@ -3322,7 +3322,7 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
 
   return <article className={`group relative rounded-2xl border border-border bg-card shadow-sm transition-shadow ${!editing ? 'cursor-pointer hover:border-primary/30 hover:shadow-lg' : ''}`} onClick={toggleFromArticle} data-testid={`notice-${notice.id}`}>
     <div className={`h-1 w-full ${notice.published ? 'bg-gradient-to-r from-primary via-primary/60 to-accent' : 'bg-gradient-to-r from-amber-400 via-amber-300 to-transparent'}`} />
-    <div className="flex items-start gap-2 p-4 sm:p-5">
+    <div className="flex flex-wrap items-start gap-2 p-4 sm:flex-nowrap sm:p-5">
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpenDialog((v) => !v); }} aria-expanded={expanded || openDialog} disabled={editing} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default" data-testid={`button-toggle-notice-${notice.id}`}>
         <span className={`mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl ${notice.published ? 'bg-accent text-primary' : 'bg-amber-100 text-amber-700'}`}>
           {auto ? <Sparkles size={18} /> : <Megaphone size={17} />}
@@ -3341,7 +3341,9 @@ function NoticeRow({ notice, children, editing, busy, onSave, onCancel }: {
         </span>
       </button>
       <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-primary"><ChevronDown size={18} className={`transition-transform ${expanded || openDialog ? 'rotate-180' : ''}`} /></span>
-      {children}
+      {/* On a phone the row actions drop under the title instead of pushing the card
+          past the screen edge. */}
+      {children && <div className="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto sm:flex-nowrap">{children}</div>}
     </div>
 
     {editing
@@ -3419,7 +3421,7 @@ function NoticesByModule({ notices, emptyDetail, modules: visibleProp, actions, 
   const visible = visibleProp ?? catalog;
   return <div className="grid gap-6">{visible.map((meta) => {
     const items = notices.filter((n) => n.module === meta.key);
-    return <section key={meta.key} data-testid={`notice-group-${meta.key}`}>
+    return <section key={meta.key} className="min-w-0" data-testid={`notice-group-${meta.key}`}>
       <div className="mb-3 flex items-baseline gap-2">
         <h2 className="font-display text-xl font-bold">{meta.name}</h2>
         <span className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{items.length} {items.length === 1 ? 'notice' : 'notices'}</span>
@@ -3920,8 +3922,8 @@ function StudentProjectPage() {
             const submittedCycles = Object.keys(moduleSubs).map(Number).sort((a, b) => a - b);
             return (
               <section key={meta.key} className="rounded-xl border border-border bg-card p-5" data-testid={`project-module-${meta.key}`}>
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <Archive size={18} className="text-primary" />
                     <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Module {meta.number}</p>
                     <h2 className="mt-0 font-display text-xl font-bold">{meta.name}</h2>
