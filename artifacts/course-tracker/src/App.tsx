@@ -6166,90 +6166,6 @@ function TeacherAttendanceFromRoute() {
 }
 
 // Marks for one project, for every student on the module roster at once. The single-student
-// Shared per-student assessment dialog: every cycle on this module for one student.
-// Both the Mark Assessment grid and the Class Assessment page open this when a teacher
-// clicks a row's View icon, so the two desks can never show different data.
-type CycleMark = { cycle: number; marks: number | null; feedback: string | null; projectName: string | null; enteredAt: string | null };
-function StudentAssessmentDialog({
-  open,
-  studentId,
-  label,
-  onClose,
-}: {
-  open: boolean;
-  studentId: string | null;
-  label: string | null;
-  onClose: () => void;
-}) {
-  const [data, setData] = useState<{ student: { id: string; fullName: string }; cycles: Record<number, CycleMark> } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!open || !studentId) return;
-    let alive = true;
-    setLoading(true); setError(''); setData(null);
-    fetch(`/api/teacher/assessments/student/${encodeURIComponent(studentId)}`)
-      .then((res) => res.json().then((json) => ({ ok: res.ok, json })))
-      .then(({ ok, json }) => {
-        if (!alive) return;
-        if (!ok) { setError((json as { error?: string })?.error ?? 'Could not load this student\'s assessments.'); return; }
-        setData(json as typeof data);
-      })
-      .catch(() => { if (alive) setError('Could not load this student\'s assessments.'); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [open, studentId]);
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Class Assessment</DialogTitle>
-          <DialogDescription>{label ? `${label}` : ''}</DialogDescription>
-        </DialogHeader>
-        {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-assessment-error">{error}</p>}
-        {loading ? <div className="space-y-3">{[1, 2, 3, 4, 5, 6].map((i) => <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />)}</div>
-          : data ? (
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left text-sm" data-testid="table-class-assessment">
-                <thead>
-                  <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
-                    <th className="py-2 pr-3 font-semibold">Cycle</th>
-                    <th className="py-2 pr-3 font-semibold">Month · Project</th>
-                    <th className="py-2 pr-3 font-semibold">Project name</th>
-                    <th className="py-2 pr-3 font-semibold">Marks</th>
-                    <th className="py-2 pr-3 font-semibold">Feedback</th>
-                    <th className="py-2 font-semibold">Entered</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(data.cycles).map(([cycle, entry]) => {
-                    const c = Number(cycle);
-                    const month = Math.floor((c - 1) / 2) + 1;
-                    const project = (c - 1) % 2 + 1;
-                    return (
-                      <tr key={cycle} className="border-b border-border/60">
-                        <td className="py-2 pr-3 font-mono-ui text-xs font-semibold">Cycle {c}</td>
-                        <td className="py-2 pr-3 text-muted-foreground">Month {month} · Project {project}</td>
-                        <td className="py-2 pr-3">{entry.projectName ?? <span className="text-xs text-muted-foreground">—</span>}</td>
-                        <td className="py-2 pr-3">{entry.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{entry.marks}</span>}</td>
-                        <td className="py-2 pr-3 text-muted-foreground">{entry.feedback ?? '—'}</td>
-                        <td className="py-2 pr-3 text-xs text-muted-foreground">{entry.enteredAt ? new Date(entry.enteredAt).toLocaleDateString() : '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        <DialogFooter className="gap-2 sm:justify-end">
-          <Button type="button" variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // form still lives on the record; this is the pass you make when you have a class full of
 // marks to enter and do not want to open twenty records to do it.
@@ -6345,9 +6261,6 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
 
 const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: string } | null>(null);
   const [deletingId, setDeletingId] = useState('');
-  // Per-student "View" icon opens the shared StudentAssessmentDialog, which shows
-  // this module's whole project history for one student.
-  const [viewTarget, setViewTarget] = useState<{ studentId: string; label: string } | null>(null);
   // The eye button beside each feedback box opens the whole text read-only: the single-line
   // input cuts long feedback off, and scrolling inside it was the only way to read it.
   const [feedbackTarget, setFeedbackTarget] = useState<{ studentId: string; label: string } | null>(null);
@@ -6460,7 +6373,7 @@ finally { setDeletingId(''); setSaving(''); }
       {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
         : shown.length === 0 ? <EmptyState title="No matching students" detail={all.length === 0 ? 'Nobody is enrolled yet.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
         : <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-left text-sm" data-testid="table-assessment">
+          <table className="w-full border-collapse text-left text-sm" data-testid="table-assessment">
             <thead>
               <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
                 <th className="py-2 pr-3 font-semibold">#</th>
@@ -6469,7 +6382,7 @@ finally { setDeletingId(''); setSaving(''); }
                 <th className="py-2 pr-3 font-semibold">Project Link</th>
                 <th className="py-2 pr-3 font-semibold">Marks</th>
                 <th className="py-2 pr-3 font-semibold">Feedback</th>
-                <th className="py-2 font-semibold">Action</th>
+                <th className="sticky right-0 z-10 bg-card py-2 pl-2 font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -6499,23 +6412,24 @@ finally { setDeletingId(''); setSaving(''); }
                   </td>
                   <td className="py-2 pr-3">
                     <span className="flex items-center gap-1">
-                      <Input className="h-9 min-w-[180px]" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
+                      <Input className="h-9 w-44 lg:w-56" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
                       <Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 p-0" onClick={() => setFeedbackTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={!row.feedback.trim()} title="See the complete feedback" data-testid={`button-view-feedback-${student.id}`}>
                         <Eye size={15} />
                       </Button>
                     </span>
                   </td>
-<td className="py-2">
-                     <span className="flex flex-wrap items-center gap-2">
+<td className="sticky right-0 z-10 whitespace-nowrap bg-card py-2 pl-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">
+                     {/* Always one line: the table scrolls sideways rather than letting Delete
+                         wrap under the other buttons. */}
+                     <span className="flex flex-nowrap items-center gap-1">
                        <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
-                       <Button type="button" size="sm" variant="ghost" onClick={() => setViewTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} data-testid={`button-view-assessment-${student.id}`} title="View this student's whole project history"><Eye size={14} /> View</Button>
                        {isSaved && <>
                         <Button type="button" size="sm" variant="ghost" onClick={() => {
                           setSaved((v) => ({ ...v, [student.id]: false }));
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
                           marksBox.current[student.id]?.focus();
-                        }} data-testid={`button-edit-marks-${student.id}`}>Edit</Button>
-                        <Button type="button" size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:text-destructive" onClick={() => cycle != null && setDeleteTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={saving === student.id || loading || deletingId === student.id} data-testid={`button-delete-marks-${student.id}`} title="Delete saved marks">
+                        }} className="h-8 w-8 shrink-0 p-0" title="Edit marks" aria-label="Edit marks" data-testid={`button-edit-marks-${student.id}`}><Pencil size={14} /></Button>
+                        <Button type="button" size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:text-destructive" onClick={() => cycle != null && setDeleteTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={saving === student.id || loading || deletingId === student.id} data-testid={`button-delete-marks-${student.id}`} title="Delete saved marks">
                           <Trash2 size={14} />
                         </Button>
                       </>}
@@ -6562,13 +6476,6 @@ finally { setDeletingId(''); setSaving(''); }
         </DialogFooter>
       </DialogContent>
     </Dialog>
-
-    <StudentAssessmentDialog
-      open={viewTarget != null}
-      studentId={viewTarget?.studentId ?? null}
-      label={viewTarget?.label ?? null}
-      onClose={() => setViewTarget(null)}
-    />
 
     <Dialog open={classTestOpen} onOpenChange={(v) => { if (!v) { setClassTestOpen(false); setClassTestError(''); setClassTestNotice(''); } }}>
       <DialogContent className="sm:max-w-3xl">
