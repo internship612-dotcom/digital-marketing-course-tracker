@@ -3050,6 +3050,66 @@ router.delete(
   },
 );
 
+// Per-day status for one calendar month, for the circles on the register's date picker.
+// It applies the same rules as GET /teacher/attendance/day, so a day reads "marked" here
+// exactly when every eligible row on that day's register has been saved:
+//   off     — an institute event, or this module's class was cancelled that day
+//   marked  — every student enrolled by then has a saved mark (P, A or L)
+//   pending — at least one of them has not been marked yet
+// Sundays and days with nobody enrolled are left out. Future days are returned too; the
+// client hides them, because "today" depends on the teacher's clock, not the server's.
+router.get(
+  "/teacher/attendance/month-status",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    const module = req.auth?.module;
+    if (!module) {
+      res.status(400).json({ error: "Missing module." });
+      return;
+    }
+    const month = typeof req.query.month === "string" ? req.query.month : "";
+    const match = /^(\d{4})-(\d{2})$/.exec(month);
+    const year = match ? Number(match[1]) : NaN;
+    const monthIndex = match ? Number(match[2]) - 1 : NaN;
+    if (!match || monthIndex < 0 || monthIndex > 11) {
+      res.status(400).json({ error: "Choose a valid month (YYYY-MM)." });
+      return;
+    }
+    const [students, rows, events, cancellations] = await Promise.all([
+      db.select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining }).from(studentsTable),
+      db.select().from(attendanceTable).where(eq(attendanceTable.module, module)),
+      eventDates(),
+      classCancellationsFor([module]),
+    ]);
+    const cancelled = cancellations.get(module) ?? new Map<string, string>();
+    const rowFor = new Map(rows.map((row) => [`${row.studentId}:${row.week}`, row]));
+    const days: Record<string, "marked" | "pending" | "off"> = {};
+    const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+    for (let d = 1; d <= lastDay; d += 1) {
+      const date = new Date(Date.UTC(year, monthIndex, d));
+      if ((date.getUTCDay() + 6) % 7 > 5) continue; // Sunday
+      const iso = isoDay(date);
+      if (events.has(iso) || cancelled.has(iso)) {
+        days[iso] = "off";
+        continue;
+      }
+      let eligible = 0;
+      let marked = 0;
+      for (const student of students) {
+        if (String(student.dateOfJoining).slice(0, 10) > iso) continue;
+        const slot = weekAndDayFor(student.dateOfJoining, date);
+        if (!slot) continue;
+        eligible += 1;
+        const row = rowFor.get(`${student.id}:${slot.week}`);
+        if (row && (Boolean(row[slot.day]) || isLocked(row.lockedDays, slot.day))) marked += 1;
+      }
+      if (eligible === 0) continue;
+      days[iso] = marked === eligible ? "marked" : "pending";
+    }
+    res.json({ month, days });
+  },
+);
+
 // One row per student for a single calendar date, so a module owner can fill the
 // whole register in one pass instead of opening each student's calendar.
 router.get(

@@ -1968,12 +1968,24 @@ type Mark = 'present' | 'absent' | 'leave';
 // The trigger is whatever the caller passes as children, so the calendar icon that is
 // already on screen becomes the control rather than a second button appearing beside it.
 // Reused by the module desk, the admin module page and the register itself.
-function DatePicker({ value, onChange, max, testId, children, align = 'right' }: { value: string; onChange: (iso: string) => void; max?: string; testId?: string; children: ReactNode; align?: 'left' | 'right' }) {
+type RegisterDayStatus = 'marked' | 'pending' | 'off';
+const DAY_STATUS_RING: Record<RegisterDayStatus, string> = {
+  marked: 'border-emerald-500',
+  pending: 'border-red-500',
+  off: 'border-amber-400',
+};
+
+// `dayStatus` (optional) rings each past day: green = attendance marked, red = still
+// outstanding, yellow = no class (event or cancelled). `onMonthView` reports the month
+// the grid is showing, as YYYY-MM, so the caller can load that month's statuses.
+function DatePicker({ value, onChange, max, testId, children, align = 'right', dayStatus, onMonthView }: { value: string; onChange: (iso: string) => void; max?: string; testId?: string; children: ReactNode; align?: 'left' | 'right'; dayStatus?: Record<string, RegisterDayStatus>; onMonthView?: (month: string) => void }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState(() => new Date(`${value}T00:00:00Z`));
   const limit = max ?? todayIso();
 
   useEffect(() => { if (open) setView(new Date(`${value}T00:00:00Z`)); }, [open, value]);
+  const viewMonth = view.toISOString().slice(0, 7);
+  useEffect(() => { if (open) onMonthView?.(viewMonth); }, [open, viewMonth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return;
@@ -2007,14 +2019,17 @@ function DatePicker({ value, onChange, max, testId, children, align = 'right' }:
           const iso = cell.toISOString().slice(0, 10);
           const future = iso > limit;
           const chosen = iso === value;
+          const status = future ? undefined : dayStatus?.[iso];
           return <button
             key={index}
             type="button"
             disabled={future}
             onClick={() => { onChange(iso); setOpen(false); }}
-            className={`rounded-md py-1.5 text-xs transition ${chosen ? 'bg-primary font-bold text-primary-foreground' : future ? 'text-muted-foreground/40' : 'text-foreground hover:bg-muted'}`}
+            className={`grid place-items-center rounded-md py-0.5 text-xs transition ${chosen ? 'bg-primary font-bold text-primary-foreground' : future ? 'text-muted-foreground/40' : 'text-foreground hover:bg-muted'}`}
+            title={status === 'marked' ? 'Attendance marked' : status === 'pending' ? 'Attendance not marked' : status === 'off' ? 'No class / event' : undefined}
             data-testid={`day-${iso}`}
-          >{cell.getUTCDate()}</button>;
+            data-status={status}
+          ><span className={`grid h-7 w-7 place-items-center rounded-full border-2 ${status ? DAY_STATUS_RING[status] : 'border-transparent'}`}>{cell.getUTCDate()}</span></button>;
         })}
       </div>
       <button type="button" onClick={() => { onChange(limit); setOpen(false); }} className="mt-2 w-full rounded-md border border-border py-1.5 text-xs font-semibold text-primary transition hover:bg-muted" data-testid={testId ? `${testId}-today` : undefined}>Back to today</button>
@@ -2203,6 +2218,19 @@ function AttendanceRegisterPage({ user }: { user: CurrentUser }) {
 
   useEffect(() => { setError(''); setNotice(''); }, [date]);
 
+  // Circles on the date picker: the month on screen is loaded when the grid opens or
+  // moves, and re-read after every save / event change (reloadToken).
+  const [pickerMonth, setPickerMonth] = useState(() => date.slice(0, 7));
+  const [dayStatus, setDayStatus] = useState<Record<string, RegisterDayStatus>>({});
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/teacher/attendance/month-status?month=${pickerMonth}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { days?: Record<string, RegisterDayStatus> } | null) => { if (alive) setDayStatus(data?.days ?? {}); })
+      .catch(() => { if (alive) setDayStatus({}); });
+    return () => { alive = false; };
+  }, [pickerMonth, reloadToken]);
+
   const sunday = dayIndex(new Date(`${date}T00:00:00Z`)) > 5;
   const all = rows ?? [];
   const eligible = all.filter((row) => row.eligible);
@@ -2275,7 +2303,7 @@ const saveOne = async (studentId: string, mark: Mark) => {
       <div className="flex items-center gap-3">
         {/* The icon that was already on this date panel is the picker. Clicking it opens the
             month grid — no second button sitting beside it. */}
-        <DatePicker value={date} onChange={(iso) => setOverride(iso === today ? null : iso)} testId="register-date-picker" align="left">
+        <DatePicker value={date} onChange={(iso) => setOverride(iso === today ? null : iso)} testId="register-date-picker" align="left" dayStatus={dayStatus} onMonthView={setPickerMonth}>
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-primary transition hover:opacity-80" data-testid="register-date-icon"><CalendarCheck2 size={19} /></span>
         </DatePicker>
         <div>
@@ -6480,7 +6508,6 @@ finally { setDeletingId(''); setSaving(''); }
                        <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
                        <Button type="button" size="sm" variant="ghost" onClick={() => setViewTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} data-testid={`button-view-assessment-${student.id}`} title="View this student's whole project history"><Eye size={14} /> View</Button>
                        {isSaved && <>
-                         <span className="text-[11px] font-medium text-emerald-700">Saved</span>
                         <Button type="button" size="sm" variant="ghost" onClick={() => {
                           setSaved((v) => ({ ...v, [student.id]: false }));
                           setNotice(`Editing ${student.id} — type the new marks and press Update.`);
