@@ -17,6 +17,7 @@ import {
   ne,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import {
   announcementsTable,
@@ -2015,6 +2016,43 @@ router.patch(
   },
 );
 
+// Attendance rows are keyed by week number counted from the Monday of the joining week,
+// so changing a joining date would silently slide every recorded day onto a different
+// real date (and hide the early ones). Re-key the rows so each mark stays on the date it
+// was taken. Days that now fall before the new joining week keep their row at week <= 0:
+// hidden from the course, never deleted, and back again if the date is moved earlier.
+async function updateStudentKeepingAttendance(
+  where: SQL | undefined,
+  id: string,
+  values: Partial<typeof studentsTable.$inferInsert> & { dateOfJoining: string },
+) {
+  return db.transaction(async (tx) => {
+    const [before] = await tx
+      .select({ dateOfJoining: studentsTable.dateOfJoining })
+      .from(studentsTable)
+      .where(where)
+      .limit(1);
+    const [student] = await tx.update(studentsTable).set(values).where(where).returning();
+    if (!student || !before?.dateOfJoining) return student;
+    const oldMonday = mondayOf(new Date(`${String(before.dateOfJoining).slice(0, 10)}T00:00:00Z`));
+    const newMonday = mondayOf(new Date(`${values.dateOfJoining}T00:00:00Z`));
+    const shift = Math.round((newMonday.getTime() - oldMonday.getTime()) / WEEK_MS);
+    if (shift !== 0 && Number.isFinite(shift)) {
+      // Two steps, because (student, module, week) is the primary key and a single
+      // in-place shift can collide with a row that has not moved yet.
+      await tx
+        .update(attendanceTable)
+        .set({ week: sql`${attendanceTable.week} + 1000000` })
+        .where(eq(attendanceTable.studentId, id));
+      await tx
+        .update(attendanceTable)
+        .set({ week: sql`${attendanceTable.week} - 1000000 - ${shift}` })
+        .where(eq(attendanceTable.studentId, id));
+    }
+    return student;
+  });
+}
+
 // Admin and module owners edit the same record. The email has to stay unique across
 // the register, so a value already held by another student is refused (409).
 router.patch(
@@ -2038,20 +2076,16 @@ router.patch(
       res.status(409).json({ error: "An account with this email already exists." });
       return;
     }
-    const [student] = await db
-      .update(studentsTable)
-      .set({
-        fullName: data.fullName.trim(),
-        fathersName: data.fathersName.trim(),
-        course: data.course.trim(),
-        dateOfJoining: data.dateOfJoining.toISOString().slice(0, 10),
-        contactNumber: data.contactNumber.trim(),
-        email,
-        address: optionalText(data.address),
-        guardianContact: optionalText(data.guardianContact),
-      })
-      .where(eq(studentsTable.id, id))
-      .returning();
+    const student = await updateStudentKeepingAttendance(eq(studentsTable.id, id), id, {
+      fullName: data.fullName.trim(),
+      fathersName: data.fathersName.trim(),
+      course: data.course.trim(),
+      dateOfJoining: data.dateOfJoining.toISOString().slice(0, 10),
+      contactNumber: data.contactNumber.trim(),
+      email,
+      address: optionalText(data.address),
+      guardianContact: optionalText(data.guardianContact),
+    });
     if (!student) {
       res.status(404).json({ error: "Student not found." });
       return;
@@ -4940,9 +4974,10 @@ router.patch(
       res.status(409).json({ error: "An account with this email already exists." });
       return;
     }
-    const [student] = await db
-      .update(studentsTable)
-      .set({
+    const student = await updateStudentKeepingAttendance(
+      and(eq(studentsTable.id, id), eq(studentsTable.branchId, req.auth.branchId)),
+      id,
+      {
         fullName: data.fullName.trim(),
         fathersName: data.fathersName.trim(),
         course: data.course.trim(),
@@ -4951,14 +4986,8 @@ router.patch(
         email,
         address: optionalText(data.address),
         guardianContact: optionalText(data.guardianContact),
-      })
-      .where(
-        and(
-          eq(studentsTable.id, id),
-          eq(studentsTable.branchId, req.auth.branchId),
-        ),
-      )
-      .returning();
+      },
+    );
     if (!student) {
       res.status(404).json({ error: "Student not found." });
       return;
