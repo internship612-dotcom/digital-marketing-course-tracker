@@ -3031,6 +3031,16 @@ function isLocked(lockedDays: number | null | undefined, day: (typeof DAY_FLAG_O
   return ((lockedDays ?? 0) & dayBit(day)) !== 0;
 }
 
+// Today on the institute's calendar (IST). Attendance can only be written for a day that
+// has already started — a future day saved early would read as "already marked".
+function todayIstIso(): string {
+  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isFutureDay(date: Date): boolean {
+  return isoDay(date) > todayIstIso();
+}
+
 function parseDayParam(value: unknown): Date | null {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const date = new Date(`${value}T00:00:00Z`);
@@ -3269,6 +3279,10 @@ router.post(
       res.status(400).json({ error: "Choose a date and at least one student." });
       return;
     }
+    if (isFutureDay(date)) {
+      res.status(400).json({ error: "Attendance cannot be marked for a future date." });
+      return;
+    }
 
     const touched = [...new Set([...present, ...absent, ...leave])];
     const students = await db
@@ -3362,6 +3376,10 @@ router.post(
     const date = parseDayParam(body.date);
     if (!date || !body.studentId || !body.mark) {
       res.status(400).json({ error: "Date, student and mark are required." });
+      return;
+    }
+    if (isFutureDay(date)) {
+      res.status(400).json({ error: "Attendance cannot be marked for a future date." });
       return;
     }
     if (date && await classCancellationFor(req.auth.module, isoDay(date))) {
@@ -3588,7 +3606,7 @@ router.post(
 
     for (const rec of body.records) {
       const date = parseDayParam(rec.date);
-      if (!date || !rec.mark) { skipped.push(rec.date); continue; }
+      if (!date || !rec.mark || isFutureDay(date)) { skipped.push(rec.date); continue; }
       if (await classCancellationFor(req.auth.module, isoDay(date))) { skipped.push(rec.date); continue; }
 
       const slot = weekAndDayFor(student[0].dateOfJoining, date);

@@ -2576,7 +2576,11 @@ const matches = useMemo(() => {
     }
   };
 
-  const isBlocked = (date: string) => (mod?.eventDates.includes(date) ?? false) || cancelledMap.has(date);
+  // A day that has not happened yet cannot be marked. Save Month used to send every date
+  // of the month, so saving on the 23rd quietly wrote the rest of the month (unticked days
+  // as absent) and those days then read as "already marked".
+  const isFuture = (date: string) => date > todayIso();
+  const isBlocked = (date: string) => isFuture(date) || (mod?.eventDates.includes(date) ?? false) || cancelledMap.has(date);
   const isLocked = (date: string) => {
     if (!mod) return false;
     const slot = mod.dates[date];
@@ -2747,6 +2751,7 @@ const matches = useMemo(() => {
                         {!teachable ? <span className="text-[10px] text-muted-foreground/60">—</span>
                           : eventDay ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Event</span>
                           : cancelledReason ? <span className="block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700" title={cancelledReason}>Class not held</span>
+                          : isFuture(date) ? <span className="text-[10px] text-muted-foreground/70">Upcoming</span>
                           : (
                             <div className="flex flex-wrap gap-1">
                               {markBtn(date, 'present', 'P')}
@@ -2754,7 +2759,7 @@ const matches = useMemo(() => {
                               {markBtn(date, 'leave', 'L')}
                             </div>
                           )}
-                        {teachable && !eventDay && !cancelledReason && (
+                        {teachable && !eventDay && !cancelledReason && !isFuture(date) && (
                           <div className="mt-1 text-[10px] text-muted-foreground">
                             {locked ? (overwriteLocked ? 'Locked (can overwrite)' : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')) : (mark === 'present' ? 'Present' : mark === 'leave' ? 'Leave' : 'Absent')}
                           </div>
