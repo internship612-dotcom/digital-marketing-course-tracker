@@ -3157,12 +3157,11 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
           <p className="mt-1 text-xs text-muted-foreground">{scopeLabel ? `${scopeLabel} runs two projects a month.` : 'Each module runs two projects a month.'}{range ? ` ${calendarMonthName(selected.start, `Month ${selected.month}`)} is ${range}.` : ''}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => setClassTestsOpen(true)} data-testid="button-open-student-class-tests" title="Class tests"><FileText size={15} /> Class tests</Button>
-          <label className="grid gap-1.5 text-sm font-medium">Month
-            <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
-              {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
-            </select>
-          </label>
+          {/* Same height, one line: the "Month N" options already say what the box is. */}
+          <Button type="button" size="sm" variant="outline" className="h-9 text-sm" onClick={() => setClassTestsOpen(true)} data-testid="button-open-student-class-tests" title="Class tests"><FileText size={15} /> Class tests</Button>
+          <select aria-label="Month" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
+            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
+          </select>
         </div>
       </div>
       <div className={`mt-5 grid gap-3 ${compact || scoped ? '' : 'lg:grid-cols-3'}`}>
