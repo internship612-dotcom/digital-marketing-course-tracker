@@ -921,6 +921,66 @@ res.json({ id: test.id, date, title, saved: true });
   },
 );
 
+// One student's class tests, grouped by module, with only that student's own marks.
+// Shared by the student portal and the staff copies of a student record, so all of
+// them read identical results.
+async function classTestsForStudent(studentId: string, modules: string[]) {
+  const out: {
+    module: string;
+    tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[];
+  }[] = [];
+  for (const module of modules) {
+    const rows = await db
+      .select({
+        id: classTestsTable.id,
+        date: classTestsTable.date,
+        title: classTestsTable.title,
+        marks: classTestMarksTable.marks,
+        feedback: classTestMarksTable.feedback,
+      })
+      .from(classTestsTable)
+      .leftJoin(
+        classTestMarksTable,
+        and(
+          eq(classTestMarksTable.testId, classTestsTable.id),
+          eq(classTestMarksTable.studentId, studentId),
+        ),
+      )
+      .where(eq(classTestsTable.module, module))
+      .orderBy(desc(classTestsTable.date));
+    out.push({
+      module,
+      tests: (rows as unknown as Array<{
+        id: number;
+        date: string;
+        title: string;
+        marks: number | null;
+        feedback: string | null;
+      }>).map((row) => ({
+        id: row.id,
+        date: row.date,
+        title: row.title,
+        marks: row.marks,
+        feedback: row.feedback,
+      })),
+    });
+  }
+  return out;
+}
+
+async function studentExists(studentId: string, branchId?: number): Promise<boolean> {
+  const [student] = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(
+      branchId == null
+        ? eq(studentsTable.id, studentId)
+        : and(eq(studentsTable.id, studentId), eq(studentsTable.branchId, branchId)),
+    )
+    .limit(1);
+  return Boolean(student);
+}
+
 // Student-facing class tests: every test held on any module this student belongs to,
 // with only this student's own marks. Students never see another learner's marks.
 router.get(
@@ -932,47 +992,57 @@ router.get(
       return;
     }
     const modules = await studentModuleKeys(req.auth.studentId);
-    const out: {
-      module: string;
-      tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[];
-    }[] = [];
-    for (const module of modules) {
-      const rows = await db
-        .select({
-          id: classTestsTable.id,
-          date: classTestsTable.date,
-          title: classTestsTable.title,
-          marks: classTestMarksTable.marks,
-          feedback: classTestMarksTable.feedback,
-        })
-        .from(classTestsTable)
-        .leftJoin(
-          classTestMarksTable,
-          and(
-            eq(classTestMarksTable.testId, classTestsTable.id),
-            eq(classTestMarksTable.studentId, req.auth.studentId),
-          ),
-        )
-        .where(eq(classTestsTable.module, module))
-        .orderBy(desc(classTestsTable.date));
-      out.push({
-        module,
-        tests: (rows as unknown as Array<{
-          id: number;
-          date: string;
-          title: string;
-          marks: number | null;
-          feedback: string | null;
-        }>).map((row) => ({
-          id: row.id,
-          date: row.date,
-          title: row.title,
-          marks: row.marks,
-          feedback: row.feedback,
-        })),
-      });
+    res.json(await classTestsForStudent(req.auth.studentId, modules));
+  },
+);
+
+// Staff copies of the same list, behind the "Class tests" button on a student record.
+// Admin sees every module of the student's branch, a module owner only their own
+// module, and a branch login only students of its own branch.
+router.get(
+  "/admin/students/:id/class-tests",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const studentId = String(req.params.id ?? "");
+    if (!(await studentExists(studentId))) {
+      res.status(404).json({ error: "Student not found." });
+      return;
     }
-    res.json(out);
+    res.json(await classTestsForStudent(studentId, await studentModuleKeys(studentId)));
+  },
+);
+
+router.get(
+  "/teacher/students/:id/class-tests",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    const studentId = String(req.params.id ?? "");
+    if (!(await studentExists(studentId))) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(await classTestsForStudent(studentId, [req.auth.module]));
+  },
+);
+
+router.get(
+  "/branch/students/:id/class-tests",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const studentId = String(req.params.id ?? "");
+    if (!(await studentExists(studentId, req.auth.branchId))) {
+      res.status(404).json({ error: "Student not found." });
+      return;
+    }
+    res.json(await classTestsForStudent(studentId, await branchModuleIds(req.auth.branchId)));
   },
 );
 

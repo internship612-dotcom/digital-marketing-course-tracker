@@ -3033,7 +3033,7 @@ function monthNameFromKey(monthKey: string): string {
 
 // moduleFilter narrows the whole report to one module, so a module owner sees their
 // own attendance and their own project marks instead of all three modules at once.
-function MonthlyProgress({ report, compact = false, moduleFilter }: { report: StudentReport; compact?: boolean; moduleFilter?: Module | null }) {
+function MonthlyProgress({ report, compact = false, moduleFilter, classTestsUrl = '/api/student/class-tests' }: { report: StudentReport; compact?: boolean; moduleFilter?: Module | null; classTestsUrl?: string }) {
   // The month shown is the one the student is actually in: the course month that holds
   // today, read off the real start/end dates the API sends. Opening the page mid course
   // therefore lands on the live month rather than month 1; a course that has not started
@@ -3194,7 +3194,7 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
             <DialogTitle>Class tests</DialogTitle>
             <DialogDescription>Pick a module to see the tests held on it and the marks uploaded for each one.</DialogDescription>
           </DialogHeader>
-<StudentClassTestsPicker />
+<StudentClassTestsPicker url={classTestsUrl} />
         </DialogContent>
       </Dialog>
     </>;
@@ -3218,7 +3218,7 @@ function StudentProgressSection({ base, moduleFilter }: { base: string; moduleFi
   const { report, failed } = useStudentReport(`${base}/report`);
   if (failed) return null;
   if (!report) return <div className="mt-6 h-40 animate-pulse rounded-xl bg-muted" />;
-  return <div className="mt-6"><MonthlyProgress report={report} compact moduleFilter={moduleFilter} /></div>;
+  return <div className="mt-6"><MonthlyProgress report={report} compact moduleFilter={moduleFilter} classTestsUrl={`${base}/class-tests`} /></div>;
 }
 
 // ------------------------------------------------------------------ announcements
@@ -4297,27 +4297,34 @@ function StudentPage({ user }: { user: CurrentUser }) {
 // Module picker used inside the "Class tests" dialog that the icon next to the month
 // picker opens. Fetches the student's own tests, asks for a module, then renders that
 // module's tests as expandable date tiles.
-function StudentClassTestsPicker() {
+function StudentClassTestsPicker({ url = '/api/student/class-tests' }: { url?: string }) {
   const [tests, setTests] = useState<{ module: string; tests: { id: number; date: string; title: string; marks: number | null; feedback: string | null }[] }[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedModule, setSelectedModule] = useState<string>('');
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch('/api/student/class-tests')
+    fetch(url)
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-      .then(({ ok, data }) => { if (!alive) return; setTests(ok ? data : null); })
+      .then(({ ok, data }) => {
+        if (!alive) return;
+        const groups = ok && Array.isArray(data) ? data : null;
+        setTests(groups);
+        // With a single module (a module owner's copy of the record) there is nothing to
+        // choose, so open straight onto it.
+        if (groups && groups.length === 1) setSelectedModule(groups[0].module);
+      })
       .catch(() => { if (alive) setTests(null); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [url]);
   const groups = tests ?? [];
   const selected = groups.find((g) => g.module === selectedModule);
   const moduleTests = selected?.tests ?? [];
   const marked = moduleTests.filter((t) => t.marks != null).length;
   return <div className="space-y-4">
     {loading ? <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}</div>
-      : groups.length === 0 ? <p className="text-sm text-muted-foreground">No tests have been held on your modules yet.</p>
+      : groups.length === 0 ? <p className="text-sm text-muted-foreground">No tests have been held on these modules yet.</p>
       : <>
         <label className="grid gap-1.5 text-sm font-medium">Module
           <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={selectedModule} onChange={(e) => setSelectedModule(e.target.value)} data-testid="select-student-class-tests-module">
