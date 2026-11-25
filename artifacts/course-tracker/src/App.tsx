@@ -6698,7 +6698,7 @@ finally { setDeletingId(''); setSaving(''); }
                   <td className="py-2 pr-3">
                     <span className={na ? 'text-muted-foreground line-through' : ''}>{student.fullName}</span>
                   </td>
-                  <td className="py-2 pr-3"><Input className="h-9 w-24" type="number" min={0} max={100} placeholder={na ? 'N/A' : 'Not marked'} value={na ? '' : row.marks} disabled={na} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-class-test-marks-${student.id}`} /></td>
+                  <td className="py-2 pr-3"><Input className="h-9 w-24" type="number" min={0} max={100} step="any" placeholder={na ? 'N/A' : 'Not marked'} value={na ? '' : row.marks} disabled={na} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-class-test-marks-${student.id}`} /></td>
                   <td className="py-2 pr-3"><Input className="h-9" placeholder={na ? 'Did not sit this test' : 'Short feedback'} value={na ? '' : row.feedback} disabled={na} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-class-test-feedback-${student.id}`} /></td>
                   <td className="py-2 pr-1">
                     <input type="checkbox" className="h-4 w-4 cursor-pointer accent-amber-600" checked={na} onChange={() => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, na: !na } }))} title="Did not sit this test" aria-label={`${student.fullName} did not sit this test`} data-testid={`checkbox-class-test-na-${student.id}`} />

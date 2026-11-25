@@ -2,6 +2,7 @@ import {
   boolean,
   date,
   integer,
+  real,
   pgEnum,
   pgTable,
   serial,
@@ -341,7 +342,8 @@ export const classTestMarksTable = pgTable(
     studentId: text("student_id")
       .notNull()
       .references(() => studentsTable.id, { onDelete: "cascade" }),
-    marks: integer("marks"),
+    // real, not integer: class tests are marked in halves (15.5 / 20).
+    marks: real("marks"),
     feedback: text("feedback"),
     // The student did not sit this test (e.g. joined after the topic was taught). The
     // test is then left out of that student's report altogether instead of reading as

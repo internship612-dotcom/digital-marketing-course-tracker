@@ -969,6 +969,14 @@ without one it updates the module's test with the same date **and** title
 tests; picking one loads its saved title/marks/N/A. Students who sat the other paper are
 ticked N/A on this one.
 
+**Half marks.** `class_test_marks.marks` is `real`, not integer (boot runs `ALTER COLUMN marks
+TYPE real`), because tests are marked in halves (15.5 / 20). The input uses `step="any"`.
+
+**Render does not auto-deploy.** Pushing to `main` updates Vercel (frontend) by itself, but
+the Render API service only deploys from its dashboard (Manual Deploy → Deploy latest
+commit). After a push that touches `artifacts/api-server` or `lib/`, deploy it there too, or the
+live frontend talks to an old API.
+
 **Gotcha:** `PATCH /admin/branches/:id/credential` (and anything using `adminPasswordConfirmed`)
 checks the password against the **real Supabase admin account**, even on a local API. Do not
 call it from local tests — set local branch logins directly in the local DB instead.

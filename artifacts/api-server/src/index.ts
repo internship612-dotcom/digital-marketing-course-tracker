@@ -269,6 +269,9 @@ async function ensureClassTestsTables(): Promise<void> {
     await db.execute(
       sql.raw(`ALTER TABLE class_test_marks ADD COLUMN IF NOT EXISTS not_applicable boolean NOT NULL DEFAULT false`),
     );
+    // Half marks (15.5): widen the old integer column. Existing whole marks carry over
+    // unchanged, and re-running on a real column is a no-op.
+    await db.execute(sql.raw(`ALTER TABLE class_test_marks ALTER COLUMN marks TYPE real USING marks::real`));
   } catch (err) {
     logger.warn({ err }, "Could not ensure class_tests tables");
   }
