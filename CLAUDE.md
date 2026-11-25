@@ -914,7 +914,11 @@ due that month, how many are marked and how many are left.
 `students.left_reason` (text), added at boot by `ensureStudentLeftColumns()` in `index.ts` and on
 the openapi `Student` schema (`leftOn`, `leftReason` — codegen was re-run). Set or cleared with
 `PATCH /admin|teacher/students/:id/left` `{ leftOn: "YYYY-MM-DD", reason }` / `{ leftOn: null }`
-(reason required; last day may not precede the joining date). The UI is `LeftCourseSection`
+(reason required; last day may not precede the joining date). The section is titled
+**Course status** with options **Left the course / Completed course / Job placement done /
+Other** (Other needs a written reason); the label (plus optional note) is stored in
+`left_reason`, and `courseStatusBadge()` turns it into the list badge Left / Completed /
+Placed / Other (old "Passout" rows read as Completed). The UI is `LeftCourseSection`
 on the student record, under the remark — **deliberately separate from the free-text remark**
 (the user chose this), so an ordinary note never hides a student. Undo is one click.
 

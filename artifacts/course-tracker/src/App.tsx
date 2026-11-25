@@ -2851,7 +2851,7 @@ function StudentTable({ students, action, actionLabel = 'Actions', statusFor, on
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{index + 1}</td>
           <td className="whitespace-nowrap py-6 pr-4 font-mono-ui text-xs text-muted-foreground">{student.id}</td>
           <td className="whitespace-nowrap py-6 pr-4"><StudentAvatar student={student} /></td>
-          <td className="whitespace-nowrap py-6 pr-4 font-semibold group-hover:text-primary">{student.fullName}{student.leftOn ? <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700" title={`Left on ${student.leftOn} · ${student.leftReason ?? ''}`} data-testid={`badge-left-${student.id}`}>Left</span> : null}</td>
+          <td className="whitespace-nowrap py-6 pr-4 font-semibold group-hover:text-primary">{student.fullName}{student.leftOn ? <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${courseStatusBadge(student.leftReason).tone}`} title={`Last day ${student.leftOn} · ${student.leftReason ?? ''}`} data-testid={`badge-left-${student.id}`}>{courseStatusBadge(student.leftReason).label}</span> : null}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.fathersName}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.course}</td>
           <td className="whitespace-nowrap py-6 pr-4 font-mono-ui text-xs text-muted-foreground">{joinedOn(student.dateOfJoining)}</td>
@@ -2859,7 +2859,7 @@ function StudentTable({ students, action, actionLabel = 'Actions', statusFor, on
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.email}</td>
           {/* A student who has left owes no more attendance: show when they left instead. */}
           {statusFor && <td className="whitespace-nowrap py-6 pr-4"><div className="flex justify-center">{student.leftOn && student.leftOn < todayIso()
-            ? <span className="text-[11px] font-medium text-muted-foreground" data-testid={`status-left-${student.id}`}>Left {student.leftOn}</span>
+            ? <span className="text-[11px] font-medium text-muted-foreground" data-testid={`status-left-${student.id}`}>{courseStatusBadge(student.leftReason).label} {student.leftOn}</span>
             : <StatusIcon ok={statusFor(student).attendance} pending={statusFor(student).attendancePending} kind="attendance" studentId={student.id} />}</div></td>}
           {statusFor && <td className="whitespace-nowrap py-6 pr-4"><div className="flex justify-center"><StatusIcon ok={statusFor(student).marks} pending={statusFor(student).marksPending} kind="marks" studentId={student.id} /></div></td>}
           <td className="whitespace-nowrap py-6 pl-4 text-right"><div className="flex items-center justify-end gap-1.5">{action(student)}</div></td>
@@ -4982,11 +4982,21 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' })
   </>;
 }
 
-// "Left the course": a passed-out / dropped-out student gets a last day and a reason. Their
-// data up to that day stays; after it they leave the attendance register, the project
-// lists and the desk counts (the student list keeps them with a "Left" badge). Kept apart
-// from the free-text remark on purpose, so an ordinary note never hides a student.
-const LEFT_REASONS = ['Passout', 'Dropout', 'Other'] as const;
+// "Course status": a student who left, completed the course, got placed in a job, or ended
+// for another reason gets a last day and that status. Their data up to that day stays;
+// after it they leave the attendance register, the project lists and the desk counts (the
+// student list keeps them with a status badge). Stored in `left_reason` as the status
+// label (plus an optional note), so no schema change. Kept apart from the free-text remark
+// on purpose, so an ordinary note never hides a student.
+const LEFT_REASONS = ['Left the course', 'Completed course', 'Job placement done', 'Other'] as const;
+// Short badge for the student list. Older rows say "Passout" / "Dropout".
+function courseStatusBadge(reason: string | null | undefined): { label: string; tone: string } {
+  const r = String(reason ?? '').toLowerCase();
+  if (r.startsWith('completed') || r.startsWith('passout')) return { label: 'Completed', tone: 'bg-emerald-500/15 text-emerald-700' };
+  if (r.startsWith('job placement')) return { label: 'Placed', tone: 'bg-sky-500/15 text-sky-700' };
+  if (r.startsWith('other')) return { label: 'Other', tone: 'bg-muted text-muted-foreground' };
+  return { label: 'Left', tone: 'bg-amber-500/15 text-amber-700' };
+}
 function LeftCourseSection({ student, base, onSaved }: { student: Student; base: string; onSaved: (next: Student) => void }) {
   const leftOn = student.leftOn ?? null;
   const [reason, setReason] = useState<(typeof LEFT_REASONS)[number] | ''>('');
@@ -5010,22 +5020,23 @@ function LeftCourseSection({ student, base, onSaved }: { student: Student; base:
   const joined = String(student.dateOfJoining ?? '').slice(0, 10);
 
   return <div className="mt-6 border-t border-border pt-5" data-testid="section-left-course">
-    <p className="text-xs font-semibold text-primary">Course status</p>
-    <h3 className="mt-1 font-display text-xl font-bold">Left the course</h3>
+    <p className="text-xs font-semibold text-primary">Student record</p>
+    <h3 className="mt-1 font-display text-xl font-bold">Course status</h3>
     {leftOn ? <>
       <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm" data-testid="status-left-course">
-        <strong>Left on {leftOn}</strong> · {student.leftReason}
+        <span className={`mr-2 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${courseStatusBadge(student.leftReason).tone}`}>{courseStatusBadge(student.leftReason).label}</span>
+        <strong>Last day {leftOn}</strong> · {student.leftReason}
         <span className="mt-1 block text-xs text-muted-foreground">Attendance and projects are kept up to this day. After it the student no longer appears in the attendance register, Mark Assessment or the desk counts.</span>
       </p>
       <div className="mt-3 flex justify-end">
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => send({ leftOn: null })} data-testid="button-undo-left">{busy ? 'Saving…' : 'Undo — back on the course'}</Button>
       </div>
     </> : <>
-      <p className="mt-2 text-sm text-muted-foreground">Use this when the student passes out, drops out or stops for another reason. Everything up to the last day stays saved; after it they drop out of the attendance and project lists.</p>
+      <p className="mt-2 text-sm text-muted-foreground">Use this when the student leaves the course, completes it, gets a job placement, or stops for another reason. Everything up to the last day stays saved; after it they drop out of the attendance and project lists.</p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1.5 text-sm font-medium">Reason
+        <label className="grid gap-1.5 text-sm font-medium">Status
           <Select value={reason === '' ? undefined : reason} onValueChange={(value) => setReason(value as (typeof LEFT_REASONS)[number])}>
-            <SelectTrigger className="h-9 bg-card" data-testid="select-left-reason"><SelectValue placeholder="Select reason" /></SelectTrigger>
+            <SelectTrigger className="h-9 bg-card" data-testid="select-left-reason"><SelectValue placeholder="Select status" /></SelectTrigger>
             <SelectContent side="bottom" avoidCollisions={false}>
               {LEFT_REASONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
             </SelectContent>
@@ -5035,16 +5046,16 @@ function LeftCourseSection({ student, base, onSaved }: { student: Student; base:
           <Input type="date" className="h-9" value={lastDay} min={joined || undefined} onChange={(e) => setLastDay(e.target.value)} data-testid="input-left-date" />
         </label>
       </div>
-      <Input className="mt-3" placeholder={reason === 'Other' ? 'Write the reason (required for Other)' : 'Note (optional)'} value={note} onChange={(e) => setNote(e.target.value)} data-testid="input-left-note" />
+      <Input className="mt-3" placeholder={reason === 'Other' ? 'Write the reason (required for Other)' : reason === 'Job placement done' ? 'Company / job role (optional)' : 'Note (optional)'} value={note} onChange={(e) => setNote(e.target.value)} data-testid="input-left-note" />
       {!confirming
         ? <div className="mt-3 flex justify-end">
-          <Button type="button" size="sm" variant="destructive" disabled={reason === '' || !lastDay || (reason === 'Other' && !note.trim())} onClick={() => setConfirming(true)} data-testid="button-mark-left">Mark as left</Button>
+          <Button type="button" size="sm" variant="destructive" disabled={reason === '' || !lastDay || (reason === 'Other' && !note.trim())} onClick={() => setConfirming(true)} data-testid="button-mark-left">Save status</Button>
         </div>
         : <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="confirm-left">
-          <p>Mark <strong>{student.fullName}</strong> as left on <strong>{lastDay}</strong> ({fullReason})? Data up to that day stays; after it they leave the attendance register and project lists. You can undo this later.</p>
+          <p>Set <strong>{student.fullName}</strong> to <strong>{fullReason}</strong> with last day <strong>{lastDay}</strong>? Data up to that day stays; after it they leave the attendance register and project lists. You can undo this later.</p>
           <div className="mt-3 flex justify-end gap-2">
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button>
-            <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => send({ leftOn: lastDay, reason: fullReason })} data-testid="button-confirm-left">{busy ? 'Saving…' : 'Yes, mark as left'}</Button>
+            <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => send({ leftOn: lastDay, reason: fullReason })} data-testid="button-confirm-left">{busy ? 'Saving…' : 'Yes, save'}</Button>
           </div>
         </div>}
     </>}

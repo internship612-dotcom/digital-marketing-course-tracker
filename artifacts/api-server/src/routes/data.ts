@@ -2271,7 +2271,7 @@ async function setStudentLeft(
   }
   const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 300) : "";
   if (!reason) {
-    res.status(400).json({ error: "Say why the student left (passout, dropout or another reason)." });
+    res.status(400).json({ error: "Choose the course status (left, completed, job placement or other)." });
     return;
   }
   const [existing] = await db
