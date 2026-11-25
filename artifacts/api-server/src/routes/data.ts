@@ -804,7 +804,7 @@ router.get(
       date: string;
       title: string;
       createdAt: string;
-      marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; enteredAt: string | null }[];
+      marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; notApplicable: boolean; enteredAt: string | null }[];
     }[] = [];
     for (const test of tests as Array<{
       id: number;
@@ -833,6 +833,7 @@ router.get(
           studentName: m.studentName,
           marks: m.record.marks,
           feedback: m.record.feedback,
+          notApplicable: m.record.notApplicable,
           enteredAt: m.record.enteredAt == null ? null : m.record.enteredAt.toISOString(),
         })),
       });
@@ -889,14 +890,17 @@ router.post(
       studentId?: unknown;
       marks?: unknown;
       feedback?: unknown;
+      notApplicable?: unknown;
     }[]) {
       const studentId = typeof entry.studentId === "string" ? entry.studentId : "";
       if (!studentId) continue;
-      const marks = typeof entry.marks === "string" || typeof entry.marks === "number"
+      const notApplicable = entry.notApplicable === true;
+      // N/A carries no marks or feedback: the student did not sit the test.
+      const marks = !notApplicable && (typeof entry.marks === "string" || typeof entry.marks === "number")
         ? Number(entry.marks)
         : null;
-      const feedback = typeof entry.feedback === "string" ? entry.feedback : null;
-      if (marks == null && feedback == null) {
+      const feedback = !notApplicable && typeof entry.feedback === "string" ? entry.feedback : null;
+      if (!notApplicable && marks == null && feedback == null) {
         await db
           .delete(classTestMarksTable)
           .where(
@@ -914,6 +918,7 @@ router.post(
           studentId,
           marks: marks == null ? null : (Number.isNaN(marks) ? null : marks),
           feedback,
+          notApplicable,
           enteredAt: new Date(),
           enteredBy: Number(req.auth.userId),
         })
@@ -922,6 +927,7 @@ router.post(
           set: {
             marks: marks == null ? null : (Number.isNaN(marks) ? null : marks),
             feedback,
+            notApplicable,
             enteredAt: new Date(),
             enteredBy: Number(req.auth.userId),
           },
@@ -947,6 +953,7 @@ async function classTestsForStudent(studentId: string, modules: string[]) {
         title: classTestsTable.title,
         marks: classTestMarksTable.marks,
         feedback: classTestMarksTable.feedback,
+        notApplicable: classTestMarksTable.notApplicable,
       })
       .from(classTestsTable)
       .leftJoin(
@@ -960,13 +967,15 @@ async function classTestsForStudent(studentId: string, modules: string[]) {
       .orderBy(desc(classTestsTable.date));
     out.push({
       module,
+      // A test marked N/A for this student is not theirs at all, so it is left out.
       tests: (rows as unknown as Array<{
         id: number;
         date: string;
         title: string;
         marks: number | null;
         feedback: string | null;
-      }>).map((row) => ({
+        notApplicable: boolean | null;
+      }>).filter((row) => row.notApplicable !== true).map((row) => ({
         id: row.id,
         date: row.date,
         title: row.title,

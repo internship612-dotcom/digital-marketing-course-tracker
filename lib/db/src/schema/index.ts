@@ -347,6 +347,10 @@ export const classTestMarksTable = pgTable(
       .references(() => studentsTable.id, { onDelete: "cascade" }),
     marks: integer("marks"),
     feedback: text("feedback"),
+    // The student did not sit this test (e.g. joined after the topic was taught). The
+    // test is then left out of that student's report altogether instead of reading as
+    // "not marked".
+    notApplicable: boolean("not_applicable").notNull().default(false),
     enteredAt: timestamp("entered_at", { withTimezone: true }),
     enteredBy: integer("entered_by").references(() => teachersTable.id, {
       onDelete: "set null",

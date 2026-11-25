@@ -263,6 +263,9 @@ async function ensureClassTestsTables(): Promise<void> {
         )
       `),
     );
+    await db.execute(
+      sql.raw(`ALTER TABLE class_test_marks ADD COLUMN IF NOT EXISTS not_applicable boolean NOT NULL DEFAULT false`),
+    );
   } catch (err) {
     logger.warn({ err }, "Could not ensure class_tests tables");
   }

@@ -889,7 +889,9 @@ untouched and still uses calendar-month slices (`courseMonths`).
   (0 = an empty list for that month). Both pickers start empty ("Select month" / "Select project") and nothing is
   listed until both are chosen. They are Radix `Select`s with `side="bottom"
   avoidCollisions={false}`, because a native `<select>` flips upward when the page has little
-  room below it.
+  room below it. Once both are picked, an **Upload status** button row (All / Uploaded /
+  Not uploaded, each with its count) filters the rows by whether `projectLink` is set — the
+  search box then narrows within that filter.
 - `StudentProjectPage` labels projects "Project N · start – due" and opens the upload dialog on
   the project running today.
 - The module desk's marks card (`MarksStatusCard`) is only the Month + Project picker
@@ -946,6 +948,17 @@ last month instead of month 1.
 - Fixed a pre-existing crash in `BranchModuleReportPage`: it returned early (access check)
   **before** its `useState`/`useEffect`, so once the branch overview loaded React threw
   "Rendered more hooks than during the previous render". Hooks now run before the checks.
+
+### 18. Class tests: N/A for students who did not sit a test
+
+`class_test_marks.not_applicable` (boolean, added at boot with `ADD COLUMN IF NOT EXISTS`).
+A new joiner may already be enrolled on the test date (joined 15th, test 20th) yet never sat
+it, so the join date alone cannot decide — the teacher ticks **N/A** on that row in the Class
+test dialog. N/A saves no marks/feedback, and `classTestsForStudent` drops that test from the
+student's report (student portal and staff record copies), instead of showing "Not marked".
+A "New" badge for recent joiners was built and then **removed at the user's request** — do not
+bring it back. Picking a date that already has a test now
+loads its saved title/marks/N/A into the form, so a saved test can be corrected.
 
 **Gotcha:** `PATCH /admin/branches/:id/credential` (and anything using `adminPasswordConfirmed`)
 checks the password against the **real Supabase admin account**, even on a local API. Do not

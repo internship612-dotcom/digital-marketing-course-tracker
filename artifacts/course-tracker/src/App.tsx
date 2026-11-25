@@ -6269,6 +6269,8 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [monthRows, setMonthRows] = useState<AssessmentMonthRow[]>([]);
   // The project number to list; '' = not chosen yet.
   const [projectFilter, setProjectFilter] = useState<'' | number>('');
+  // Upload filter: only the students who have / have not uploaded their project link.
+  const [uploadFilter, setUploadFilter] = useState<'all' | 'uploaded' | 'not-uploaded'>('all');
   const [rows, setRows] = useState<Record<string, { marks: string; feedback: string }>>({});
   // Rows are always typeable — a locked grid just looks broken. `saved` only records that a
   // row has been written, which is what puts the Edit button back on it.
@@ -6285,12 +6287,14 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [classTestOpen, setClassTestOpen] = useState(false);
   const [classTestTitle, setClassTestTitle] = useState('');
   const [classTestDate, setClassTestDate] = useState(todayIso());
-  const [classTestMarks, setClassTestMarks] = useState<Record<string, { marks: string; feedback: string }>>({});
+  // `na` = the student did not sit this test (e.g. joined after the topic was taught); the
+  // test is then left out of their report instead of reading as "not marked".
+  const [classTestMarks, setClassTestMarks] = useState<Record<string, { marks: string; feedback: string; na?: boolean }>>({});
   const [classTestSaving, setClassTestSaving] = useState(false);
   const [classTestError, setClassTestError] = useState('');
   const [classTestNotice, setClassTestNotice] = useState('');
   const [classTestViewOpen, setClassTestViewOpen] = useState(false);
-  const [classTestView, setClassTestView] = useState<{ id: number; date: string; title: string; marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; enteredAt: string | null }[] }[] | null>(null);
+  const [classTestView, setClassTestView] = useState<{ id: number; date: string; title: string; marks: { studentId: string; studentName: string; marks: number | null; feedback: string | null; notApplicable?: boolean; enteredAt: string | null }[] }[] | null>(null);
   const [classTestViewLoading, setClassTestViewLoading] = useState(false);
   // Tapping a date tile expands that test's per-student marks list. Only one open at a time.
   const [expandedTestId, setExpandedTestId] = useState<number | null>(null);
@@ -6332,9 +6336,13 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const query = search.trim().toLowerCase();
   const ready = monthKey !== '' && projectFilter !== '';
   const projectRows = ready ? monthRows.filter((row) => row.cycle === projectFilter) : [];
+  const uploadedCount = projectRows.filter((row) => !!row.projectLink).length;
+  const notUploadedCount = projectRows.length - uploadedCount;
+  const uploadRows = uploadFilter === 'all' ? projectRows
+    : projectRows.filter((row) => (uploadFilter === 'uploaded') === !!row.projectLink);
   const shownRows = query === ''
-    ? projectRows
-    : projectRows.filter((row) => {
+    ? uploadRows
+    : uploadRows.filter((row) => {
       const student = all.find((s) => s.id === row.studentId);
       return student ? studentMatches(student, query) : row.fullName.toLowerCase().includes(query) || row.studentId.toLowerCase().includes(query);
     });
@@ -6396,6 +6404,7 @@ finally { setDeletingId(''); setSaving(''); }
     try {
       const records = all.map((student) => {
         const row = classTestMarks[student.id] ?? { marks: '', feedback: '' };
+        if (row.na) return { studentId: student.id, marks: null, feedback: null, notApplicable: true };
         return { studentId: student.id, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback };
       });
       const res = await fetch('/api/teacher/class-tests', {
@@ -6425,6 +6434,27 @@ finally { setDeletingId(''); setSaving(''); }
   useEffect(() => {
     if (classTestViewOpen) void loadClassTests();
   }, [classTestViewOpen]);
+
+  // Picking a date that already has a saved test fills the form with what was saved —
+  // title, marks, feedback and N/A — so a test can be corrected (e.g. a new student
+  // marked N/A) without retyping everyone. A date with no test starts the form empty.
+  useEffect(() => {
+    if (!classTestOpen || !/^\d{4}-\d{2}-\d{2}$/.test(classTestDate)) return;
+    let alive = true;
+    fetch('/api/teacher/class-tests')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: NonNullable<typeof classTestView> | null) => {
+        if (!alive || data == null) return;
+        const test = data.find((t) => String(t.date).slice(0, 10) === classTestDate);
+        if (!test) { setClassTestTitle(''); setClassTestMarks({}); return; }
+        const next: Record<string, { marks: string; feedback: string; na?: boolean }> = {};
+        for (const m of test.marks) next[m.studentId] = { marks: m.marks == null ? '' : String(m.marks), feedback: m.feedback ?? '', na: m.notApplicable === true };
+        setClassTestTitle(test.title);
+        setClassTestMarks(next);
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [classTestOpen, classTestDate]);
 
   // Search inside the class-test marks table: only the matching students render,
   // so a teacher can jump straight to one student's marks without scrolling the
@@ -6467,6 +6497,11 @@ finally { setDeletingId(''); setSaving(''); }
           <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
         </div>
       </div>
+      {ready && <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="filter-upload-status">
+        <span className="text-xs font-medium text-muted-foreground">Upload status:</span>
+        {([['all', `All (${projectRows.length})`], ['uploaded', `Uploaded (${uploadedCount})`], ['not-uploaded', `Not uploaded (${notUploadedCount})`]] as const).map(([value, label]) =>
+          <Button key={value} type="button" size="sm" variant={uploadFilter === value ? 'default' : 'outline'} className="h-8" onClick={() => setUploadFilter(value)} data-testid={`button-upload-filter-${value}`}>{label}</Button>)}
+      </div>}
       <p className="mt-3 text-xs text-muted-foreground">Every project runs 15 days from the student's joining date (project 1 = days 1–15, project 2 = days 16–30, …) and is listed in the month it falls due. A blank marks box saves as 'not marked' — after saving you get an Edit button on that row.</p>
     </section>
 
@@ -6479,7 +6514,7 @@ finally { setDeletingId(''); setSaving(''); }
       </div>
 
       {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
-        : shownRows.length === 0 ? <EmptyState title={projectRows.length === 0 ? `No Project ${projectFilter} due this month` : 'No matching students'} detail={projectRows.length === 0 ? `Nobody's Project ${projectFilter} falls due in ${monthNameFromKey(monthKey)}. Try another month.` : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
+        : shownRows.length === 0 ? <EmptyState title={projectRows.length === 0 ? `No Project ${projectFilter} due this month` : uploadRows.length === 0 ? (uploadFilter === 'uploaded' ? 'Nobody has uploaded yet' : 'Everyone has uploaded') : 'No matching students'} detail={projectRows.length === 0 ? `Nobody's Project ${projectFilter} falls due in ${monthNameFromKey(monthKey)}. Try another month.` : uploadRows.length === 0 ? 'Switch the upload status filter to see the other students.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
         : <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm" data-testid="table-assessment">
             <thead>
@@ -6597,7 +6632,7 @@ finally { setDeletingId(''); setSaving(''); }
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Class test</DialogTitle>
-          <DialogDescription>Pick the test date and give it a title, then enter marks against every student. Saving replaces the marks for that test date.</DialogDescription>
+          <DialogDescription>Pick the test date and give it a title, then enter marks against every student. Tick N/A for a student who did not sit the test (e.g. a new joiner) — it is left out of their report. Picking a date that already has a test loads its saved marks; saving replaces them.</DialogDescription>
         </DialogHeader>
         {classTestError && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-test-error">{classTestError}</p>}
         {classTestNotice && <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-class-test-success">{classTestNotice}</p>}
@@ -6629,17 +6664,24 @@ finally { setDeletingId(''); setSaving(''); }
                 <th className="py-2 pr-3 font-semibold">Name</th>
                 <th className="py-2 pr-3 font-semibold">Marks</th>
                 <th className="py-2 pr-3 font-semibold">Feedback</th>
+                <th className="py-2 pr-1 font-semibold" title="Did not sit this test — left out of the student's report">N/A</th>
               </tr>
             </thead>
             <tbody>
               {classTestShown.map((student, index) => {
                 const row = classTestMarks[student.id] ?? { marks: '', feedback: '' };
-                return <tr key={student.id} className="border-b border-border/60">
+                const na = row.na === true;
+                return <tr key={student.id} className={`border-b border-border/60 ${na ? 'bg-muted/40' : ''}`}>
                   <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
                   <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
-                  <td className="py-2 pr-3">{student.fullName}</td>
-                  <td className="py-2 pr-3"><Input className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-class-test-marks-${student.id}`} /></td>
-                  <td className="py-2 pr-3"><Input className="h-9" placeholder="Short feedback" value={row.feedback} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-class-test-feedback-${student.id}`} /></td>
+                  <td className="py-2 pr-3">
+                    <span className={na ? 'text-muted-foreground line-through' : ''}>{student.fullName}</span>
+                  </td>
+                  <td className="py-2 pr-3"><Input className="h-9 w-24" type="number" min={0} max={100} placeholder={na ? 'N/A' : 'Not marked'} value={na ? '' : row.marks} disabled={na} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, marks: e.target.value } }))} data-testid={`input-class-test-marks-${student.id}`} /></td>
+                  <td className="py-2 pr-3"><Input className="h-9" placeholder={na ? 'Did not sit this test' : 'Short feedback'} value={na ? '' : row.feedback} disabled={na} onChange={(e) => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, feedback: e.target.value } }))} data-testid={`input-class-test-feedback-${student.id}`} /></td>
+                  <td className="py-2 pr-1">
+                    <input type="checkbox" className="h-4 w-4 cursor-pointer accent-amber-600" checked={na} onChange={() => setClassTestMarks((v) => ({ ...v, [student.id]: { ...row, na: !na } }))} title="Did not sit this test" aria-label={`${student.fullName} did not sit this test`} data-testid={`checkbox-class-test-na-${student.id}`} />
+                  </td>
                 </tr>;
               })}
             </tbody>
@@ -6666,7 +6708,8 @@ finally { setDeletingId(''); setSaving(''); }
                     <p className="truncate text-sm text-muted-foreground">{test.title}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks.length} marks</span>
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks.filter((m) => !m.notApplicable).length} marks</span>
+                    {test.marks.some((m) => m.notApplicable) && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">{test.marks.filter((m) => m.notApplicable).length} N/A</span>}
                     <ChevronDown size={14} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
                   </div>
                 </button>
@@ -6685,7 +6728,7 @@ finally { setDeletingId(''); setSaving(''); }
                           {test.marks.map((m, i) => <tr key={m.studentId} className="border-b border-border/40">
                             <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{m.studentId}</td>
                             <td className="py-1.5 pr-3 font-semibold">{m.studentName}</td>
-                            <td className="py-1.5 pr-3">{m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
+                            <td className="py-1.5 pr-3">{m.notApplicable ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">N/A</span> : m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
                             <td className="py-1.5 pr-3 text-muted-foreground">{m.feedback ?? '—'}</td>
                           </tr>)}
                         </tbody>
