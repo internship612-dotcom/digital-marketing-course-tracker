@@ -969,6 +969,10 @@ without one it updates the module's test with the same date **and** title
 tests; picking one loads its saved title/marks/N/A. Students who sat the other paper are
 ticked N/A on this one.
 
+**The View list hides N/A rows** (user's request): a test's marks list shows only students
+who sat it — marked, absent or on leave. N/A is still visible (and editable) in the entry
+form when a saved test is picked from the Test select.
+
 **Half marks.** `class_test_marks.marks` is `real`, not integer (boot runs `ALTER COLUMN marks
 TYPE real`), because tests are marked in halves (15.5 / 20). The input uses `step="any"`.
 

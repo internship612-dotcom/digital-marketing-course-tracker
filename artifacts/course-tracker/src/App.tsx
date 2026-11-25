@@ -6730,12 +6730,13 @@ finally { setDeletingId(''); setSaving(''); }
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks.filter((m) => !m.notApplicable).length} marks</span>
-                    {test.marks.some((m) => m.notApplicable) && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">{test.marks.filter((m) => m.notApplicable).length} N/A</span>}
                     <ChevronDown size={14} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
                   </div>
                 </button>
                 {expanded && <div className="border-t border-border bg-card/60 px-4 py-3">
-                  {test.marks.length === 0 ? <p className="text-sm text-muted-foreground">No marks uploaded for this test yet.</p>
+                  {/* N/A students did not sit this test, so the list shows only who did:
+                      marked, absent or on leave. */}
+                  {test.marks.every((m) => m.notApplicable) ? <p className="text-sm text-muted-foreground">No marks uploaded for this test yet.</p>
                     : <table className="w-full border-collapse text-left text-sm" data-testid={`table-class-test-marks-${test.id}`}>
                         <thead>
                           <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -6746,10 +6747,10 @@ finally { setDeletingId(''); setSaving(''); }
                           </tr>
                         </thead>
                         <tbody>
-                          {test.marks.map((m, i) => <tr key={m.studentId} className="border-b border-border/40">
+                          {test.marks.filter((m) => !m.notApplicable).map((m) => <tr key={m.studentId} className="border-b border-border/40">
                             <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{m.studentId}</td>
                             <td className="py-1.5 pr-3 font-semibold">{m.studentName}</td>
-                            <td className="py-1.5 pr-3">{m.notApplicable ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">N/A</span> : m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
+                            <td className="py-1.5 pr-3">{m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
                             <td className="py-1.5 pr-3 text-muted-foreground">{m.feedback ?? '—'}</td>
                           </tr>)}
                         </tbody>
