@@ -6298,6 +6298,8 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [classTestViewLoading, setClassTestViewLoading] = useState(false);
   // Tapping a date tile expands that test's per-student marks list. Only one open at a time.
   const [expandedTestId, setExpandedTestId] = useState<number | null>(null);
+  // Which bucket the open test shows: marked, N/A, or absent/leave/not marked.
+  const [testViewFilter, setTestViewFilter] = useState<'marked' | 'na' | 'absent'>('marked');
   // Search inside the marks-entry table so a teacher does not have to scroll past the
   // whole roster to reach one student. The View list is unaffected.
   const [classTestSearch, setClassTestSearch] = useState('');
@@ -6722,21 +6724,41 @@ finally { setDeletingId(''); setSaving(''); }
           : <div className="max-h-[60vh] space-y-2 overflow-y-auto">
             {(classTestView ?? []).map((test) => {
               const expanded = expandedTestId === test.id;
+              // Three buckets: Marked (has marks), N/A (did not sit this test), and
+              // Absent = everyone else — absent, on leave, or never marked. Enrolled students
+              // with no row at all for this test (joined on or before its date) count as
+              // "Not marked" there too, so nobody silently drops out of the list.
+              const testDay = String(test.date).slice(0, 10);
+              const unrecorded = all
+                .filter((s) => !test.marks.some((m) => m.studentId === s.id) && joinedOn(s.dateOfJoining) <= testDay)
+                .map((s) => ({ studentId: s.id, studentName: s.fullName, marks: null as number | null, feedback: null as string | null, notApplicable: false, enteredAt: null as string | null }));
+              const buckets = {
+                marked: test.marks.filter((m) => !m.notApplicable && m.marks != null),
+                na: test.marks.filter((m) => m.notApplicable),
+                absent: [...test.marks.filter((m) => !m.notApplicable && m.marks == null), ...unrecorded],
+              };
+              const open = (filter: typeof testViewFilter) => {
+                if (expanded && testViewFilter === filter) { setExpandedTestId(null); return; }
+                setTestViewFilter(filter); setExpandedTestId(test.id);
+              };
+              const chip = (filter: typeof testViewFilter, label: string, tone: string) =>
+                <button type="button" onClick={() => open(filter)} className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${expanded && testViewFilter === filter ? tone : 'bg-muted text-muted-foreground hover:bg-muted/70'}`} data-testid={`button-class-test-${filter}-${test.id}`}>{label} ({buckets[filter].length})</button>;
+              const rows = buckets[testViewFilter];
               return <div key={test.id} className="overflow-hidden rounded-lg border border-border">
-                <button type="button" onClick={() => setExpandedTestId(expanded ? null : test.id)} className="flex w-full items-center justify-between gap-3 bg-card px-4 py-3 text-left hover:bg-muted/60">
-                  <div className="min-w-0">
+                <div className="flex w-full flex-wrap items-center justify-between gap-3 bg-card px-4 py-3">
+                  <button type="button" onClick={() => open('marked')} className="min-w-0 flex-1 text-left">
                     <p className="font-mono-ui text-sm font-semibold">{test.date}</p>
                     <p className="truncate text-sm text-muted-foreground">{test.title}</p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{test.marks.filter((m) => !m.notApplicable).length} marks</span>
+                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {chip('marked', 'Marked', 'bg-primary text-primary-foreground')}
+                    {chip('na', 'N/A', 'bg-amber-500 text-white')}
+                    {chip('absent', 'Absent', 'bg-destructive text-destructive-foreground')}
                     <ChevronDown size={14} className={`text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
                   </div>
-                </button>
+                </div>
                 {expanded && <div className="border-t border-border bg-card/60 px-4 py-3">
-                  {/* N/A students did not sit this test, so the list shows only who did:
-                      marked, absent or on leave. */}
-                  {test.marks.every((m) => m.notApplicable) ? <p className="text-sm text-muted-foreground">No marks uploaded for this test yet.</p>
+                  {rows.length === 0 ? <p className="text-sm text-muted-foreground">{testViewFilter === 'marked' ? 'No marks uploaded for this test yet.' : testViewFilter === 'na' ? 'No student is N/A for this test.' : 'Nobody is absent, on leave or unmarked.'}</p>
                     : <table className="w-full border-collapse text-left text-sm" data-testid={`table-class-test-marks-${test.id}`}>
                         <thead>
                           <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -6747,11 +6769,11 @@ finally { setDeletingId(''); setSaving(''); }
                           </tr>
                         </thead>
                         <tbody>
-                          {test.marks.filter((m) => !m.notApplicable).map((m) => <tr key={m.studentId} className="border-b border-border/40">
+                          {rows.map((m) => <tr key={m.studentId} className="border-b border-border/40">
                             <td className="py-1.5 pr-3 font-mono-ui text-xs text-muted-foreground">{m.studentId}</td>
                             <td className="py-1.5 pr-3 font-semibold">{m.studentName}</td>
-                            <td className="py-1.5 pr-3">{m.marks == null ? <span className="text-xs text-muted-foreground">Not marked</span> : <span className="font-semibold">{m.marks}</span>}</td>
-                            <td className="py-1.5 pr-3 text-muted-foreground">{m.feedback ?? '—'}</td>
+                            <td className="py-1.5 pr-3">{m.notApplicable ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">N/A</span> : m.marks == null ? <span className="text-xs text-muted-foreground">—</span> : <span className="font-semibold">{m.marks}</span>}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{m.notApplicable ? 'Did not sit this test' : m.feedback?.trim() ? m.feedback : m.marks == null ? 'Not marked' : '—'}</td>
                           </tr>)}
                         </tbody>
                       </table>}
