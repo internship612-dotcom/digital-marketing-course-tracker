@@ -957,8 +957,17 @@ it, so the join date alone cannot decide — the teacher ticks **N/A** on that r
 test dialog. N/A saves no marks/feedback, and `classTestsForStudent` drops that test from the
 student's report (student portal and staff record copies), instead of showing "Not marked".
 A "New" badge for recent joiners was built and then **removed at the user's request** — do not
-bring it back. Picking a date that already has a test now
-loads its saved title/marks/N/A into the form, so a saved test can be corrected.
+bring it back.
+
+**Several tests on one day.** Different groups can sit different papers on the same date, so
+the `(module, date)` unique on `class_tests` was dropped (boot drops both
+`class_tests_module_date_key` and `class_tests_module_date_unique`). A test is its `id`.
+`POST /teacher/class-tests` takes an optional `id` (edit that test, may rename/redate it);
+without one it updates the module's test with the same date **and** title
+(case-insensitive), else inserts. The dialog starts every date as a new test and shows a
+**Test** select ("+ New test on this date" / "Edit: <title>") when that date already has
+tests; picking one loads its saved title/marks/N/A. Students who sat the other paper are
+ticked N/A on this one.
 
 **Gotcha:** `PATCH /admin/branches/:id/credential` (and anything using `adminPasswordConfirmed`)
 checks the password against the **real Supabase admin account**, even on a local API. Do not

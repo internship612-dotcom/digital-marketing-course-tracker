@@ -6410,10 +6410,15 @@ finally { setDeletingId(''); setSaving(''); }
       const res = await fetch('/api/teacher/class-tests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: classTestDate, title: classTestTitle.trim(), marks: records }),
+        body: JSON.stringify({ ...(classTestId != null ? { id: classTestId } : {}), date: classTestDate, title: classTestTitle.trim(), marks: records }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setClassTestError((data as { error?: string })?.error ?? 'Could not save those marks.'); return; }
+      // The form now stands for the saved test, so a second Save updates it instead of
+      // making a duplicate.
+      const savedId = (data as { id?: number }).id;
+      if (typeof savedId === 'number') setClassTestId(savedId);
+      void loadTestsOnDate(classTestDate).catch(() => undefined);
       setClassTestNotice(`Saved marks for ${classTestTitle.trim()} on ${classTestDate}.`);
     } catch { setClassTestError('Could not save those marks. Try again.'); }
     finally { setClassTestSaving(false); }
@@ -6435,26 +6440,33 @@ finally { setDeletingId(''); setSaving(''); }
     if (classTestViewOpen) void loadClassTests();
   }, [classTestViewOpen]);
 
-  // Picking a date that already has a saved test fills the form with what was saved —
-  // title, marks, feedback and N/A — so a test can be corrected (e.g. a new student
-  // marked N/A) without retyping everyone. A date with no test starts the form empty.
+  // A day can hold several tests (different groups sit different papers). Picking a
+  // date lists the tests already saved on it; the form starts as a NEW test, and
+  // choosing a saved one from the Test select fills in its title, marks, feedback and
+  // N/A so it can be corrected without retyping everyone.
+  const [classTestsOnDate, setClassTestsOnDate] = useState<NonNullable<typeof classTestView>>([]);
+  const [classTestId, setClassTestId] = useState<number | null>(null);
+  const fillClassTest = (test: NonNullable<typeof classTestView>[number] | null) => {
+    if (!test) { setClassTestId(null); setClassTestTitle(''); setClassTestMarks({}); return; }
+    const next: Record<string, { marks: string; feedback: string; na?: boolean }> = {};
+    for (const m of test.marks) next[m.studentId] = { marks: m.marks == null ? '' : String(m.marks), feedback: m.feedback ?? '', na: m.notApplicable === true };
+    setClassTestId(test.id);
+    setClassTestTitle(test.title);
+    setClassTestMarks(next);
+  };
+  const loadTestsOnDate = useCallback(async (date: string) => {
+    const res = await fetch('/api/teacher/class-tests');
+    const data = res.ok ? await res.json() as NonNullable<typeof classTestView> : [];
+    const onDate = data.filter((t) => String(t.date).slice(0, 10) === date);
+    setClassTestsOnDate(onDate);
+    return onDate;
+  }, []);
   useEffect(() => {
     if (!classTestOpen || !/^\d{4}-\d{2}-\d{2}$/.test(classTestDate)) return;
-    let alive = true;
-    fetch('/api/teacher/class-tests')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: NonNullable<typeof classTestView> | null) => {
-        if (!alive || data == null) return;
-        const test = data.find((t) => String(t.date).slice(0, 10) === classTestDate);
-        if (!test) { setClassTestTitle(''); setClassTestMarks({}); return; }
-        const next: Record<string, { marks: string; feedback: string; na?: boolean }> = {};
-        for (const m of test.marks) next[m.studentId] = { marks: m.marks == null ? '' : String(m.marks), feedback: m.feedback ?? '', na: m.notApplicable === true };
-        setClassTestTitle(test.title);
-        setClassTestMarks(next);
-      })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [classTestOpen, classTestDate]);
+    fillClassTest(null);
+    void loadTestsOnDate(classTestDate).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classTestOpen, classTestDate, loadTestsOnDate]);
 
   // Search inside the class-test marks table: only the matching students render,
   // so a teacher can jump straight to one student's marks without scrolling the
@@ -6632,7 +6644,7 @@ finally { setDeletingId(''); setSaving(''); }
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Class test</DialogTitle>
-          <DialogDescription>Pick the test date and give it a title, then enter marks against every student. Tick N/A for a student who did not sit the test (e.g. a new joiner) — it is left out of their report. Picking a date that already has a test loads its saved marks; saving replaces them.</DialogDescription>
+          <DialogDescription>Pick the test date and give it a title, then enter marks against every student. Tick N/A for a student who did not sit the test (e.g. a new joiner, or one who sat a different paper that day) — it is left out of their report. A day can hold several tests: pick a saved one from Test to edit it, or keep "New test".</DialogDescription>
         </DialogHeader>
         {classTestError && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-class-test-error">{classTestError}</p>}
         {classTestNotice && <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-class-test-success">{classTestNotice}</p>}
@@ -6640,6 +6652,15 @@ finally { setDeletingId(''); setSaving(''); }
           <label className="grid gap-1.5 text-sm font-medium">Test date
             <Input type="date" value={classTestDate} onChange={(e) => setClassTestDate(e.target.value)} data-testid="input-class-test-date" />
           </label>
+          {classTestsOnDate.length > 0 && <label className="grid gap-1.5 text-sm font-medium">Test
+            <Select value={classTestId == null ? 'new' : String(classTestId)} onValueChange={(value) => fillClassTest(value === 'new' ? null : classTestsOnDate.find((t) => String(t.id) === value) ?? null)}>
+              <SelectTrigger className="h-9 w-56 bg-card" data-testid="select-class-test"><SelectValue /></SelectTrigger>
+              <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+                <SelectItem value="new">+ New test on this date</SelectItem>
+                {classTestsOnDate.map((t) => <SelectItem key={t.id} value={String(t.id)}>Edit: {t.title}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </label>}
           <label className="grid gap-1.5 text-sm font-medium flex-1 min-w-[200px]">Title
             <Input placeholder="e.g. Mid-term paper" value={classTestTitle} onChange={(e) => setClassTestTitle(e.target.value)} data-testid="input-class-test-title" />
           </label>

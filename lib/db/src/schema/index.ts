@@ -328,12 +328,8 @@ export const classTestsTable = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => ({
-    moduleDateUnique: unique("class_tests_module_date_unique").on(
-      table.module,
-      table.date,
-    ),
-  }),
+  // No (module, date) unique: one day can hold several tests of a module (different
+  // students sit different papers), so a test is identified by its id alone.
 );
 
 export const classTestMarksTable = pgTable(

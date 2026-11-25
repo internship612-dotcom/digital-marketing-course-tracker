@@ -245,11 +245,14 @@ async function ensureClassTestsTables(): Promise<void> {
           date date NOT NULL,
           title text NOT NULL,
           created_by integer REFERENCES teachers(id) ON DELETE SET NULL,
-          created_at timestamptz NOT NULL DEFAULT now(),
-          UNIQUE (module, date)
+          created_at timestamptz NOT NULL DEFAULT now()
         )
       `),
     );
+    // Several tests may share a date now, so the old one-test-per-day constraint goes.
+    // Both names: the boot CREATE named it _key, a drizzle push named it _unique.
+    await db.execute(sql.raw(`ALTER TABLE class_tests DROP CONSTRAINT IF EXISTS class_tests_module_date_key`));
+    await db.execute(sql.raw(`ALTER TABLE class_tests DROP CONSTRAINT IF EXISTS class_tests_module_date_unique`));
     await db.execute(
       sql.raw(`
         CREATE TABLE IF NOT EXISTS class_test_marks (

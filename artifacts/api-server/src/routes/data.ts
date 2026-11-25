@@ -783,8 +783,9 @@ res.json(
 // ---------------------------------------------------------------- class tests
 // A class test is a one-off exam: the teacher picks a real date, gives the test a
 // title, then uploads marks against every student for that test. Unlike the twelve
-// project cycles there is no month/project split — the date IS the identifier, so
-// re-saving a test replaces it rather than stacking up.
+// project cycles there is no month/project split. A day may hold several tests (one
+// group sits one paper, another group a different one), so a test is its id; saving
+// the same date + title again replaces that test rather than stacking up.
 router.get(
   "/teacher/class-tests",
   requireRole("teacher"),
@@ -851,6 +852,7 @@ router.post(
       return;
     }
     const body = (req.body ?? {}) as {
+      id?: unknown;
       date?: unknown;
       title?: unknown;
       marks?: unknown[];
@@ -869,19 +871,48 @@ router.post(
       res.status(400).json({ error: "Send marks for each student." });
       return;
     }
-    const [test] = await db
-      .insert(classTestsTable)
-      .values({
-        module: req.auth.module,
-        date,
-        title,
-        createdBy: Number(req.auth.userId),
-      })
-      .onConflictDoUpdate({
-        target: [classTestsTable.module, classTestsTable.date],
-        set: { title, createdBy: Number(req.auth.userId) },
-      })
-      .returning();
+    // Which test this save is for: an explicit `id` (editing a saved test, which may
+    // also rename it or move its date), else an existing test of this module with the
+    // same date AND title, else a new test. A day can hold several tests, so the date
+    // alone no longer identifies one.
+    const requestedId = typeof body.id === "number" && Number.isInteger(body.id) ? body.id : null;
+    let existing: { id: number } | undefined;
+    if (requestedId != null) {
+      [existing] = await db
+        .select({ id: classTestsTable.id })
+        .from(classTestsTable)
+        .where(and(eq(classTestsTable.id, requestedId), eq(classTestsTable.module, req.auth.module)))
+        .limit(1);
+      if (!existing) {
+        res.status(404).json({ error: "That class test was not found." });
+        return;
+      }
+    } else {
+      [existing] = await db
+        .select({ id: classTestsTable.id })
+        .from(classTestsTable)
+        .where(and(
+          eq(classTestsTable.module, req.auth.module),
+          eq(classTestsTable.date, date),
+          sql`lower(${classTestsTable.title}) = lower(${title})`,
+        ))
+        .limit(1);
+    }
+    const [test] = existing
+      ? await db
+        .update(classTestsTable)
+        .set({ date, title, createdBy: Number(req.auth.userId) })
+        .where(eq(classTestsTable.id, existing.id))
+        .returning()
+      : await db
+        .insert(classTestsTable)
+        .values({
+          module: req.auth.module,
+          date,
+          title,
+          createdBy: Number(req.auth.userId),
+        })
+        .returning();
     if (!test) {
       res.status(500).json({ error: "Could not save the test." });
       return;
