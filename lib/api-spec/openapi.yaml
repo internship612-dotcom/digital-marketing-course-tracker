@@ -820,6 +820,14 @@ components:
         guardianContact:
           type: string
           nullable: true
+        leftOn:
+          type: string
+          nullable: true
+          description: Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.
+        leftReason:
+          type: string
+          nullable: true
+          description: Why the student left, e.g. "Passout", "Dropout" or "Other — <note>".
     AttendanceRecord:
       type: object
       required: [studentId, module, week, status]

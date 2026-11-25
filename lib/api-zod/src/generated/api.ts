@@ -279,7 +279,9 @@ export const ListStudentsResponseItem = zod.object({
   "photo": zod.string().nullish(),
   "remark": zod.string().nullish(),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "leftOn": zod.string().nullish().describe('Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.'),
+  "leftReason": zod.string().nullish().describe('Why the student left, e.g. \"Passout\", \"Dropout\" or \"Other — <note>\".')
 })
 export const ListStudentsResponse = zod.array(ListStudentsResponseItem)
 
@@ -325,7 +327,9 @@ export const CreateStudentResponse = zod.object({
   "photo": zod.string().nullish(),
   "remark": zod.string().nullish(),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "leftOn": zod.string().nullish().describe('Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.'),
+  "leftReason": zod.string().nullish().describe('Why the student left, e.g. \"Passout\", \"Dropout\" or \"Other — <note>\".')
 })
 
 
@@ -349,7 +353,9 @@ export const GetStudentResponse = zod.object({
   "photo": zod.string().nullish(),
   "remark": zod.string().nullish(),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "leftOn": zod.string().nullish().describe('Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.'),
+  "leftReason": zod.string().nullish().describe('Why the student left, e.g. \"Passout\", \"Dropout\" or \"Other — <note>\".')
 })
 
 
@@ -394,7 +400,9 @@ export const UpdateStudentResponse = zod.object({
   "photo": zod.string().nullish(),
   "remark": zod.string().nullish(),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "leftOn": zod.string().nullish().describe('Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.'),
+  "leftReason": zod.string().nullish().describe('Why the student left, e.g. \"Passout\", \"Dropout\" or \"Other — <note>\".')
 })
 
 
@@ -466,7 +474,9 @@ export const ListTeacherStudentsResponseItem = zod.object({
   "photo": zod.string().nullish(),
   "remark": zod.string().nullish(),
   "address": zod.string().nullish(),
-  "guardianContact": zod.string().nullish()
+  "guardianContact": zod.string().nullish(),
+  "leftOn": zod.string().nullish().describe('Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled.'),
+  "leftReason": zod.string().nullish().describe('Why the student left, e.g. \"Passout\", \"Dropout\" or \"Other — <note>\".')
 })
 export const ListTeacherStudentsResponse = zod.array(ListTeacherStudentsResponseItem)
 

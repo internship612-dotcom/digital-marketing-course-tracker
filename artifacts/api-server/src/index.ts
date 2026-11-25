@@ -25,6 +25,17 @@ async function ensureAttendanceLeaveColumn(): Promise<void> {
   }
 }
 
+// students.left_on / left_reason: a passed-out or dropped-out student's last day on the
+// course and why. Added here for the same reason as leave_days above.
+async function ensureStudentLeftColumns(): Promise<void> {
+  try {
+    await db.execute(sql.raw("ALTER TABLE students ADD COLUMN IF NOT EXISTS left_on date"));
+    await db.execute(sql.raw("ALTER TABLE students ADD COLUMN IF NOT EXISTS left_reason text"));
+  } catch (err) {
+    logger.warn({ err }, "Could not ensure students.left_on/left_reason columns");
+  }
+}
+
 // Institute-wide non-teaching days. Kept separate from the column above because this one is
 // a whole table, and it has to be created with its unique constraint on `date` — that is
 // what stops two desks recording two different events for the same day.
@@ -383,6 +394,7 @@ async function ensureLoginCodes(): Promise<void> {
 ensureCalendarEventsTable()
   .then(ensureModuleClassCancellationsTable)
   .then(ensureAttendanceLeaveColumn)
+  .then(ensureStudentLeftColumns)
   .then(ensureAnnouncementsImageColumn)
   .then(ensureProjectSubmissionsTable)
   .then(ensureClassTestsTables)

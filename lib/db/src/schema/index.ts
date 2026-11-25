@@ -97,6 +97,11 @@ export const studentsTable = pgTable("students", {
   photo: text("photo"),
   // Free-text note the admin or module owner keeps against the student.
   remark: text("remark"),
+  // Set when the student passed out, dropped out or otherwise stopped: their last day on
+  // the course. Everything up to it stays counted; after it they drop out of the
+  // attendance register, the project lists and the desk counts. Null = still enrolled.
+  leftOn: date("left_on"),
+  leftReason: text("left_reason"),
   registrationDate: timestamp("registration_date", { withTimezone: true })
     .defaultNow()
     .notNull(),

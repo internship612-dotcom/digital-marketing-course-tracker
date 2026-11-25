@@ -318,7 +318,16 @@ function studentView(student: typeof studentsTable.$inferSelect) {
     remark: student.remark,
     address: student.address,
     guardianContact: student.guardianContact,
+    leftOn: student.leftOn ?? null,
+    leftReason: student.leftReason ?? null,
   };
+}
+
+// A student who has left the course (passout / dropout / other) and whose last day is
+// before `day`. They stay on the roster and in their record, but drop out of the
+// day-to-day lists and counts from the day after they left.
+function hasLeftBefore(student: { leftOn?: string | null }, day: string): boolean {
+  return Boolean(student.leftOn) && String(student.leftOn) < day;
 }
 
 // Optional free text: an empty box is stored as nothing rather than "".
@@ -1315,6 +1324,132 @@ router.get(
   },
 );
 
+// The assessment register for one calendar month: one row per (student, project) whose
+// project falls due in that month, built off each student's own joining date — so a new
+// admission shows up in the right months on its own. A long month can hold three of one
+// student's projects; each is its own row. `months` feeds the picker: every month in which
+// anybody has a project due, plus the current one.
+// Shared by the module desk, the admin module report and the branch module report: every
+// (student, project) of `module` falling due in `monthKey`, optionally only one branch's
+// students. Students who left the course are cut at their last day by projectSchedule.
+async function assessmentMonth(module: string, monthKey: string, branchId: number | null) {
+  const currentKey = todayIso().slice(0, 7);
+
+  const students = await db
+    .select({
+      id: studentsTable.id,
+      fullName: studentsTable.fullName,
+      fathersName: studentsTable.fathersName,
+      dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn,
+    })
+    .from(studentsTable)
+    .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined)
+    .orderBy(asc(studentsTable.fullName));
+  const assessments = await db
+    .select()
+    .from(assessmentsTable)
+    .where(eq(assessmentsTable.module, module));
+  const submissions = await db
+    .select({
+      studentId: projectSubmissionsTable.studentId,
+      cycle: projectSubmissionsTable.cycle,
+      projectName: projectSubmissionsTable.projectName,
+      projectLink: projectSubmissionsTable.projectLink,
+    })
+    .from(projectSubmissionsTable)
+    .where(eq(projectSubmissionsTable.module, module));
+
+  const monthKeys = new Set<string>([currentKey]);
+  const rows: Array<{
+    studentId: string;
+    fullName: string;
+    fathersName: string | null;
+    dateOfJoining: string | null;
+    cycle: number;
+    start: string;
+    due: string;
+    marks: number | null;
+    feedback: string | null;
+    projectName: string | null;
+    submittedName: string | null;
+    projectLink: string | null;
+  }> = [];
+  for (const student of students) {
+    for (const slot of projectSchedule(student.dateOfJoining, student.leftOn)) {
+      monthKeys.add(slot.due.slice(0, 7));
+      if (slot.due.slice(0, 7) !== monthKey) continue;
+      const record = assessments.find((a) => a.studentId === student.id && a.cycle === slot.cycle);
+      const submission = submissions.find((s) => s.studentId === student.id && s.cycle === slot.cycle);
+      rows.push({
+        studentId: student.id,
+        fullName: student.fullName,
+        fathersName: student.fathersName ?? null,
+        dateOfJoining: student.dateOfJoining ?? null,
+        cycle: slot.cycle,
+        start: slot.start,
+        due: slot.due,
+        marks: record?.marks ?? null,
+        feedback: record?.feedback ?? null,
+        projectName: record?.projectName ?? null,
+        submittedName: submission?.projectName ?? null,
+        projectLink: submission?.projectLink ?? null,
+      });
+    }
+  }
+  rows.sort((a, b) => a.due.localeCompare(b.due) || a.fullName.localeCompare(b.fullName));
+  return { month: monthKey, months: [...monthKeys].sort(), rows };
+}
+
+function monthParam(raw: unknown): string {
+  const text = typeof raw === "string" ? raw : "";
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(text) ? text : todayIso().slice(0, 7);
+}
+
+router.get(
+  "/teacher/assessments/month",
+  requireRole("teacher"),
+  async (req, res): Promise<void> => {
+    if (!req.auth?.module) {
+      res.status(400).json({ error: "Choose a valid module." });
+      return;
+    }
+    res.json(await assessmentMonth(req.auth.module, monthParam(req.query.month), null));
+  },
+);
+
+// The admin twin, for any module; `?branchId=` narrows it to one branch's students.
+router.get(
+  "/admin/modules/:module/assessments/month",
+  requireRole("admin"),
+  async (req, res): Promise<void> => {
+    const module = String(req.params.module ?? "");
+    if (!(await isValidModule(module as Module))) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    const rawBranch = typeof req.query.branchId === "string" ? Number(req.query.branchId) : NaN;
+    res.json(await assessmentMonth(module, monthParam(req.query.month), Number.isInteger(rawBranch) ? rawBranch : null));
+  },
+);
+
+// The branch twin: only that branch's modules and students.
+router.get(
+  "/branch/modules/:module/assessments/month",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    const module = String(req.params.module ?? "");
+    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
+      res.status(400).json({ error: "Invalid module." });
+      return;
+    }
+    res.json(await assessmentMonth(module, monthParam(req.query.month), req.auth.branchId));
+  },
+);
+
 // Whole-class assessment view: every student on this module with their marks
 // across all twelve cycles, keyed by student id so the Class Assessment page can
 // search and filter without a per-cycle round trip.
@@ -1403,7 +1538,9 @@ router.post(
           set: {
             marks: entry.marks,
             feedback: entry.feedback,
-            projectName: optionalText(entry.projectName),
+            // A save that does not send a project name keeps the stored one; the register
+            // page only sends marks + feedback and used to wipe the name on every save.
+            ...(entry.projectName === undefined ? {} : { projectName: optionalText(entry.projectName) }),
             enteredAt: new Date(),
             enteredBy: Number(req.auth.userId),
           },
@@ -1604,8 +1741,15 @@ type CourseMonth = { month: number; start: string; end: string; days: string[] }
 // `events` are the institute-wide non-teaching days. They are dropped from `days`, which is
 // what removes them from the percentage entirely — a PTM is neither present nor absent, and
 // counting it as absent would punish students for a holiday.
-function courseMonths(joinedOn: string | null, events: ReadonlyMap<string, string> = new Map()): CourseMonth[] {
+// `leftOn` (a passed-out / dropped-out student's last day) ends the course there: later days
+// are dropped and months that start after it disappear, so nothing after it counts.
+function courseMonths(joinedOn: string | null, events: ReadonlyMap<string, string> = new Map(), leftOn: string | null = null): CourseMonth[] {
   if (!joinedOn) return [];
+  if (leftOn) {
+    return courseMonths(joinedOn, events)
+      .filter((slice) => slice.start <= leftOn)
+      .map((slice) => ({ ...slice, end: slice.end > leftOn ? leftOn : slice.end, days: slice.days.filter((day) => day <= leftOn) }));
+  }
   const joinDate = new Date(`${joinedOn}T00:00:00Z`);
   if (Number.isNaN(joinDate.getTime())) return [];
   const year = joinDate.getUTCFullYear();
@@ -1647,6 +1791,33 @@ function courseMonths(joinedOn: string | null, events: ReadonlyMap<string, strin
     slices.push({ month: slices.length + 1, start: isoDay(sliceStart), end: isoDay(end), days });
   }
   return slices;
+}
+
+// The twelve projects run on their own clock, separate from the calendar-month attendance
+// slices: back-to-back 15-calendar-day windows counted from the joining date (Sundays and
+// events included — this is the "Day 1–15, Day 16–30" of the project plan). Project N is
+// cycle N, so stored marks keep their meaning; only the window each one covers comes from
+// here. A project belongs to the calendar month its due date falls in.
+const PROJECT_COUNT = 12;
+const PROJECT_DAYS = 15;
+
+type ProjectSlot = { cycle: number; start: string; due: string };
+
+// A student who left keeps only the projects that fell due on or before their last day.
+function projectSchedule(joinedOn: string | null, leftOn: string | null = null): ProjectSlot[] {
+  if (!joinedOn) return [];
+  const joined = new Date(`${joinedOn}T00:00:00Z`);
+  if (Number.isNaN(joined.getTime())) return [];
+  return Array.from({ length: PROJECT_COUNT }, (_, index) => {
+    const start = new Date(joined.getTime() + index * PROJECT_DAYS * 86_400_000);
+    const due = new Date(start.getTime() + (PROJECT_DAYS - 1) * 86_400_000);
+    return { cycle: index + 1, start: isoDay(start), due: isoDay(due) };
+  }).filter((slot) => !leftOn || slot.due <= leftOn);
+}
+
+// The projects of one student that fall due in a calendar month ("YYYY-MM").
+function projectsDueIn(joinedOn: string | null, monthKey: string, leftOn: string | null = null): ProjectSlot[] {
+  return projectSchedule(joinedOn, leftOn).filter((slot) => slot.due.slice(0, 7) === monthKey);
 }
 
 // Attendance is stored as week-number + mon..sat flags, week 1 being the week the
@@ -1710,7 +1881,7 @@ async function classCancellationFor(module: string, date: string) {
 
 async function buildStudentReport(studentId: string) {
   const [student] = await db
-    .select({ dateOfJoining: studentsTable.dateOfJoining })
+    .select({ dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn, leftReason: studentsTable.leftReason })
     .from(studentsTable)
     .where(eq(studentsTable.id, studentId))
     .limit(1);
@@ -1732,12 +1903,21 @@ async function buildStudentReport(studentId: string) {
 
   const joinedOn = student?.dateOfJoining ?? null;
   const events = await eventDates();
-  const slices = courseMonths(joinedOn, events);
+  const leftOn = student?.leftOn ?? null;
+  const slices = courseMonths(joinedOn, events, leftOn);
   const { present: presentOn, leave: leaveOn } = attendanceDatesByModule(joinedOn, attendanceRows);
   const moduleKeys = await studentModuleKeys(studentId);
   const cancellations = await classCancellationsFor(moduleKeys);
+  const schedule = projectSchedule(joinedOn, leftOn);
 
-  const months = slices.map((slice) => {
+  const months = slices.map((slice, sliceIndex) => {
+    // Projects sit in the month their due date falls in. A late joiner's last projects
+    // fall due after the last attendance month ends, so the last month also takes those
+    // rather than letting them disappear from the report.
+    const isLast = sliceIndex === slices.length - 1;
+    const dueHere = schedule.filter(
+      (slot) => slot.due >= slice.start && (slot.due <= slice.end || isLast),
+    );
     const perModule = moduleKeys.map((module) => {
       const moduleCancellations = cancellations.get(module) ?? new Map<string, string>();
       const moduleDays = slice.days.filter((day) => !moduleCancellations.has(day));
@@ -1761,8 +1941,7 @@ async function buildStudentReport(studentId: string) {
         cancelledClasses: slice.days
           .filter((day) => moduleCancellations.has(day))
           .map((day) => ({ date: day, reason: moduleCancellations.get(day)! })),
-        projects: [1, 2].map((project) => {
-          const cycle = (slice.month - 1) * 2 + project;
+        projects: dueHere.map(({ cycle, start, due }) => {
           const record = assessmentRows.find(
             (row) => row.module === module && row.cycle === cycle,
           );
@@ -1770,8 +1949,10 @@ async function buildStudentReport(studentId: string) {
             (row) => row.module === module && row.cycle === cycle,
           );
           return {
-            project,
+            project: cycle,
             cycle,
+            start,
+            due,
             marks: record?.marks ?? null,
             feedback: record?.feedback ?? null,
             projectName: record?.projectName ?? null,
@@ -1821,6 +2002,9 @@ async function buildStudentReport(studentId: string) {
     joinedOn,
     courseStart: slices[0]?.start ?? null,
     courseEnd: slices[slices.length - 1]?.end ?? null,
+    projectSchedule: schedule,
+    leftOn,
+    leftReason: student?.leftReason ?? null,
     overall: {
       present: overallPresent,
       absent: Math.max(0, overallTotal - overallPresent),
@@ -2016,6 +2200,78 @@ router.patch(
   },
 );
 
+// Mark a student as having left the course — passed out, dropped out or stopped for another
+// reason — with their last day, or clear it (`{ leftOn: null }`) to bring them back. Their
+// data up to that day stays exactly as it is; after it they leave the register, the
+// project lists and the desk counts, and nothing more falls due for them.
+// Shared by the admin/teacher and branch routes. A branch may only touch its own students.
+async function setStudentLeft(
+  id: string,
+  body: { leftOn?: unknown; reason?: unknown },
+  branchId: number | null,
+  res: import("express").Response,
+): Promise<void> {
+  const scope = branchId != null
+    ? and(eq(studentsTable.id, id), eq(studentsTable.branchId, branchId))
+    : eq(studentsTable.id, id);
+  if (body.leftOn === null) {
+    const [student] = await db
+      .update(studentsTable)
+      .set({ leftOn: null, leftReason: null })
+      .where(scope)
+      .returning();
+    if (!student) { res.status(404).json({ error: "Student not found." }); return; }
+    res.json(studentView(student));
+    return;
+  }
+  const leftOn = typeof body.leftOn === "string" ? body.leftOn.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(leftOn) || Number.isNaN(new Date(`${leftOn}T00:00:00Z`).getTime())) {
+    res.status(400).json({ error: "Choose the student's last day." });
+    return;
+  }
+  const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 300) : "";
+  if (!reason) {
+    res.status(400).json({ error: "Say why the student left (passout, dropout or another reason)." });
+    return;
+  }
+  const [existing] = await db
+    .select({ dateOfJoining: studentsTable.dateOfJoining })
+    .from(studentsTable)
+    .where(scope)
+    .limit(1);
+  if (!existing) { res.status(404).json({ error: "Student not found." }); return; }
+  if (leftOn < String(existing.dateOfJoining).slice(0, 10)) {
+    res.status(400).json({ error: "The last day cannot be before the joining date." });
+    return;
+  }
+  const [student] = await db
+    .update(studentsTable)
+    .set({ leftOn, leftReason: reason })
+    .where(scope)
+    .returning();
+  res.json(studentView(student!));
+}
+
+router.patch(
+  ["/admin/students/:id/left", "/teacher/students/:id/left"],
+  requireRole("admin", "teacher"),
+  async (req, res): Promise<void> => {
+    await setStudentLeft(String(req.params.id ?? ""), req.body ?? {}, null, res);
+  },
+);
+
+router.patch(
+  "/branch/students/:id/left",
+  requireRole("branch"),
+  async (req, res): Promise<void> => {
+    if (req.auth?.branchId == null) {
+      res.status(400).json({ error: "Choose a branch." });
+      return;
+    }
+    await setStudentLeft(rootBranchStudentId(req), req.body ?? {}, req.auth.branchId, res);
+  },
+);
+
 // Attendance rows are keyed by week number counted from the Monday of the joining week,
 // so changing a joining date would silently slide every recorded day onto a different
 // real date (and hide the early ones). Re-key the rows so each mark stays on the date it
@@ -2028,7 +2284,7 @@ async function updateStudentKeepingAttendance(
 ) {
   return db.transaction(async (tx) => {
     const [before] = await tx
-      .select({ dateOfJoining: studentsTable.dateOfJoining })
+      .select({ dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
       .from(studentsTable)
       .where(where)
       .limit(1);
@@ -2177,8 +2433,17 @@ router.get(
       );
     const attendanceMarked = attendanceRows.length;
     const assessmentMarked = assessmentRows.length;
+
+    // The desk shows students still on the course today: anyone who passed out or dropped
+    // out before today is left out of the total.
+    const today = todayIso();
+    const rosterRows = await db
+      .select({ leftOn: studentsTable.leftOn })
+      .from(studentsTable);
+    const activeStudents = rosterRows.filter((student) => !hasLeftBefore(student, today)).length;
+
     res.json({
-      totalStudents,
+      totalStudents: activeStudents,
       attendanceMarked,
       attendancePending: Math.max(0, totalStudents - attendanceMarked),
       assessmentMarked,
@@ -2394,7 +2659,7 @@ router.get(
     const branchId = typeof req.query.branchId === "string" ? Number(req.query.branchId) : null;
 
     const students = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, branchId: studentsTable.branchId })
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn, branchId: studentsTable.branchId })
       .from(studentsTable)
       .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined);
     const studentIds = students.map((s) => s.id);
@@ -2418,7 +2683,7 @@ router.get(
     // would make the next month look adjacent.
     const monthKeys = new Set<string>();
     for (const student of students) {
-      for (const slice of courseMonths(student.dateOfJoining, events)) {
+      for (const slice of courseMonths(student.dateOfJoining, events, student.leftOn)) {
         if (slice.start) monthKeys.add(slice.start.slice(0, 7));
       }
     }
@@ -2432,10 +2697,16 @@ router.get(
     let studentsMarked = 0;
     let presentDays = 0;
     let possibleDays = 0;
-    let projectOneMarked = 0;
-    let projectTwoMarked = 0;
+    // Projects are counted by due date: every project of every student that falls due in
+    // the picked calendar month, and how many of those already carry a mark.
+    let projectsDue = 0;
+    let projectsMarked = 0;
     for (const student of students) {
-      const slice = courseMonths(student.dateOfJoining, events).find(
+      for (const slot of projectsDueIn(student.dateOfJoining, monthKey, student.leftOn)) {
+        projectsDue += 1;
+        if (assessments.some((a) => a.studentId === student.id && a.cycle === slot.cycle && a.marks != null)) projectsMarked += 1;
+      }
+      const slice = courseMonths(student.dateOfJoining, events, student.leftOn).find(
         (s) => s.start && s.start.slice(0, 7) === monthKey,
       );
       if (!slice) continue; // not enrolled during this calendar month
@@ -2448,20 +2719,12 @@ router.get(
       presentDays += present;
       if (present > 0) studentsMarked += 1;
 
-      // Project four-and-two never line up across students: cycle numbers are relative
-      // to each joining date, so for this calendar month each student has their own
-      // pair. What stays common is the project slot — project 1 of *their* month.
-      const cycle1 = (slice.month - 1) * 2 + 1;
-      const cycle2 = (slice.month - 1) * 2 + 2;
-      const own = assessments.filter((a) => a.studentId === student.id);
-      if (own.find((a) => a.cycle === cycle1 && a.marks != null)) projectOneMarked += 1;
-      if (own.find((a) => a.cycle === cycle2 && a.marks != null)) projectTwoMarked += 1;
     }
 
     const totalStudents = students.reduce(
       (sum, student) =>
         sum +
-        (courseMonths(student.dateOfJoining, events).some(
+        (courseMonths(student.dateOfJoining, events, student.leftOn).some(
           (s) => s.start && s.start.slice(0, 7) === monthKey,
         )
           ? 1
@@ -2478,74 +2741,12 @@ router.get(
       marked: presentDays,
       expected: possibleDays,
       pending: Math.max(0, possibleDays - presentDays),
-      assessmentMarked: projectOneMarked + projectTwoMarked,
-      projects: [
-        { project: 1, marked: projectOneMarked },
-        { project: 2, marked: projectTwoMarked },
-      ],
+      assessmentMarked: projectsMarked,
+      // Due-date based now: how many projects fell due this month and how many are marked.
+      projectsDue,
+      projectsMarked,
+      projectsPending: Math.max(0, projectsDue - projectsMarked),
     });
-  },
-);
-
-// Whole-course marks status, deliberately free of any calendar/term logic: project marks
-// keep being uploaded after their 15-day window, so a month-bound count would mislead. It
-// answers one question — of the module's students, how many have a marks row at all?
-async function moduleMarksSummary(module: string, branchId: number | null) {
-  const students = await db
-    .select({ id: studentsTable.id })
-    .from(studentsTable)
-    .where(branchId != null ? eq(studentsTable.branchId, branchId) : undefined);
-  const studentIds = students.map((s) => s.id);
-  let assessmentMarked = 0;
-  if (studentIds.length > 0) {
-    const markedRows = await db
-      .selectDistinct({ studentId: assessmentsTable.studentId })
-      .from(assessmentsTable)
-      .where(
-        and(
-          eq(assessmentsTable.module, module),
-          isNotNull(assessmentsTable.marks),
-          inArray(assessmentsTable.studentId, studentIds),
-        ),
-      );
-    assessmentMarked = markedRows.length;
-  }
-  return {
-    totalStudents: studentIds.length,
-    assessmentMarked,
-    assessmentPending: Math.max(0, studentIds.length - assessmentMarked),
-  };
-}
-
-router.get(
-  "/admin/modules/:module/marks-summary",
-  requireRole("admin"),
-  async (req, res): Promise<void> => {
-    const module = req.params.module as Module;
-    if (!(await isValidModule(module))) {
-      res.status(400).json({ error: "Invalid module." });
-      return;
-    }
-    const rawBranchId = typeof req.query.branchId === "string" ? Number(req.query.branchId) : null;
-    const branchId = rawBranchId != null && Number.isFinite(rawBranchId) ? rawBranchId : null;
-    res.json(await moduleMarksSummary(module, branchId));
-  },
-);
-
-router.get(
-  "/branch/modules/:module/marks-summary",
-  requireRole("branch"),
-  async (req, res): Promise<void> => {
-    if (req.auth?.branchId == null) {
-      res.status(400).json({ error: "Choose a branch." });
-      return;
-    }
-    const module = req.params.module as Module;
-    if (!(await branchModuleIds(req.auth.branchId)).includes(module)) {
-      res.status(400).json({ error: "Invalid module." });
-      return;
-    }
-    res.json(await moduleMarksSummary(module, req.auth.branchId));
   },
 );
 
@@ -2812,26 +3013,22 @@ function attendancePendingFor(
   return done ? 0 : 1;
 }
 
-// Two projects a month: the first falls due halfway through the month, the second at
-// the end of it. Only projects whose date has passed count as outstanding.
+// Each project falls due on the last day of its own 15-day window (see projectSchedule).
+// Only projects whose due date has passed count as outstanding. `events` is unused now —
+// project windows are calendar days — but stays in the signature for existing callers.
 function marksPendingFor(
   joinedOn: string | null,
   rows: (typeof assessmentsTable.$inferSelect)[],
   module: Module,
   today: string,
-  events: ReadonlyMap<string, string> = new Map(),
+  _events: ReadonlyMap<string, string> = new Map(),
+  leftOn: string | null = null,
 ): number {
   let pending = 0;
-  for (const slice of courseMonths(joinedOn, events)) {
-    const start = new Date(`${slice.start}T00:00:00Z`).getTime();
-    const end = new Date(`${slice.end}T00:00:00Z`).getTime();
-    const dueDates = [isoDay(new Date(start + Math.floor((end - start) / 2))), slice.end];
-    dueDates.forEach((due, index) => {
-      if (today <= due) return; // not due yet
-      const cycle = (slice.month - 1) * 2 + index + 1;
-      const record = rows.find((row) => row.module === module && row.cycle === cycle);
-      if (record?.marks == null) pending += 1;
-    });
+  for (const slot of projectSchedule(joinedOn, leftOn)) {
+    if (today <= slot.due) continue; // not due yet
+    const record = rows.find((row) => row.module === module && row.cycle === slot.cycle);
+    if (record?.marks == null) pending += 1;
   }
   return pending;
 }
@@ -2848,7 +3045,7 @@ type StatusPayload = {
 async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
   const today = todayIso();
   const students = await db
-    .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+    .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
     .from(studentsTable);
   const attendanceRows = await db.select().from(attendanceTable);
   const assessmentRows = await db.select().from(assessmentsTable);
@@ -2871,8 +3068,9 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
     const ownAssessments = assessmentRows.filter((row) => row.studentId === student.id);
     let attendancePending = 0;
     let marksPending = 0;
+    const left = hasLeftBefore(student, today);
     for (const module of scope) {
-      attendancePending += attendancePendingFor(
+      if (!left) attendancePending += attendancePendingFor(
         student.dateOfJoining,
         ownAttendance.filter((row) => row.module === module),
         module,
@@ -2880,7 +3078,7 @@ async function buildStatus(scope: readonly Module[]): Promise<StatusPayload> {
         isEventToday,
         cancelledToday.has(module),
       );
-      marksPending += marksPendingFor(student.dateOfJoining, ownAssessments, module, today, events);
+      marksPending += marksPendingFor(student.dateOfJoining, ownAssessments, module, today, events, student.leftOn);
     }
     payload.pendingAttendance[student.id] = attendancePending;
     payload.pendingMarks[student.id] = marksPending;
@@ -2946,7 +3144,7 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
   if (eventTitle != null || classCancellation || sunday) return result;
 
   for (const student of students) {
-    const slot = weekAndDayFor(student.dateOfJoining, date);
+    const slot = weekAndDayFor(student.dateOfJoining, date, student.leftOn);
     if (slot) {
       result.eligible += 1;
       const row = attendanceRows.find((r) => r.studentId === student.id && r.week === slot.week);
@@ -2964,10 +3162,10 @@ async function buildDayStatus(module: Module, date: Date, branchId?: number | nu
 
     // Marks count the projects that have fallen due by this date. Only for students inside
     // their course: a finished course must not sit at "pending" forever.
-    const inCourse = courseMonths(student.dateOfJoining, events)
+    const inCourse = courseMonths(student.dateOfJoining, events, student.leftOn)
       .some((slice) => iso >= slice.start && iso <= slice.end);
     if (inCourse) {
-      const due = marksPendingFor(student.dateOfJoining, assessmentRows, module, iso, events);
+      const due = marksPendingFor(student.dateOfJoining, assessmentRows, module, iso, events, student.leftOn);
       if (due === 0) result.assessmentMarked += 1;
       else result.assessmentPending += due;
     }
@@ -3039,11 +3237,14 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Week numbers are per student — week 1 is the week that student joined — so one
 // calendar date lands on a different week row for each student.
+// leftOn: a student who passed out / dropped out has no teaching day after their last day.
 function weekAndDayFor(
   joinedOn: string | null,
   date: Date,
+  leftOn: string | null = null,
 ): { week: number; day: (typeof DAY_FLAG_ORDER)[number] } | null {
   if (!joinedOn) return null;
+  if (leftOn && isoDay(date) > leftOn) return null; // after the student left the course
   const joinDate = new Date(`${joinedOn}T00:00:00Z`);
   if (Number.isNaN(joinDate.getTime())) return null;
   const index = (date.getUTCDay() + 6) % 7;
@@ -3190,7 +3391,7 @@ router.get(
       return;
     }
     const [students, rows, events, cancellations] = await Promise.all([
-      db.select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining }).from(studentsTable),
+      db.select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn }).from(studentsTable),
       db.select().from(attendanceTable).where(eq(attendanceTable.module, module)),
       eventDates(),
       classCancellationsFor([module]),
@@ -3211,7 +3412,7 @@ router.get(
       let marked = 0;
       for (const student of students) {
         if (String(student.dateOfJoining).slice(0, 10) > iso) continue;
-        const slot = weekAndDayFor(student.dateOfJoining, date);
+        const slot = weekAndDayFor(student.dateOfJoining, date, student.leftOn);
         if (!slot) continue;
         eligible += 1;
         const row = rowFor.get(`${student.id}:${slot.week}`);
@@ -3246,7 +3447,7 @@ router.get(
     // Only students enrolled on or before this date show up. A teacher marking a day in
     // November must not see students who enrolled in December — the register for that
     // month is a snapshot of who was actually there, and it stays that way.
-    const enrolled = students.filter((s) => String(s.dateOfJoining).slice(0, 10) <= isoDay(date));
+    const enrolled = students.filter((s) => String(s.dateOfJoining).slice(0, 10) <= isoDay(date) && !hasLeftBefore(s, isoDay(date)));
     const rows = await db
       .select()
       .from(attendanceTable)
@@ -3254,7 +3455,7 @@ router.get(
 
     res.json(
       enrolled.map((student) => {
-        const slot = weekAndDayFor(student.dateOfJoining, date);
+        const slot = weekAndDayFor(student.dateOfJoining, date, student.leftOn);
         const row = slot
           ? rows.find((r) => r.studentId === student.id && r.week === slot.week)
           : undefined;
@@ -3320,7 +3521,7 @@ router.post(
 
     const touched = [...new Set([...present, ...absent, ...leave])];
     const students = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
       .from(studentsTable)
       .where(inArray(studentsTable.id, touched));
     const existing = await db
@@ -3338,7 +3539,7 @@ router.post(
     let saved = 0;
     let skipped = 0;
     for (const student of students) {
-      const slot = weekAndDayFor(student.dateOfJoining, date);
+      const slot = weekAndDayFor(student.dateOfJoining, date, student.leftOn);
       if (!slot) {
         skipped += 1;
         continue;
@@ -3422,7 +3623,7 @@ router.post(
     }
 
     const student = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
       .from(studentsTable)
       .where(eq(studentsTable.id, body.studentId))
       .limit(1);
@@ -3431,7 +3632,7 @@ router.post(
       return;
     }
 
-    const slot = weekAndDayFor(student[0].dateOfJoining, date);
+    const slot = weekAndDayFor(student[0].dateOfJoining, date, student[0].leftOn);
     if (!slot) {
       res.status(400).json({ error: "This date is not inside the student's course." });
       return;
@@ -3526,7 +3727,7 @@ router.get(
       const to = `${year}-${String(m + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
       const student = await db
-        .select({ id: studentsTable.id, fullName: studentsTable.fullName, dateOfJoining: studentsTable.dateOfJoining })
+        .select({ id: studentsTable.id, fullName: studentsTable.fullName, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
         .from(studentsTable)
         .where(eq(studentsTable.id, studentId))
         .limit(1);
@@ -3569,7 +3770,7 @@ router.get(
           const date = new Date(year, m, d);
           if (date.getMonth() !== m) continue;
           const isoDate = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
-          const slot = weekAndDayFor(student[0].dateOfJoining, date);
+          const slot = weekAndDayFor(student[0].dateOfJoining, date, student[0].leftOn);
           if (!slot) continue; // Sunday or before joining
           monthDates[isoDate] = { week: slot.week, day: slot.day };
         }
@@ -3624,7 +3825,7 @@ router.post(
     }
 
     const student = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
       .from(studentsTable)
       .where(eq(studentsTable.id, body.studentId))
       .limit(1);
@@ -3643,7 +3844,7 @@ router.post(
       if (!date || !rec.mark || isFutureDay(date)) { skipped.push(rec.date); continue; }
       if (await classCancellationFor(req.auth.module, isoDay(date))) { skipped.push(rec.date); continue; }
 
-      const slot = weekAndDayFor(student[0].dateOfJoining, date);
+      const slot = weekAndDayFor(student[0].dateOfJoining, date, student[0].leftOn);
       if (!slot) { skipped.push(rec.date); continue; }
 
       let state = weekState.get(slot.week);
@@ -5608,7 +5809,7 @@ export async function runAutoProjectReminders(): Promise<{ created: number; skip
     .select({
       id: studentsTable.id,
       fullName: studentsTable.fullName,
-      dateOfJoining: studentsTable.dateOfJoining,
+      dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn,
       branchId: studentsTable.branchId,
     })
     .from(studentsTable)
@@ -6299,7 +6500,7 @@ router.get(
       : isoDay(new Date()).slice(0, 7);
 
     const branchStudents = await db
-      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining })
+      .select({ id: studentsTable.id, dateOfJoining: studentsTable.dateOfJoining, leftOn: studentsTable.leftOn })
       .from(studentsTable)
       .where(eq(studentsTable.branchId, req.auth.branchId));
     const studentIds = branchStudents.map((s) => s.id);
@@ -6321,7 +6522,7 @@ router.get(
 
     const monthKeys = new Set<string>();
     for (const student of branchStudents) {
-      for (const slice of courseMonths(student.dateOfJoining, events)) {
+      for (const slice of courseMonths(student.dateOfJoining, events, student.leftOn)) {
         if (slice.start) monthKeys.add(slice.start.slice(0, 7));
       }
     }
@@ -6335,10 +6536,16 @@ router.get(
     let studentsMarked = 0;
     let presentDays = 0;
     let possibleDays = 0;
-    let projectOneMarked = 0;
-    let projectTwoMarked = 0;
+    // Projects are counted by due date: every project of every student that falls due in
+    // the picked calendar month, and how many of those already carry a mark.
+    let projectsDue = 0;
+    let projectsMarked = 0;
     for (const student of branchStudents) {
-      const slice = courseMonths(student.dateOfJoining, events).find(
+      for (const slot of projectsDueIn(student.dateOfJoining, monthKey, student.leftOn)) {
+        projectsDue += 1;
+        if (assessments.some((a) => a.studentId === student.id && a.cycle === slot.cycle && a.marks != null)) projectsMarked += 1;
+      }
+      const slice = courseMonths(student.dateOfJoining, events, student.leftOn).find(
         (s) => s.start && s.start.slice(0, 7) === monthKey,
       );
       if (!slice) continue;
@@ -6352,17 +6559,12 @@ router.get(
       presentDays += present;
       if (present > 0) studentsMarked += 1;
 
-      const cycle1 = (slice.month - 1) * 2 + 1;
-      const cycle2 = (slice.month - 1) * 2 + 2;
-      const own = assessments.filter((a) => a.studentId === student.id);
-      if (own.find((a) => a.cycle === cycle1 && a.marks != null)) projectOneMarked += 1;
-      if (own.find((a) => a.cycle === cycle2 && a.marks != null)) projectTwoMarked += 1;
     }
 
     const totalStudents = branchStudents.reduce(
       (sum, student) =>
         sum +
-        (courseMonths(student.dateOfJoining, events).some(
+        (courseMonths(student.dateOfJoining, events, student.leftOn).some(
           (s) => s.start && s.start.slice(0, 7) === monthKey,
         )
           ? 1
@@ -6379,11 +6581,11 @@ router.get(
       marked: presentDays,
       expected: possibleDays,
       pending: Math.max(0, possibleDays - presentDays),
-      assessmentMarked: projectOneMarked + projectTwoMarked,
-      projects: [
-        { project: 1, marked: projectOneMarked },
-        { project: 2, marked: projectTwoMarked },
-      ],
+      assessmentMarked: projectsMarked,
+      // Due-date based now: how many projects fell due this month and how many are marked.
+      projectsDue,
+      projectsMarked,
+      projectsPending: Math.max(0, projectsDue - projectsMarked),
     });
   },
 );

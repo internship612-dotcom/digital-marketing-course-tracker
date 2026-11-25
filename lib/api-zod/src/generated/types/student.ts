@@ -20,4 +20,8 @@ export interface Student {
   remark?: string | null;
   address?: string | null;
   guardianContact?: string | null;
+  /** Last day on the course (YYYY-MM-DD) for a student who passed out, dropped out or left; null while still enrolled. */
+  leftOn?: string | null;
+  /** Why the student left, e.g. "Passout", "Dropout" or "Other — <note>". */
+  leftReason?: string | null;
 }

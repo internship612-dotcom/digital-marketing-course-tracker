@@ -1420,7 +1420,7 @@ function AdminModuleReportPage({ branchId }: { branchId?: number }) {
   const catalog = useCatalogModules();
   const meta = catalog.find((m) => m.key === moduleKey);
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number } | null>(null);
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; projectsDue?: number; projectsMarked?: number } | null>(null);
   useEffect(() => {
     let alive = true;
     const url = branchId != null
@@ -1432,33 +1432,19 @@ function AdminModuleReportPage({ branchId }: { branchId?: number }) {
       .catch(() => undefined);
     return () => { alive = false; };
   }, [moduleKey, monthKey, branchId]);
-
-  // Marks are whole-course, not month-bound: project marks keep getting uploaded after
-  // their 15-day window, so the count is students with marks, not this month's entries.
-  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setMarks(null);
-    const url = `/api/admin/modules/${moduleKey}/marks-summary${branchId != null ? `?branchId=${branchId}` : ''}`;
-    fetch(url)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && data) setMarks(data); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [moduleKey, branchId]);
   if (!meta) return <><PageHeader kicker="Admin / module reports" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
   return <>
     <PageHeader kicker={`Admin / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and how many students have their marks." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Marks uploaded" value={marks ? `${marks.assessmentMarked}/${marks.totalStudents}` : '—'} detail="students with marks, whole course" icon={ClipboardCheck} /></div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Projects marked" value={summary?.projectsDue != null ? `${summary.projectsMarked ?? 0}/${summary.projectsDue}` : '—'} detail="projects due this month" icon={ClipboardCheck} /></div>
     <section className="mt-8" data-testid="section-marks-status">
       <div className="mb-4">
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Marks status</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Project marks</h2>
-        <p className="mt-2 text-sm text-muted-foreground">How many students on this module have had their project marks uploaded — no deadlines, just who is done.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Pick a month and a project to see how many students have it due then, and how many are marked.</p>
       </div>
-      {marks == null ? <div className="h-32 animate-pulse rounded-xl bg-muted" /> : <ProgressCard label="Marks" done={marks.assessmentMarked} pending={marks.assessmentPending} doneLabel="marks uploaded" pendingLabel="pending" icon={ClipboardCheck} testId="card-marks-status" />}
+      <ProjectMarksCard urlFor={(month) => `/api/admin/modules/${moduleKey}/assessments/month?month=${month}${branchId != null ? `&branchId=${branchId}` : ''}`} testId="card-marks-status" />
     </section>
   </>;
 }
@@ -1670,51 +1656,14 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
     return () => { alive = false; };
   }, [moduleKey, monthKey, branchId]);
 
-  // Marks are whole-course, not tied to the month pick above: project marks keep being
-  // uploaded after their 15-day window, so a calendar-bound number would mislead.
-  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setMarks(null);
-    const url = `/api/admin/modules/${moduleKey}/marks-summary${branchId != null ? `?branchId=${branchId}` : ''}`;
-    fetch(url)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && data) setMarks(data); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [moduleKey, branchId]);
 
-  // "How many students are still missing" is the question this section answers, so
-  // say it in students — not a bare Updated/Pending badge.
-  const assessmentDone = marks?.assessmentMarked ?? 0;
-  const total = marks?.totalStudents ?? 0;
-
-  const Card = ({ label, done, total: cardTotal, detail, icon: Icon, testId }: { label: string; done: number; total: number; detail: string; icon: typeof Users; testId: string }) => {
-    const pending = Math.max(0, cardTotal - done);
-    const percent = cardTotal === 0 ? 0 : Math.round((done / cardTotal) * 100);
-    return <div className="rounded-xl border border-border p-5" data-testid={testId}>
-      <div className="flex items-center justify-between">
-        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
-        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      </div>
-      {marks == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
-        <p className="mt-5 font-display text-3xl font-bold">{done}<span className="text-xl text-muted-foreground"> of {cardTotal}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">students</span></p>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} uploaded</span>
-          <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} not uploaded</span>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
-      </>}
-    </div>;
-  };
 
   return <section className="mt-6 rounded-xl border border-border bg-card p-6">
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Marks are whole-course: just who is uploaded and who is pending.</p>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Project marks: pick a month and a project below.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
@@ -1724,7 +1673,7 @@ function ModuleStatusSection({ moduleKey, branchId }: { moduleKey: Module; branc
       <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="admin" label="Attendance" icon={CalendarCheck2} testId="status-attendance" branchId={branchId} />
     </div>
     <div className="mt-4">
-      <Card label="Assessment" done={assessmentDone} total={total} detail={marks != null ? (marks.assessmentPending > 0 ? `${marks.assessmentPending} students still need their marks uploaded.` : 'Every student on this module has marks.') : ''} icon={ClipboardCheck} testId="status-assessment" />
+      <ProjectMarksCard urlFor={(month) => `/api/admin/modules/${moduleKey}/assessments/month?month=${month}${branchId != null ? `&branchId=${branchId}` : ''}`} testId="status-assessment" />
     </div>
   </section>;
 }
@@ -1856,20 +1805,82 @@ function DayStatusCard({ monthKey, moduleKey, scope, label, icon: Icon, testId, 
   </div>;
 }
 
-function ProgressCard({ label, done, pending, doneLabel, pendingLabel, icon: Icon, testId }: { label: string; done: number; pending: number; doneLabel: string; pendingLabel: string; icon: typeof Users; testId: string }) {
-  const total = done + pending;
-  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+
+// The module desk's marks card: just the Month + Project pickers (the same ones as Mark
+// Assessment) and a jump to the marking page. The user cut the "up to date / past due /
+// this month" summary lines that used to sit above the pickers.
+function MarksStatusCard() {
+  return <ProjectMarksCard urlFor={(month) => `/api/teacher/assessments/month?month=${month}`} markHref="/teacher/assessment" testId="card-assessments" />;
+}
+
+// The project-marks card used on the module desk and on the admin / branch module pages:
+// Month + Project pickers that say how many students of that project are marked. `urlFor`
+// picks the right API for the portal; `markHref` adds a "Mark now" link (teacher only).
+function ProjectMarksCard({ urlFor, markHref, testId }: { urlFor: (month: string) => string; markHref?: string; testId: string }) {
   return <div className="rounded-xl border border-border bg-card p-5" data-testid={testId}>
     <div className="flex items-center justify-between">
-      <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
-      <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><ClipboardCheck size={17} /></span>
+      <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Project marks</span>
     </div>
-    <p className="mt-6 font-display text-4xl font-bold">{done}<span className="text-2xl text-muted-foreground"> / {total}</span></p>
-    <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
-    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-      <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} {doneLabel}</span>
-      <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} {pendingLabel}</span>
+    <DeskProjectPicker urlFor={urlFor} />
+    {markHref && <Link href={markHref} className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline" data-testid="link-mark-now">Mark now <ArrowRight size={14} /></Link>}
+  </div>;
+}
+
+// The same Month + Project pickers as Mark Assessment, on the desk: pick both and it says
+// how many of that project's students (due in that month) are marked and how many are left.
+function DeskProjectPicker({ urlFor }: { urlFor: (month: string) => string }) {
+  const [monthKey, setMonthKey] = useState('');
+  const [project, setProject] = useState<'' | number>('');
+  const [months, setMonths] = useState<string[]>([]);
+  const [rows, setRows] = useState<AssessmentMonthRow[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setRows(null);
+    const url = urlFor(monthKey || todayIso().slice(0, 7));
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { months: string[]; rows: AssessmentMonthRow[] } | null) => { if (alive && data) { setMonths(data.months); setRows(data.rows); } })
+      .catch(() => undefined);
+    return () => { alive = false; };
+    // urlFor is rebuilt every render; the URL string itself is what should trigger a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlFor(monthKey || todayIso().slice(0, 7))]);
+  const ready = monthKey !== '' && project !== '';
+  const picked = ready && rows ? rows.filter((row) => row.cycle === project) : [];
+  const marked = picked.filter((row) => row.marks != null).length;
+  const left = picked.length - marked;
+  const percent = picked.length === 0 ? 0 : Math.round((marked / picked.length) * 100);
+  return <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3" data-testid="desk-project-picker">
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="grid gap-1 text-xs font-medium">Month
+        <Select value={monthKey === '' ? undefined : monthKey} onValueChange={setMonthKey}>
+          <SelectTrigger className="h-8 w-40 bg-card text-sm" data-testid="desk-select-month"><SelectValue placeholder="Select month" /></SelectTrigger>
+          <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+            {(months.length > 0 ? months : [todayIso().slice(0, 7)]).map((m) => <SelectItem key={m} value={m}>{monthNameFromKey(m)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </label>
+      <label className="grid gap-1 text-xs font-medium">Project
+        <Select value={project === '' ? undefined : String(project)} onValueChange={(value) => setProject(Number(value))}>
+          <SelectTrigger className="h-8 w-40 bg-card text-sm" data-testid="desk-select-project"><SelectValue placeholder="Select project" /></SelectTrigger>
+          <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+            {Array.from({ length: 12 }, (_, i) => i + 1).map((p) => <SelectItem key={p} value={String(p)}>Project {p}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </label>
     </div>
+    {!ready ? <p className="mt-2 text-xs text-muted-foreground">Select a month and a project to see how many students are marked.</p>
+      : rows == null ? <div className="mt-3 h-10 animate-pulse rounded bg-muted" />
+      : picked.length === 0 ? <p className="mt-2 text-sm text-muted-foreground" data-testid="desk-project-result">No student has Project {project} due in {monthNameFromKey(monthKey)}.</p>
+      : <div className="mt-3" data-testid="desk-project-result">
+        <p className="text-sm font-semibold">Project {project} · {monthNameFromKey(monthKey)}: {picked.length} student{picked.length === 1 ? '' : 's'}</p>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {marked} marked</span>
+          <span className={`inline-flex items-center gap-1.5 font-semibold ${left > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {left} still to mark</span>
+        </div>
+      </div>}
   </div>;
 }
 
@@ -1888,15 +1899,20 @@ function TeacherPage({ user }: { user: CurrentUser }) {
     <div className="grid gap-4 lg:grid-cols-2" data-testid="module-desk-summary">
       {/* Just the number, but stretched to the same height as the card beside it — the two
           sit side by side and one being shorter read as a mistake. */}
-      <div className="flex items-center gap-4 rounded-xl border border-accent/40 bg-accent/15 px-4 py-3.5" data-testid="card-total-students">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-primary"><Users size={15} /></span>
-        <div>
-          <p className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Total students</p>
-          <p className="font-display text-2xl font-bold leading-tight">{total}</p>
+      {/* Same layout as the marks card beside it: a titled header, then a big number that
+          says what it counts. Only students still on the course are counted. */}
+      <div className="rounded-xl border border-accent/40 bg-accent/15 p-5" data-testid="card-total-students">
+        <div className="flex items-center justify-between">
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-primary"><Users size={17} /></span>
+          <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">Current status</span>
         </div>
+        <p className="mt-5 font-display text-5xl font-bold leading-none" data-testid="text-total-students">{total}</p>
+        <p className="mt-2 text-base font-semibold">Total students on the course</p>
+        <p className="mt-1 text-sm text-muted-foreground">Students studying in this module right now. Passed-out and dropped-out students are not counted.</p>
+        <Link href="/teacher/students" className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline" data-testid="link-desk-student-list">View student list <ArrowRight size={14} /></Link>
       </div>
-      {/* Assessments stay across the whole course, as before. */}
-      <ProgressCard label="Assessments" done={overview?.assessmentMarked ?? 0} pending={overview?.assessmentPending ?? 0} doneLabel="marks uploaded" pendingLabel="no marks yet" icon={ClipboardCheck} testId="card-assessments" />
+      {/* Month + Project picker for project marks. */}
+      <MarksStatusCard />
     </div>
     {/* Attendance gets the full width underneath: it is the card that moves day by day, so
         it has room for the date and all four buckets side by side. */}
@@ -2835,13 +2851,16 @@ function StudentTable({ students, action, actionLabel = 'Actions', statusFor, on
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{index + 1}</td>
           <td className="whitespace-nowrap py-6 pr-4 font-mono-ui text-xs text-muted-foreground">{student.id}</td>
           <td className="whitespace-nowrap py-6 pr-4"><StudentAvatar student={student} /></td>
-          <td className="whitespace-nowrap py-6 pr-4 font-semibold group-hover:text-primary">{student.fullName}</td>
+          <td className="whitespace-nowrap py-6 pr-4 font-semibold group-hover:text-primary">{student.fullName}{student.leftOn ? <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700" title={`Left on ${student.leftOn} · ${student.leftReason ?? ''}`} data-testid={`badge-left-${student.id}`}>Left</span> : null}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.fathersName}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.course}</td>
           <td className="whitespace-nowrap py-6 pr-4 font-mono-ui text-xs text-muted-foreground">{joinedOn(student.dateOfJoining)}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.contactNumber}</td>
           <td className="whitespace-nowrap py-6 pr-4 text-xs text-muted-foreground">{student.email}</td>
-          {statusFor && <td className="whitespace-nowrap py-6 pr-4"><div className="flex justify-center"><StatusIcon ok={statusFor(student).attendance} pending={statusFor(student).attendancePending} kind="attendance" studentId={student.id} /></div></td>}
+          {/* A student who has left owes no more attendance: show when they left instead. */}
+          {statusFor && <td className="whitespace-nowrap py-6 pr-4"><div className="flex justify-center">{student.leftOn && student.leftOn < todayIso()
+            ? <span className="text-[11px] font-medium text-muted-foreground" data-testid={`status-left-${student.id}`}>Left {student.leftOn}</span>
+            : <StatusIcon ok={statusFor(student).attendance} pending={statusFor(student).attendancePending} kind="attendance" studentId={student.id} />}</div></td>}
           {statusFor && <td className="whitespace-nowrap py-6 pr-4"><div className="flex justify-center"><StatusIcon ok={statusFor(student).marks} pending={statusFor(student).marksPending} kind="marks" studentId={student.id} /></div></td>}
           <td className="whitespace-nowrap py-6 pl-4 text-right"><div className="flex items-center justify-end gap-1.5">{action(student)}</div></td>
         </tr>)}
@@ -2964,13 +2983,30 @@ function TeacherStudentListPage({ user }: { user: CurrentUser }) {
   </>;
 }
 
-type ProjectMark = { project: number; cycle: number; marks: number | null; feedback: string | null; projectName: string | null; projectLink: string | null };
+// `project` is the project number 1-12 (= cycle). start/due are its own 15-day window,
+// counted from the joining date; a month lists the projects whose due date falls in it.
+type ProjectMark = { project: number; cycle: number; start?: string; due?: string; marks: number | null; feedback: string | null; projectName: string | null; projectLink: string | null };
+type ProjectSlot = { cycle: number; start: string; due: string };
+// One row of GET /teacher/assessments/month: a student's project due in that month.
+type AssessmentMonthRow = { studentId: string; fullName: string; fathersName: string | null; dateOfJoining: string | null; cycle: number; start: string; due: string; marks: number | null; feedback: string | null; projectName: string | null; submittedName: string | null; projectLink: string | null };
+
+// Short "4 Oct" label for a YYYY-MM-DD day.
+function shortDay(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return `${d.getUTCDate()} ${MONTH_LABELS[d.getUTCMonth()]?.slice(0, 3)}`;
+}
+
+// "5 Oct – 19 Oct" for a project window.
+function projectWindow(slot: { start?: string; due?: string }): string {
+  return slot.start && slot.due ? `${shortDay(slot.start)} – ${shortDay(slot.due)}` : '';
+}
 type ReportModule = { module: Module; present: number; absent: number; leave?: number; total: number; percentage: number; recorded: boolean; presentDates?: string[]; absentDates?: string[]; leaveDates?: string[]; cancelledClasses?: { date: string; reason: string }[]; projects: ProjectMark[] };
 type ReportMonth = { month: number; start: string | null; end: string | null; present: number; absent: number; leave?: number; total: number; percentage: number; recorded: boolean; presentDates?: string[]; absentDates?: string[]; leaveDates?: string[]; events?: { date: string; title: string }[]; modules: ReportModule[] };
 type StudentReport = {
   joinedOn: string | null;
   courseStart: string | null;
   courseEnd: string | null;
+  projectSchedule?: ProjectSlot[];
   overall: { present: number; absent: number; total: number; percentage: number };
   months: ReportMonth[];
 };
@@ -2987,7 +3023,12 @@ function percentTone(value: number): string {
 // there is no such month, so fall back to the first month that has records.
 function courseMonthFor(report: StudentReport, today: string): number {
   const live = report.months.find((m) => m.start && m.end && m.start <= today && today <= m.end);
-  return live?.month ?? report.months.find((m) => m.recorded)?.month ?? 1;
+  if (live) return live.month;
+  // A course that is over — finished, or cut short when the student left — opens on its
+  // last month, where it ended, rather than jumping back to month 1.
+  const last = report.months[report.months.length - 1];
+  if (last?.end && today > last.end) return last.month;
+  return report.months.find((m) => m.recorded)?.month ?? 1;
 }
 
 // The same question asked without a loaded report, which is what the marks form has —
@@ -3154,13 +3195,13 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
         <div>
           <p className="text-xs font-semibold text-primary">Assessments{scopeLabel ? ` · ${scopeLabel}` : ''}</p>
           <h2 className={`mt-1 font-display font-bold ${compact ? 'text-xl' : 'text-2xl'}`}>Project marks — {calendarMonthName(selected.start, `Month ${selected.month}`)}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{scopeLabel ? `${scopeLabel} runs two projects a month.` : 'Each module runs two projects a month.'}{range ? ` ${calendarMonthName(selected.start, `Month ${selected.month}`)} is ${range}.` : ''}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Each project runs 15 days from the joining date; this lists the projects due in {calendarMonthName(selected.start, `Month ${selected.month}`)}.</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Same height, one line: the "Month N" options already say what the box is. */}
           <Button type="button" size="sm" variant="outline" className="h-9 text-sm" onClick={() => setClassTestsOpen(true)} data-testid="button-open-student-class-tests" title="Class tests"><FileText size={15} /> Class tests</Button>
           <select aria-label="Month" className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-marks-month">
-            {report.months.map((m) => <option key={m.month} value={m.month}>Month {m.month}</option>)}
+            {report.months.map((m) => <option key={m.month} value={m.month}>{calendarMonthName(m.start, `Month ${m.month}`)}</option>)}
           </select>
         </div>
       </div>
@@ -3168,8 +3209,9 @@ const scopeLabel = moduleFilter ? moduleNames[moduleFilter] : null;
         {shownModules.map((item) => <div key={item.module} className="min-w-0 rounded-lg border border-border p-4" data-testid={`card-marks-${item.module}`}>
           <p className="font-semibold">{moduleNames[item.module]}</p>
           <div className="mt-3 grid gap-2">
+            {item.projects.length === 0 && <p className="text-xs text-muted-foreground" data-testid={`no-projects-${item.module}`}>No project falls due this month.</p>}
             {item.projects.map((project) => <div key={project.project} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
-              <span className="min-w-0 text-muted-foreground">Project {project.project}{project.projectName ? <span className="block truncate text-xs font-medium text-foreground">{project.projectName}</span> : null}</span>
+              <span className="min-w-0 text-muted-foreground">Project {project.project}{project.due ? <span className="ml-1 text-xs">· {projectWindow(project)}</span> : null}{project.projectName ? <span className="block truncate text-xs font-medium text-foreground">{project.projectName}</span> : null}</span>
               <div className="flex items-center gap-2">
                 {project.marks == null
                   ? <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">Not marked</span>
@@ -3761,7 +3803,7 @@ function StudentProfilePage({ user }: { user: CurrentUser }) {
 
 // Student project page — per module: left column has Project Plan (open) + Project Guidelines (open),
 // right column has a single "Upload Project" box that opens a dialog to pick which of the 12 projects,
-// enter a name and a link. The 12 projects are two per month across six months: cycle = (month-1)*2 + project.
+// enter a name and a link. The 12 projects are back-to-back 15-day windows from the joining date (cycle = project number).
 function StudentProjectPage() {
   const { data: user } = useCurrentUser();
   const { docs, failed } = useCourseDocuments('student');
@@ -3865,10 +3907,19 @@ function StudentProjectPage() {
     }
   };
 
+  // Each project is its own 15-day window from the joining date; the report carries the
+  // schedule, so the labels show real dates rather than "Month N — Project P".
+  const { report: scheduleReport } = useStudentReport('/api/student/monthly');
+  const schedule = scheduleReport?.projectSchedule ?? [];
   const getProjectLabel = (cycle: number) => {
-    const month = Math.ceil(cycle / 2);
-    const projectNum = cycle % 2 === 1 ? 1 : 2;
-    return `Month ${month} — Project ${projectNum}`;
+    const slot = schedule.find((s) => s.cycle === cycle);
+    return slot ? `Project ${cycle} · ${projectWindow(slot)}` : `Project ${cycle}`;
+  };
+  // The upload dialog opens on the project running today (or the next one coming up).
+  const currentCycle = () => {
+    const today = todayIso();
+    return (schedule.find((s) => s.start <= today && today <= s.due)
+      ?? schedule.find((s) => today < s.start))?.cycle ?? 12;
   };
 
   const PROJECT_CYCLES = 12;
@@ -3957,7 +4008,7 @@ Uploaded Projects
                     <p className="text-xs text-muted-foreground">
                       Select which project, give it a name, and paste its link — a website, a game, a Drive or GitHub file, any platform works.
                     </p>
-                    <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, 1)} className="w-full" disabled={dialogSaving}>
+                    <Button variant="default" size="default" onClick={() => openUploadDialog(meta.key, currentCycle())} className="w-full" disabled={dialogSaving}>
                       {dialogSaving ? 'Opening…' : 'Upload Project'}
                     </Button>
                   </div>
@@ -4092,7 +4143,7 @@ Uploaded Projects
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                           <span>ID: {user?.studentId ?? '-'}</span>
                           <span>•</span>
-                          <span>Month {Math.ceil(c / 2)}, Project {c % 2 === 1 ? 1 : 2}</span>
+                          <span>{getProjectLabel(c)}</span>
                         </div>
                         <div className="flex items-center justify-between pt-2 border-t border-border/50">
                           <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
@@ -4924,10 +4975,81 @@ function StudentDetailPage({ scope }: { scope: 'admin' | 'teacher' | 'branch' })
             {remarkError && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-remark-error">{remarkError}</p>}
             {remarkNotice && <p className="mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700" data-testid="status-remark-success">{remarkNotice}</p>}
           </div>
+          <LeftCourseSection student={student} base={base} onSaved={(next) => { setStudent(next); setReportToken((t) => t + 1); }} />
         </section>
       </div>
     </div>
   </>;
+}
+
+// "Left the course": a passed-out / dropped-out student gets a last day and a reason. Their
+// data up to that day stays; after it they leave the attendance register, the project
+// lists and the desk counts (the student list keeps them with a "Left" badge). Kept apart
+// from the free-text remark on purpose, so an ordinary note never hides a student.
+const LEFT_REASONS = ['Passout', 'Dropout', 'Other'] as const;
+function LeftCourseSection({ student, base, onSaved }: { student: Student; base: string; onSaved: (next: Student) => void }) {
+  const leftOn = student.leftOn ?? null;
+  const [reason, setReason] = useState<(typeof LEFT_REASONS)[number] | ''>('');
+  const [note, setNote] = useState('');
+  const [lastDay, setLastDay] = useState(todayIso);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const send = (body: { leftOn: string | null; reason?: string }) => {
+    setBusy(true); setError('');
+    fetch(`${base}/left`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) { setError((data as { error?: string })?.error ?? 'Could not save. Try again.'); return; }
+        onSaved(data as Student); setConfirming(false); setReason(''); setNote('');
+      })
+      .catch(() => setError('Could not save. Try again.'))
+      .finally(() => setBusy(false));
+  };
+  const fullReason = reason === '' ? '' : note.trim() ? `${reason} — ${note.trim()}` : reason;
+  const joined = String(student.dateOfJoining ?? '').slice(0, 10);
+
+  return <div className="mt-6 border-t border-border pt-5" data-testid="section-left-course">
+    <p className="text-xs font-semibold text-primary">Course status</p>
+    <h3 className="mt-1 font-display text-xl font-bold">Left the course</h3>
+    {leftOn ? <>
+      <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm" data-testid="status-left-course">
+        <strong>Left on {leftOn}</strong> · {student.leftReason}
+        <span className="mt-1 block text-xs text-muted-foreground">Attendance and projects are kept up to this day. After it the student no longer appears in the attendance register, Mark Assessment or the desk counts.</span>
+      </p>
+      <div className="mt-3 flex justify-end">
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => send({ leftOn: null })} data-testid="button-undo-left">{busy ? 'Saving…' : 'Undo — back on the course'}</Button>
+      </div>
+    </> : <>
+      <p className="mt-2 text-sm text-muted-foreground">Use this when the student passes out, drops out or stops for another reason. Everything up to the last day stays saved; after it they drop out of the attendance and project lists.</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1.5 text-sm font-medium">Reason
+          <Select value={reason === '' ? undefined : reason} onValueChange={(value) => setReason(value as (typeof LEFT_REASONS)[number])}>
+            <SelectTrigger className="h-9 bg-card" data-testid="select-left-reason"><SelectValue placeholder="Select reason" /></SelectTrigger>
+            <SelectContent side="bottom" avoidCollisions={false}>
+              {LEFT_REASONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium">Last day on the course
+          <Input type="date" className="h-9" value={lastDay} min={joined || undefined} onChange={(e) => setLastDay(e.target.value)} data-testid="input-left-date" />
+        </label>
+      </div>
+      <Input className="mt-3" placeholder={reason === 'Other' ? 'Write the reason (required for Other)' : 'Note (optional)'} value={note} onChange={(e) => setNote(e.target.value)} data-testid="input-left-note" />
+      {!confirming
+        ? <div className="mt-3 flex justify-end">
+          <Button type="button" size="sm" variant="destructive" disabled={reason === '' || !lastDay || (reason === 'Other' && !note.trim())} onClick={() => setConfirming(true)} data-testid="button-mark-left">Mark as left</Button>
+        </div>
+        : <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="confirm-left">
+          <p>Mark <strong>{student.fullName}</strong> as left on <strong>{lastDay}</strong> ({fullReason})? Data up to that day stays; after it they leave the attendance register and project lists. You can undo this later.</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => send({ leftOn: lastDay, reason: fullReason })} data-testid="button-confirm-left">{busy ? 'Saving…' : 'Yes, mark as left'}</Button>
+          </div>
+        </div>}
+    </>}
+    {error && <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="status-left-error">{error}</p>}
+  </div>;
 }
 
 function PanelShell({ title, subtitle, onClose, testId, children }: { title: string; subtitle: string; onClose: () => void; testId: string; children: ReactNode }) {
@@ -6013,48 +6135,14 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
     return () => { alive = false; };
   }, [moduleKey, monthKey]);
 
-  // Whole-course marks, deliberately free of the month pick above — the same rule as the
-  // admin desk: project marks keep being uploaded after their 15-day window.
-  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setMarks(null);
-    fetch(`/api/branch/modules/${moduleKey}/marks-summary`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && data) setMarks(data); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [moduleKey]);
 
-  const assessmentDone = marks?.assessmentMarked ?? 0;
-  const total = marks?.totalStudents ?? 0;
-
-  const Card = ({ label, done, total: cardTotal, detail, icon: Icon, testId }: { label: string; done: number; total: number; detail: string; icon: typeof Users; testId: string }) => {
-    const pending = Math.max(0, cardTotal - done);
-    const percent = cardTotal === 0 ? 0 : Math.round((done / cardTotal) * 100);
-    return <div className="rounded-xl border border-border p-5" data-testid={testId}>
-      <div className="flex items-center justify-between">
-        <span className="grid h-9 w-9 place-items-center rounded-lg bg-muted text-primary"><Icon size={17} /></span>
-        <span className="font-mono-ui text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      </div>
-      {marks == null ? <div className="mt-6 h-16 animate-pulse rounded bg-muted" /> : <>
-        <p className="mt-5 font-display text-3xl font-bold">{done}<span className="text-xl text-muted-foreground"> of {cardTotal}</span><span className="ml-2 text-sm font-semibold text-muted-foreground">students</span></p>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div>
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="inline-flex items-center gap-1.5 font-semibold text-primary"><Check size={13} /> {done} uploaded</span>
-          <span className={`inline-flex items-center gap-1.5 font-semibold ${pending > 0 ? 'text-destructive' : 'text-muted-foreground'}`}><Clock size={13} /> {pending} not uploaded</span>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
-      </>}
-    </div>;
-  };
 
   return <section className="mt-6 rounded-xl border border-border bg-card p-6">
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Status summary</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Attendance &amp; assessment</h2>
-        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Marks are whole-course: just who is uploaded and who is pending.</p>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">How many students this module marked on a day — the day view follows the month pick above. Project marks: pick a month and a project below.</p>
       </div>
       <label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-status-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>
     </div>
@@ -6062,7 +6150,7 @@ function BranchModuleStatusSection({ moduleKey }: { moduleKey: Module }) {
       <DayStatusCard monthKey={monthKey} moduleKey={moduleKey} scope="branch" label="Attendance" icon={CalendarCheck2} testId="status-attendance" />
     </div>
     <div className="mt-4">
-      <Card label="Assessment" done={assessmentDone} total={total} detail={marks != null ? (marks.assessmentPending > 0 ? `${marks.assessmentPending} students still need their marks uploaded.` : 'Every student on this module has marks.') : ''} icon={ClipboardCheck} testId="status-assessment" />
+      <ProjectMarksCard urlFor={(month) => `/api/branch/modules/${moduleKey}/assessments/month?month=${month}`} testId="status-assessment" />
     </div>
   </section>;
 }
@@ -6074,12 +6162,10 @@ function BranchModuleReportPage() {
   const meta = catalog.find((m) => m.key === moduleKey);
   const { overview } = useBranchOverview();
   const branchModuleIds = overview?.modules.map((m) => m.id) ?? [];
-  if (!branchModuleIds.includes(moduleKey)) {
-    return <><PageHeader kicker="Branch / module report" title="Access denied." detail="This module does not belong to your branch." /></>;
-  }
-  if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
+  // Hooks first, checks after: returning early before these hooks made React see more
+  // hooks on the render after the branch overview loaded ("Rendered more hooks…").
   const [monthKey, setMonthKey] = useState(() => todayIso().slice(0, 7));
-  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number } | null>(null);
+  const [summary, setSummary] = useState<{ month: string; months: string[]; totalStudents: number; marked: number; expected: number; pending: number; projectsDue?: number; projectsMarked?: number } | null>(null);
   useEffect(() => {
     let alive = true;
     fetch(`/api/branch/modules/${moduleKey}/attendance/summary?month=${monthKey}`)
@@ -6089,31 +6175,22 @@ function BranchModuleReportPage() {
     return () => { alive = false; };
   }, [moduleKey, monthKey]);
 
-  // Whole-course marks: project marks keep being uploaded after their 15-day window, so
-  // the count is students with marks, not this month's entries.
-  const [marks, setMarks] = useState<{ totalStudents: number; assessmentMarked: number; assessmentPending: number } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setMarks(null);
-    fetch(`/api/branch/modules/${moduleKey}/marks-summary`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (alive && data) setMarks(data); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [moduleKey]);
+  if (!branchModuleIds.includes(moduleKey)) {
+    return <><PageHeader kicker="Branch / module report" title="Access denied." detail="This module does not belong to your branch." /></>;
+  }
   if (!meta) return <><PageHeader kicker="Branch / module report" title="Module not found." detail="That module does not exist." /></>;
   const total = summary?.totalStudents ?? 0;
   const expected = summary?.expected ?? 0;
   return <>
     <PageHeader kicker={`Branch / ${moduleShort[moduleKey]} report`} title={`${meta.name}`} detail="Live status for this module — cohort size, register coverage, and how many students have their marks." action={<label className="grid gap-1.5 text-sm font-medium">Month<select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} data-testid="select-report-month">{(summary?.months ?? [todayIso().slice(0, 7)]).map((m) => <option key={m} value={m}>{monthNameFromKey(m)}</option>)}</select></label>} />
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Marks uploaded" value={marks ? `${marks.assessmentMarked}/${marks.totalStudents}` : '—'} detail="students with marks, whole course" icon={ClipboardCheck} /></div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={total} detail="enrolled this month" icon={Users} accent /><StatCard label="Attendance marked" value={summary ? `${summary.marked}/${expected}` : '—'} detail="records captured this month" icon={CalendarCheck2} /><StatCard label="Attendance pending" value={summary?.pending ?? '—'} detail="records yet to be filled" icon={Clock} /><StatCard label="Projects marked" value={summary?.projectsDue != null ? `${summary.projectsMarked ?? 0}/${summary.projectsDue}` : '—'} detail="projects due this month" icon={ClipboardCheck} /></div>
     <section className="mt-8" data-testid="section-marks-status">
       <div className="mb-4">
         <p className="font-mono-ui text-[10px] uppercase tracking-[0.18em] text-primary">Marks status</p>
         <h2 className="mt-1 font-display text-2xl font-bold">Project marks</h2>
-        <p className="mt-2 text-sm text-muted-foreground">How many students on this module have had their project marks uploaded — no deadlines, just who is done.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Pick a month and a project to see how many students have it due then, and how many are marked.</p>
       </div>
-      {marks == null ? <div className="h-32 animate-pulse rounded-xl bg-muted" /> : <ProgressCard label="Marks" done={marks.assessmentMarked} pending={marks.assessmentPending} doneLabel="marks uploaded" pendingLabel="pending" icon={ClipboardCheck} testId="card-marks-status" />}
+      <ProjectMarksCard urlFor={(month) => `/api/branch/modules/${moduleKey}/assessments/month?month=${month}`} testId="card-marks-status" />
     </section>
   </>;
 }
@@ -6182,8 +6259,16 @@ function TeacherAttendanceFromRoute() {
 // marks to enter and do not want to open twenty records to do it.
 function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const students = useListTeacherStudents();
-  const [month, setMonth] = useState(1);
-  const [project, setProject] = useState<'' | 1 | 2>('');
+  // A calendar month, not "Month N": each row is one student's project that falls due in
+  // it, off that student's own joining date. Rows are keyed `${studentId}:${cycle}`
+  // because one long month can hold two or three projects of the same student.
+  // Both pickers start empty ("Select month" / "Select project"); nothing is listed until
+  // both are chosen.
+  const [monthKey, setMonthKey] = useState('');
+  const [monthMonths, setMonthMonths] = useState<string[]>([]);
+  const [monthRows, setMonthRows] = useState<AssessmentMonthRow[]>([]);
+  // The project number to list; '' = not chosen yet.
+  const [projectFilter, setProjectFilter] = useState<'' | number>('');
   const [rows, setRows] = useState<Record<string, { marks: string; feedback: string }>>({});
   // Rows are always typeable — a locked grid just looks broken. `saved` only records that a
   // row has been written, which is what puts the Edit button back on it.
@@ -6194,8 +6279,6 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const cycle = project === '' ? null : (month - 1) * 2 + project;
-  const [projectLinks, setProjectLinks] = useState<Record<string, string>>({});
   // Class tests are separate from the twelve project cycles: the teacher picks a real
   // date, gives the test a title, and uploads marks against every student for that
   // test. The button lives next to "Open student list" on this page.
@@ -6215,86 +6298,94 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   // whole roster to reach one student. The View list is unaffected.
   const [classTestSearch, setClassTestSearch] = useState('');
 
-  const load = useCallback(async (target: number) => {
+  const load = useCallback(async (target: string) => {
     setLoading(true); setError('');
     try {
-      const res = await fetch(`/api/teacher/assessments?cycle=${target}`);
-      const data = res.ok ? await res.json() as { studentId: string; marks: number | null; feedback: string | null }[] : null;
-      if (data == null) { setError('Could not load this project.'); return; }
+      const res = await fetch(`/api/teacher/assessments/month?month=${target}`);
+      const data = res.ok ? await res.json() as { month: string; months: string[]; rows: AssessmentMonthRow[] } : null;
+      if (data == null) { setError('Could not load this month.'); return; }
       const next: Record<string, { marks: string; feedback: string }> = {};
       const nextSaved: Record<string, boolean> = {};
-      for (const record of data) {
-        next[record.studentId] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
-        if (record.marks != null || (record.feedback ?? '').trim() !== '') nextSaved[record.studentId] = true;
+      for (const record of data.rows) {
+        const key = `${record.studentId}:${record.cycle}`;
+        next[key] = { marks: record.marks == null ? '' : String(record.marks), feedback: record.feedback ?? '' };
+        if (record.marks != null || (record.feedback ?? '').trim() !== '') nextSaved[key] = true;
       }
+      setMonthRows(data.rows);
+      setMonthMonths(data.months);
       setRows(next);
       setSaved(nextSaved);
-    } catch { setError('Could not load this project.'); }
+    } catch { setError('Could not load this month.'); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     setNotice('');
-    if (cycle == null) { setRows({}); setSaved({}); return; }
-    void load(cycle);
-    // Fetch project links from the new project-submissions endpoint for this cycle
-    fetch(`/api/teacher/project-submissions?cycle=${cycle}`)
-      .then((res) => res.json())
-      .then((data: { studentId: string; projectLink: string }[]) => {
-        const links: Record<string, string> = {};
-        for (const row of data) links[row.studentId] = row.projectLink;
-        setProjectLinks(links);
-      })
-      .catch(() => undefined);
-  }, [cycle, load]);
+    void load(monthKey || todayIso().slice(0, 7));
+  }, [monthKey, load]);
+
+  // All twelve projects are always offered; the count says how many students have that
+  // project due in the picked month (0 = nobody this month).
+  const allProjects = Array.from({ length: 12 }, (_, i) => i + 1);
 
   const all = students.data ?? [];
   const query = search.trim().toLowerCase();
-  const shown = all.filter((student) => studentMatches(student, query));
-  const draft = (id: string) => rows[id] ?? { marks: '', feedback: '' };
+  const ready = monthKey !== '' && projectFilter !== '';
+  const projectRows = ready ? monthRows.filter((row) => row.cycle === projectFilter) : [];
+  const shownRows = query === ''
+    ? projectRows
+    : projectRows.filter((row) => {
+      const student = all.find((s) => s.id === row.studentId);
+      return student ? studentMatches(student, query) : row.fullName.toLowerCase().includes(query) || row.studentId.toLowerCase().includes(query);
+    });
+  const draft = (key: string) => rows[key] ?? { marks: '', feedback: '' };
+  const rowFor = (key: string) => monthRows.find((row) => `${row.studentId}:${row.cycle}` === key);
 
-  const saveOne = async (studentId: string) => {
-    if (cycle == null) return;
-    const row = draft(studentId);
-    setSaving(studentId); setError(''); setNotice('');
+  const saveOne = async (key: string) => {
+    const target = rowFor(key);
+    if (!target) return;
+    const row = draft(key);
+    setSaving(key); setError(''); setNotice('');
     try {
       const res = await fetch('/api/teacher/assessments/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cycle, records: [{ studentId, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback }] }),
+        body: JSON.stringify({ cycle: target.cycle, records: [{ studentId: target.studentId, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback }] }),
       });
       if (!res.ok) { setError('Could not save those marks. Try again.'); return; }
-      setSaved((v) => ({ ...v, [studentId]: true }));
-      setNotice(`Saved for ${studentId} — month ${month}, project ${project}.`);
+      setSaved((v) => ({ ...v, [key]: true }));
+      setNotice(`Saved for ${target.fullName} (${target.studentId}) — project ${target.cycle}.`);
     } catch { setError('Could not save those marks. Try again.'); }
     finally { setSaving(''); }
   };
 
-const [deleteTarget, setDeleteTarget] = useState<{ studentId: string; label: string } | null>(null);
+const [deleteTarget, setDeleteTarget] = useState<{ key: string; label: string } | null>(null);
   const [deletingId, setDeletingId] = useState('');
   // The eye button beside each feedback box opens the whole text read-only: the single-line
   // input cuts long feedback off, and scrolling inside it was the only way to read it.
-  const [feedbackTarget, setFeedbackTarget] = useState<{ studentId: string; label: string } | null>(null);
+  const [feedbackTarget, setFeedbackTarget] = useState<{ key: string; label: string } | null>(null);
 
   const confirmDelete = async () => {
-    if (!deleteTarget || cycle == null) return;
-    const { studentId, label } = deleteTarget;
-    setDeletingId(studentId); setSaving(studentId); setError(''); setNotice('');
+    if (!deleteTarget) return;
+    const { key, label } = deleteTarget;
+    const target = rowFor(key);
+    if (!target) return;
+    setDeletingId(key); setSaving(key); setError(''); setNotice('');
     try {
       const res = await fetch('/api/teacher/assessments', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId, cycle }),
+        body: JSON.stringify({ studentId: target.studentId, cycle: target.cycle }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data?.error ?? 'Could not delete those marks.');
         return;
       }
-      setRows((v) => ({ ...v, [studentId]: { marks: '', feedback: '' } }));
-      setSaved((v) => ({ ...v, [studentId]: false }));
+      setRows((v) => ({ ...v, [key]: { marks: '', feedback: '' } }));
+      setSaved((v) => ({ ...v, [key]: false }));
       setDeleteTarget(null);
-      setNotice(`Deleted marks for ${label} — month ${month}, project ${project}.`);
+      setNotice(`Deleted marks for ${label}.`);
     } catch { setError('Could not delete those marks. Try again.'); }
 finally { setDeletingId(''); setSaving(''); }
   };
@@ -6347,42 +6438,48 @@ finally { setDeletingId(''); setSaving(''); }
     <PageHeader
       kicker={`Teacher / ${user.module ? moduleNames[user.module] : 'module desk'}`}
       title="Mark Assessment"
-      detail="Every project on your module roster in one place. Pick the month and project, then type marks and feedback against each student and press Save."
+      detail="Pick a calendar month: every student whose project falls due in it is listed, with which project it is and its 15-day window from their joining date. Type marks and feedback and press Save."
       action={<div className="flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setClassTestOpen(true)} data-testid="button-open-class-test"><BookOpen size={15} /> Class test</Button><Link href="/teacher/students" className="flex items-center gap-2 rounded-lg border border-accent/35 bg-accent/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-accent/30" data-testid="link-assessment-student-list"><Users size={15} /> Open student list</Link></div>}
     />
 
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-end gap-4">
         <label className="grid gap-1.5 text-sm font-medium">Month
-          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={month} onChange={(e) => setMonth(Number(e.target.value))} data-testid="select-assessment-month">
-            {[1, 2, 3, 4, 5, 6].map((m) => <option key={m} value={m}>Month {m}</option>)}
-          </select>
+          {/* Radix select, pinned below the trigger: a native <select> flips upward when the
+              page has little room underneath, which is what made this list open upwards. */}
+          <Select value={monthKey === '' ? undefined : monthKey} onValueChange={(value) => setMonthKey(value)}>
+            <SelectTrigger className="h-9 w-48 bg-card" data-testid="select-assessment-month"><SelectValue placeholder="Select month" /></SelectTrigger>
+            <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+              {(monthMonths.length > 0 ? monthMonths : [todayIso().slice(0, 7)]).map((m) => <SelectItem key={m} value={m}>{monthNameFromKey(m)}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </label>
         <label className="grid gap-1.5 text-sm font-medium">Project
-          <select className="h-9 rounded-md border border-input bg-card px-3 text-sm" value={project} onChange={(e) => setProject(e.target.value === '' ? '' : Number(e.target.value) === 1 ? 1 : 2)} data-testid="select-assessment-project">
-            <option value="">Select project</option>
-            <option value={1}>Project 1</option>
-            <option value={2}>Project 2</option>
-          </select>
+          <Select value={projectFilter === '' ? undefined : String(projectFilter)} onValueChange={(value) => setProjectFilter(Number(value))}>
+            <SelectTrigger className="h-9 w-48 bg-card" data-testid="select-assessment-project"><SelectValue placeholder="Select project" /></SelectTrigger>
+            <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+              {allProjects.map((p) => <SelectItem key={p} value={String(p)}>Project {p}{monthKey !== '' ? ` (${monthRows.filter((row) => row.cycle === p).length})` : ''}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </label>
         <div className="relative ml-auto w-full sm:max-w-md">
           <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
           <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-assessment" />
         </div>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Two projects a month. A blank marks box saves as 'not marked' — after saving you get an Edit button on that row.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Every project runs 15 days from the student's joining date (project 1 = days 1–15, project 2 = days 16–30, …) and is listed in the month it falls due. A blank marks box saves as 'not marked' — after saving you get an Edit button on that row.</p>
     </section>
 
-    {project === '' && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Choose a project to load the roster and start entering marks.</p>}
+    {!ready && <p className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="status-assessment-pick">Select a month and a project to see the students.</p>}
 
-    {project !== '' && <section className="mt-5 rounded-xl border border-border bg-card p-5">
+    {ready && <section className="mt-5 rounded-xl border border-border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-display text-2xl font-bold">Month {month} · Project {project}</h2>
-        <span className="text-xs text-muted-foreground">{shown.length} student{shown.length === 1 ? '' : 's'}</span>
+        <h2 className="font-display text-2xl font-bold">Project {projectFilter} due in {monthNameFromKey(monthKey)}</h2>
+        <span className="text-xs text-muted-foreground">{shownRows.length} project{shownRows.length === 1 ? '' : 's'}</span>
       </div>
 
       {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
-        : shown.length === 0 ? <EmptyState title="No matching students" detail={all.length === 0 ? 'Nobody is enrolled yet.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
+        : shownRows.length === 0 ? <EmptyState title={projectRows.length === 0 ? `No Project ${projectFilter} due this month` : 'No matching students'} detail={projectRows.length === 0 ? `Nobody's Project ${projectFilter} falls due in ${monthNameFromKey(monthKey)}. Try another month.` : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
         : <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm" data-testid="table-assessment">
             <thead>
@@ -6390,6 +6487,7 @@ finally { setDeletingId(''); setSaving(''); }
                 <th className="py-2 pr-3 font-semibold">#</th>
                 <th className="py-2 pr-3 font-semibold">Student ID</th>
                 <th className="py-2 pr-3 font-semibold">Name</th>
+                <th className="py-2 pr-3 font-semibold">Project</th>
                 <th className="py-2 pr-3 font-semibold">Project Link</th>
                 <th className="py-2 pr-3 font-semibold">Marks</th>
                 <th className="py-2 pr-3 font-semibold">Feedback</th>
@@ -6397,21 +6495,28 @@ finally { setDeletingId(''); setSaving(''); }
               </tr>
             </thead>
             <tbody>
-              {shown.map((student, index) => {
-                const row = draft(student.id);
-                const isSaved = saved[student.id] === true;
+              {shownRows.map((entry, index) => {
+                const key = `${entry.studentId}:${entry.cycle}`;
+                const student = { id: entry.studentId, fullName: entry.fullName };
+                const row = draft(key);
+                const isSaved = saved[key] === true;
                 const setCell = (patch: Partial<{ marks: string; feedback: string }>) =>
-                  setRows((v) => ({ ...v, [student.id]: { ...row, ...patch } }));
-                const link = projectLinks[student.id];
-                return <tr key={student.id} className="border-b border-border/60">
+                  setRows((v) => ({ ...v, [key]: { ...row, ...patch } }));
+                const link = entry.projectLink;
+                const overdue = todayIso() > entry.due;
+                return <tr key={key} className="border-b border-border/60">
                   <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
                   <td className="py-2 pr-3 font-mono-ui text-xs">{student.id}</td>
                   <td className="py-2 pr-3">
                     <Link href={`/teacher/students/${student.id}`} className="font-semibold hover:underline">{student.fullName}</Link>
                   </td>
+                  <td className="py-2 pr-3 whitespace-nowrap" data-testid={`project-slot-${key}`}>
+                    <span className="font-semibold">Project {entry.cycle}</span>
+                    <span className="block text-xs text-muted-foreground">{projectWindow(entry)}{overdue ? "" : " · not due yet"}</span>
+                  </td>
                   <td className="py-2 pr-3">
                     {link ? (
-                      <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid={`project-link-${student.id}`}>
+                      <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid={`project-link-${key}`}>
                         <ExternalLink size={14} /> Uploaded
                       </a>
                     ) : (
@@ -6419,12 +6524,12 @@ finally { setDeletingId(''); setSaving(''); }
                     )}
                   </td>
                   <td className="py-2 pr-3">
-                    <Input ref={(node) => { marksBox.current[student.id] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${student.id}`} />
+                    <Input ref={(node) => { marksBox.current[key] = node; }} className="h-9 w-24" type="number" min={0} max={100} placeholder="Not marked" value={row.marks} onChange={(e) => setCell({ marks: e.target.value })} data-testid={`input-marks-${key}`} />
                   </td>
                   <td className="py-2 pr-3">
                     <span className="flex items-center gap-1">
-                      <Input className="h-9 w-44 lg:w-56" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${student.id}`} />
-                      <Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 p-0" onClick={() => setFeedbackTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={!row.feedback.trim()} title="See the complete feedback" data-testid={`button-view-feedback-${student.id}`}>
+                      <Input className="h-9 w-44 lg:w-56" placeholder="Short feedback" value={row.feedback} onChange={(e) => setCell({ feedback: e.target.value })} data-testid={`input-feedback-${key}`} />
+                      <Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 p-0" onClick={() => setFeedbackTarget({ key, label: `${student.fullName} (${student.id}) · project ${entry.cycle}` })} disabled={!row.feedback.trim()} title="See the complete feedback" data-testid={`button-view-feedback-${key}`}>
                         <Eye size={15} />
                       </Button>
                     </span>
@@ -6433,14 +6538,14 @@ finally { setDeletingId(''); setSaving(''); }
                      {/* Always one line: the table scrolls sideways rather than letting Delete
                          wrap under the other buttons. */}
                      <span className="flex flex-nowrap items-center gap-1">
-                       <Button type="button" size="sm" onClick={() => saveOne(student.id)} disabled={saving === student.id || loading} data-testid={`button-save-marks-${student.id}`}>{saving === student.id ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
+                       <Button type="button" size="sm" onClick={() => saveOne(key)} disabled={saving === key || loading} data-testid={`button-save-marks-${key}`}>{saving === key ? 'Saving…' : isSaved ? 'Update' : 'Save'}</Button>
                        {isSaved && <>
                         <Button type="button" size="sm" variant="ghost" onClick={() => {
-                          setSaved((v) => ({ ...v, [student.id]: false }));
-                          setNotice(`Editing ${student.id} — type the new marks and press Update.`);
-                          marksBox.current[student.id]?.focus();
-                        }} className="h-8 w-8 shrink-0 p-0" title="Edit marks" aria-label="Edit marks" data-testid={`button-edit-marks-${student.id}`}><Pencil size={14} /></Button>
-                        <Button type="button" size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:text-destructive" onClick={() => cycle != null && setDeleteTarget({ studentId: student.id, label: `${student.fullName} (${student.id})` })} disabled={saving === student.id || loading || deletingId === student.id} data-testid={`button-delete-marks-${student.id}`} title="Delete saved marks">
+                          setSaved((v) => ({ ...v, [key]: false }));
+                          setNotice(`Editing ${student.id} project ${entry.cycle} — type the new marks and press Update.`);
+                          marksBox.current[key]?.focus();
+                        }} className="h-8 w-8 shrink-0 p-0" title="Edit marks" aria-label="Edit marks" data-testid={`button-edit-marks-${key}`}><Pencil size={14} /></Button>
+                        <Button type="button" size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:text-destructive" onClick={() => setDeleteTarget({ key, label: `${student.fullName} (${student.id}) · project ${entry.cycle}` })} disabled={saving === key || loading || deletingId === key} data-testid={`button-delete-marks-${key}`} title="Delete saved marks">
                           <Trash2 size={14} />
                         </Button>
                       </>}
@@ -6461,7 +6566,7 @@ finally { setDeletingId(''); setSaving(''); }
         <DialogHeader>
           <DialogTitle>Delete saved marks?</DialogTitle>
           <DialogDescription>
-            {deleteTarget ? `Delete saved marks/feedback for ${deleteTarget.label}, month ${month}, project ${project}? This cannot be undone.` : ''}
+            {deleteTarget ? `Delete saved marks/feedback for ${deleteTarget.label}? This cannot be undone.` : ''}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:justify-end">
@@ -6477,10 +6582,10 @@ finally { setDeletingId(''); setSaving(''); }
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Feedback</DialogTitle>
-          <DialogDescription>{feedbackTarget ? `${feedbackTarget.label} · month ${month}, project ${project}` : ''}</DialogDescription>
+          <DialogDescription>{feedbackTarget ? feedbackTarget.label : ''}</DialogDescription>
         </DialogHeader>
         {feedbackTarget && <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-sm [overflow-wrap:anywhere]" data-testid="text-feedback-popup">
-          {draft(feedbackTarget.studentId).feedback || <span className="text-muted-foreground">No feedback written yet.</span>}
+          {draft(feedbackTarget.key).feedback || <span className="text-muted-foreground">No feedback written yet.</span>}
         </div>}
         <DialogFooter className="gap-2 sm:justify-end">
           <Button type="button" variant="outline" onClick={() => setFeedbackTarget(null)} data-testid="button-close-feedback-popup">Close</Button>
@@ -6509,7 +6614,7 @@ finally { setDeletingId(''); setSaving(''); }
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">{shown.length} of {all.length} students</p>
+          <p className="text-xs text-muted-foreground">{classTestShown.length} of {all.length} students</p>
           <div className="relative w-full sm:max-w-md">
             <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
             <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={classTestSearch} onChange={(e) => setClassTestSearch(e.target.value)} data-testid="input-search-class-test" />

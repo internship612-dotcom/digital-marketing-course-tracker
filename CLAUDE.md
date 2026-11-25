@@ -862,3 +862,91 @@ verification: catalog/login/admin branches all 200 on the API serving the built 
 - The API server must be rebuilt + restarted manually after editing `artifacts/api-server/src`
   (esbuild output is not watched).
 - Repo contains `replit.md` (older operating notes) — keep both in sync, this file is the live one.
+### 15. Projects follow the joining date (15-day windows), not calendar months
+
+**The rule.** The twelve projects are back-to-back **15-calendar-day windows counted from the
+joining date** (Sundays and events included) — project N runs from join + 15·(N-1) days for 15
+days, matching the project plan's "Day 1–15, Day 16–30". Project N is still **cycle N**, so no
+marks data moved; only the window/due date each cycle stands for changed. Attendance is
+untouched and still uses calendar-month slices (`courseMonths`).
+
+**A project belongs to the calendar month its due date falls in.** One helper,
+`projectSchedule(joinedOn)` in `data.ts` (+ `projectsDueIn(joinedOn, "YYYY-MM")`), drives:
+- `buildStudentReport` — each month's `modules[].projects` lists the projects due in that slice
+  (each with `start`/`due`); the **last** slice also takes any project due after the course's
+  last attendance month (a late joiner's projects 11–12), so none disappear. The report also
+  returns `projectSchedule` (all 12 windows).
+- `marksPendingFor` — outstanding = due date passed and no marks (student-list Marks icon, admin
+  status, day status).
+- `/admin|branch/modules/:module/attendance/summary` — now returns `projectsDue`,
+  `projectsMarked`, `projectsPending` for the picked month (the old `projects[{project,marked}]`
+  pair is gone; nothing in the SPA read it).
+- New `GET /teacher/assessments/month?month=YYYY-MM` → `{ month, months, rows[] }`, one row per
+  (student, project) due that month. `AssessmentRegisterPage` (`/teacher/assessment`) is now a
+  calendar-month picker over these rows (keyed `${studentId}:${cycle}`, since a 31-day month can
+  hold three of one student's projects). A **Project** select beside the month narrows the rows to one project
+  number; it always lists all 12 projects, each with how many students have it due that month
+  (0 = an empty list for that month). Both pickers start empty ("Select month" / "Select project") and nothing is
+  listed until both are chosen. They are Radix `Select`s with `side="bottom"
+  avoidCollisions={false}`, because a native `<select>` flips upward when the page has little
+  room below it.
+- `StudentProjectPage` labels projects "Project N · start – due" and opens the upload dialog on
+  the project running today.
+- The module desk's marks card (`MarksStatusCard`) is only the Month + Project picker
+  (`DeskProjectPicker`, see section 16) and a "Mark now" link. An "N / M students up to date /
+  past due / this month" summary was built and then **removed at the user's request** — do not
+  bring it back. The old whole-course "marks uploaded / no marks yet" card is gone too.
+
+**Bugfix alongside:** `POST /teacher/assessments/bulk` used to set `project_name` to null on every
+save that did not send one (the register page never does). It now leaves the stored name alone
+when `projectName` is omitted.
+
+### 16. Desk project picker, and students who leave the course
+
+**Desk picker.** `MarksStatusCard` on the module desk now holds `DeskProjectPicker` — the same
+"Select month" / "Select project" pickers as Mark Assessment (reads
+`/teacher/assessments/month`); with both chosen it shows how many students have that project
+due that month, how many are marked and how many are left.
+
+**Leaving the course (passout / dropout / other).** `students.left_on` (date) +
+`students.left_reason` (text), added at boot by `ensureStudentLeftColumns()` in `index.ts` and on
+the openapi `Student` schema (`leftOn`, `leftReason` — codegen was re-run). Set or cleared with
+`PATCH /admin|teacher/students/:id/left` `{ leftOn: "YYYY-MM-DD", reason }` / `{ leftOn: null }`
+(reason required; last day may not precede the joining date). The UI is `LeftCourseSection`
+on the student record, under the remark — **deliberately separate from the free-text remark**
+(the user chose this), so an ordinary note never hides a student. Undo is one click.
+
+`leftOn` is threaded through as an optional last argument of `weekAndDayFor`, `courseMonths`,
+`projectSchedule`, `projectsDueIn` and `marksPendingFor`, so everything up to the last day stays
+counted and nothing after it exists: no teaching days (report months stop at it, later months
+drop), no projects due after it. On top of that, `hasLeftBefore(student, day)`:
+- drops them from `GET /teacher/attendance/day` (the register) after their last day;
+- zeroes their attendance-pending in `buildStatus`;
+- removes them from `/teacher/overview`: `totalStudents` counts only students still on the
+  course today. The desk shows just that number — the user did not want a "+N left" line.
+They stay on the student list with a "Left" badge (attendance column shows "Left <date>"),
+and their record still opens. `courseMonthFor` now opens a finished/cut-short course on its
+last month instead of month 1.
+
+### 17. Admin + branch module pages use the project picker too
+
+- `assessmentMonth(module, monthKey, branchId)` in `data.ts` is the one builder behind
+  `GET /teacher/assessments/month`, `GET /admin/modules/:module/assessments/month` (optional
+  `?branchId=`) and `GET /branch/modules/:module/assessments/month` (module must belong to the
+  branch; only that branch's students).
+- `ProjectMarksCard({ urlFor, markHref?, testId })` wraps `DeskProjectPicker({ urlFor })` and
+  replaces the old whole-course "marks uploaded / pending" cards on `AdminModuleReportPage`,
+  `ModuleStatusSection`, `BranchModuleStatusSection` and `BranchModuleReportPage`. The report
+  pages' 4th stat tile is now "Projects marked x/y — projects due this month" from the
+  attendance summary's `projectsMarked`/`projectsDue`. `GET /admin|branch/modules/:module/marks-summary`
+  and `ProgressCard` were removed (nothing used them any more).
+- `PATCH /branch/students/:id/left` — the branch twin of the left-course route (shared
+  `setStudentLeft()`, scoped to the branch's own students); `LeftCourseSection` now shows on the
+  branch record too.
+- Fixed a pre-existing crash in `BranchModuleReportPage`: it returned early (access check)
+  **before** its `useState`/`useEffect`, so once the branch overview loaded React threw
+  "Rendered more hooks than during the previous render". Hooks now run before the checks.
+
+**Gotcha:** `PATCH /admin/branches/:id/credential` (and anything using `adminPasswordConfirmed`)
+checks the password against the **real Supabase admin account**, even on a local API. Do not
+call it from local tests — set local branch logins directly in the local DB instead.
