@@ -3865,7 +3865,8 @@ function StudentProjectPage() {
 
   const deleteProject = (module: Module, cycle: number) => {
     const sub = submissions[module]?.[cycle];
-    if (!sub) return;
+    // A graded project is frozen on the server (409), so do not even offer the dialog.
+    if (!sub || sub.marks != null) return;
     setDeleteConfirm({ module, cycle, name: sub.projectName });
     setDeletePwd('');
     setDeleteError('');
@@ -3938,14 +3939,21 @@ function StudentProjectPage() {
     })
       .then((res) => {
         if (!res.ok) throw new Error('The password is incorrect.');
-        return fetch('/api/student/project-submission', {
+        // module + cycle ride in the query string too: a DELETE body can be dropped by the
+        // proxy in front of the API, which left the server with nothing to delete.
+        const qs = new URLSearchParams({ module: deleteConfirm.module, cycle: String(deleteConfirm.cycle) });
+        return fetch(`/api/student/project-submission?${qs.toString()}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ module: deleteConfirm.module, cycle: deleteConfirm.cycle }),
         });
       })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to delete project');
+      .then(async (res) => {
+        if (!res.ok) {
+          // Show the server's reason (e.g. "already marked") instead of a bare failure.
+          const data = await res.json().catch(() => null) as { error?: string } | null;
+          throw new Error(data?.error || 'Failed to delete project');
+        }
         setSubmissions((prev) => {
           const next = { ...prev };
           if (next[deleteConfirm!.module]) {
@@ -4149,9 +4157,13 @@ Uploaded Projects
                           <a href={sub.projectLink} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
                             Open Link <ExternalLink size={12} />
                           </a>
-                          <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(viewUploadedModule!, c); }} data-testid={`delete-view-project-${viewUploadedModule}-${c}`}>
-                            <Trash2 size={12} />
-                          </Button>
+                          {isGraded ? (
+                            <span className="text-xs text-muted-foreground">Marked · cannot delete</span>
+                          ) : (
+                            <Button variant="outline" size="sm" onClick={(e) => { e.preventDefault(); deleteProject(viewUploadedModule!, c); }} data-testid={`delete-view-project-${viewUploadedModule}-${c}`}>
+                              <Trash2 size={12} />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     );

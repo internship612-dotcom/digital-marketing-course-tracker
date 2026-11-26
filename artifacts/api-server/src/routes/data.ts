@@ -4238,9 +4238,15 @@ router.delete(
       res.status(401).json({ error: "Student session not found." });
       return;
     }
-    const body = req.body as { module?: unknown; cycle?: unknown };
-    const module = typeof body.module === "string" ? body.module : "";
-    const cycle = typeof body.cycle === "number" ? body.cycle : Number(body.cycle);
+    // module/cycle may arrive in the JSON body or the query string. A DELETE body is not
+    // guaranteed to survive every proxy (the Vercel rewrite sits in front of this API), so
+    // the client sends both and the query string is the fallback.
+    const body = (req.body ?? {}) as { module?: unknown; cycle?: unknown };
+    const query = req.query as { module?: unknown; cycle?: unknown };
+    const rawModule = typeof body.module === "string" ? body.module : query.module;
+    const rawCycle = body.cycle ?? query.cycle;
+    const module = typeof rawModule === "string" ? rawModule : "";
+    const cycle = typeof rawCycle === "number" ? rawCycle : Number(rawCycle);
 
     if (!module || !Number.isInteger(cycle) || cycle < 1 || cycle > PROJECT_CYCLES) {
       res.status(400).json({ error: "Choose which of your projects this is." });
