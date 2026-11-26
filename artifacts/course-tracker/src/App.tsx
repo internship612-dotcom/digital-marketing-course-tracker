@@ -1924,6 +1924,10 @@ function TeacherPage({ user }: { user: CurrentUser }) {
 }
 
 const joinedOn = (value: string) => String(value ?? '').slice(0, 10);
+// True when a student's last day on the course (left / completed / placed / other) falls
+// before `day` (YYYY-MM-DD) — the client twin of the API's hasLeftBefore().
+const leftBeforeDay = (leftOn: string | null | undefined, day: string) =>
+  Boolean(leftOn) && String(leftOn).slice(0, 10) < String(day).slice(0, 10);
 
 // ---------------------------------------------------------------- calendar grid
 // The register picks a real calendar date; the API turns it into that student's own
@@ -6427,7 +6431,7 @@ finally { setDeletingId(''); setSaving(''); }
     if (!classTestTitle.trim() || !classTestDate) { setClassTestError('Choose a test date and give it a title.'); return; }
     setClassTestSaving(true); setClassTestError(''); setClassTestNotice('');
     try {
-      const records = all.map((student) => {
+      const records = classTestRoster.map((student) => {
         const row = classTestMarks[student.id] ?? { marks: '', feedback: '' };
         if (row.na) return { studentId: student.id, marks: null, feedback: null, notApplicable: true };
         return { studentId: student.id, marks: row.marks === '' ? null : Number(row.marks), feedback: row.feedback };
@@ -6497,9 +6501,13 @@ finally { setDeletingId(''); setSaving(''); }
   // so a teacher can jump straight to one student's marks without scrolling the
   // whole roster. The View list is unaffected.
   const classTestQuery = classTestSearch.trim().toLowerCase();
+  // A student whose last day (left / completed / placed / other) is before the test date
+  // is not on the course for that test, so they are neither listed nor sent on save.
+  // Tests they did sit (on or before their last day) still show them.
+  const classTestRoster = all.filter((student) => !leftBeforeDay(student.leftOn, classTestDate));
   const classTestShown = classTestQuery === ''
-    ? all
-    : all.filter((student) => studentMatches(student, classTestQuery));
+    ? classTestRoster
+    : classTestRoster.filter((student) => studentMatches(student, classTestQuery));
 
   return <>
     <PageHeader
@@ -6695,7 +6703,7 @@ finally { setDeletingId(''); setSaving(''); }
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">{classTestShown.length} of {all.length} students</p>
+          <p className="text-xs text-muted-foreground">{classTestShown.length} of {classTestRoster.length} students</p>
           <div className="relative w-full sm:max-w-md">
             <Search className="absolute left-3 top-2.5 text-muted-foreground" size={15} />
             <Input className="pl-9" placeholder="Search by name, student ID, contact number or email" value={classTestSearch} onChange={(e) => setClassTestSearch(e.target.value)} data-testid="input-search-class-test" />
@@ -6752,13 +6760,17 @@ finally { setDeletingId(''); setSaving(''); }
               // with no row at all for this test (joined on or before its date) count as
               // "Not marked" there too, so nobody silently drops out of the list.
               const testDay = String(test.date).slice(0, 10);
+              // Students who had already left the course before this test are not
+              // counted as absent for it.
+              const leftById = new Map(all.map((s) => [s.id, s.leftOn ?? null]));
+              const goneBefore = (studentId: string) => leftBeforeDay(leftById.get(studentId), testDay);
               const unrecorded = all
-                .filter((s) => !test.marks.some((m) => m.studentId === s.id) && joinedOn(s.dateOfJoining) <= testDay)
+                .filter((s) => !test.marks.some((m) => m.studentId === s.id) && joinedOn(s.dateOfJoining) <= testDay && !leftBeforeDay(s.leftOn, testDay))
                 .map((s) => ({ studentId: s.id, studentName: s.fullName, marks: null as number | null, feedback: null as string | null, notApplicable: false, enteredAt: null as string | null }));
               const buckets = {
                 marked: test.marks.filter((m) => !m.notApplicable && m.marks != null),
-                na: test.marks.filter((m) => m.notApplicable),
-                absent: [...test.marks.filter((m) => !m.notApplicable && m.marks == null), ...unrecorded],
+                na: test.marks.filter((m) => m.notApplicable && !goneBefore(m.studentId)),
+                absent: [...test.marks.filter((m) => !m.notApplicable && m.marks == null && !goneBefore(m.studentId)), ...unrecorded],
               };
               const open = (filter: typeof testViewFilter) => {
                 if (expanded && testViewFilter === filter) { setExpandedTestId(null); return; }
