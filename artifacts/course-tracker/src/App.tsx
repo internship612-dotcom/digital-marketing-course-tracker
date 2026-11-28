@@ -6294,7 +6294,7 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const [monthKey, setMonthKey] = useState('');
   const [monthMonths, setMonthMonths] = useState<string[]>([]);
   const [monthRows, setMonthRows] = useState<AssessmentMonthRow[]>([]);
-  // The project number to list; '' = not chosen yet.
+  // The project number to list; '' = not chosen yet, 0 = every project due that month.
   const [projectFilter, setProjectFilter] = useState<'' | number>('');
   // Upload filter: only the students who have / have not uploaded their project link.
   const [uploadFilter, setUploadFilter] = useState<'all' | 'uploaded' | 'not-uploaded'>('all');
@@ -6364,7 +6364,10 @@ function AssessmentRegisterPage({ user }: { user: CurrentUser }) {
   const all = students.data ?? [];
   const query = search.trim().toLowerCase();
   const ready = monthKey !== '' && projectFilter !== '';
-  const projectRows = ready ? monthRows.filter((row) => row.cycle === projectFilter) : [];
+  const projectRows = !ready ? []
+    : projectFilter === 0 ? [...monthRows].sort((a, b) => a.cycle - b.cycle || a.fullName.localeCompare(b.fullName))
+    : monthRows.filter((row) => row.cycle === projectFilter);
+  const projectLabel = projectFilter === 0 ? 'All projects' : `Project ${projectFilter}`;
   const uploadedCount = projectRows.filter((row) => !!row.projectLink).length;
   const notUploadedCount = projectRows.length - uploadedCount;
   const uploadRows = uploadFilter === 'all' ? projectRows
@@ -6533,6 +6536,7 @@ finally { setDeletingId(''); setSaving(''); }
           <Select value={projectFilter === '' ? undefined : String(projectFilter)} onValueChange={(value) => setProjectFilter(Number(value))}>
             <SelectTrigger className="h-9 w-48 bg-card" data-testid="select-assessment-project"><SelectValue placeholder="Select project" /></SelectTrigger>
             <SelectContent side="bottom" avoidCollisions={false} className="max-h-72">
+              <SelectItem value="0">All projects{monthKey !== '' ? ` (${monthRows.length})` : ''}</SelectItem>
               {allProjects.map((p) => <SelectItem key={p} value={String(p)}>Project {p}{monthKey !== '' ? ` (${monthRows.filter((row) => row.cycle === p).length})` : ''}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -6554,12 +6558,12 @@ finally { setDeletingId(''); setSaving(''); }
 
     {ready && <section className="mt-5 rounded-xl border border-border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-display text-2xl font-bold">Project {projectFilter} due in {monthNameFromKey(monthKey)}</h2>
+        <h2 className="font-display text-2xl font-bold">{projectLabel} due in {monthNameFromKey(monthKey)}</h2>
         <span className="text-xs text-muted-foreground">{shownRows.length} project{shownRows.length === 1 ? '' : 's'}</span>
       </div>
 
       {loading ? <div className="space-y-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />)}</div>
-        : shownRows.length === 0 ? <EmptyState title={projectRows.length === 0 ? `No Project ${projectFilter} due this month` : uploadRows.length === 0 ? (uploadFilter === 'uploaded' ? 'Nobody has uploaded yet' : 'Everyone has uploaded') : 'No matching students'} detail={projectRows.length === 0 ? `Nobody's Project ${projectFilter} falls due in ${monthNameFromKey(monthKey)}. Try another month.` : uploadRows.length === 0 ? 'Switch the upload status filter to see the other students.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
+        : shownRows.length === 0 ? <EmptyState title={projectRows.length === 0 ? (projectFilter === 0 ? 'No projects due this month' : `No Project ${projectFilter} due this month`) : uploadRows.length === 0 ? (uploadFilter === 'uploaded' ? 'Nobody has uploaded yet' : 'Everyone has uploaded') : 'No matching students'} detail={projectRows.length === 0 ? `Nobody's ${projectFilter === 0 ? 'project' : `Project ${projectFilter}`} falls due in ${monthNameFromKey(monthKey)}. Try another month.` : uploadRows.length === 0 ? 'Switch the upload status filter to see the other students.' : 'Try a name, student ID, contact number or email.'} icon={UserRound} />
         : <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm" data-testid="table-assessment">
             <thead>

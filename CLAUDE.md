@@ -886,7 +886,9 @@ untouched and still uses calendar-month slices (`courseMonths`).
   calendar-month picker over these rows (keyed `${studentId}:${cycle}`, since a 31-day month can
   hold three of one student's projects). A **Project** select beside the month narrows the rows to one project
   number; it always lists all 12 projects, each with how many students have it due that month
-  (0 = an empty list for that month). Both pickers start empty ("Select month" / "Select project") and nothing is
+  (0 = an empty list for that month). Its first option is **All projects** (stored as
+  `projectFilter = 0`), which lists every student's project due that month — Project 1, 2, 3 …
+  together — sorted by project number, then name. Both pickers start empty ("Select month" / "Select project") and nothing is
   listed until both are chosen. They are Radix `Select`s with `side="bottom"
   avoidCollisions={false}`, because a native `<select>` flips upward when the page has little
   room below it. Once both are picked, an **Upload status** button row (All / Uploaded /
